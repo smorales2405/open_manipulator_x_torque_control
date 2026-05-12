@@ -37,43 +37,73 @@ c_tau  = lines(4);
 xlims  = [t(1), t(end)];
 jnames = {'Articulacion 1','Articulacion 2','Articulacion 3','Articulacion 4'};
 
-%% 3. Figura 1 — Posiciones articulares (medidas vs deseadas)
+%% 3. Figura 1 — Posiciones articulares (simulación vs referencia)
 figure(1); clf;
-set(gcf, 'Color', 'w', 'Position', [100 600 1100 500]);
+set(gcf, 'Color', 'w', 'Position', [100 600 1100 560]);
+
+tl1 = tiledlayout(2, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
+axs1 = gobjects(1,4);
+h_ref = gobjects(1,1);
+h_sim = gobjects(1,1);
 
 for i = 1:4
-    subplot(2, 2, i);
-    plot(t, q_des(:,i),  '--', 'Color', c_ref,  'LineWidth', lw); hold on;
-    plot(t, q(:,i),      '-',  'Color', c_real, 'LineWidth', lw);
+    axs1(i) = nexttile(tl1);
+    ax = axs1(i);
+    h1 = plot(t, q_des(:,i), '--', 'Color', c_ref,  'LineWidth', lw); hold on;
+    h2 = plot(t, q(:,i),     '-',  'Color', c_real, 'LineWidth', lw);
+
+    if i == 1
+        h_ref = h1;
+        h_sim = h2;
+    end
+
     xlabel('Tiempo [s]', 'FontSize', fs);
     ylabel(sprintf('$q_%d$ [rad]', i), 'Interpreter', 'latex', 'FontSize', fs);
-    title(['Seguimiento de posicion - ' jnames{i}], 'FontSize', fs_t);
-    legend({sprintf('$q_{%d,des}$', i), sprintf('$q_{%d,med}$', i)}, ...
-           'Interpreter', 'latex', 'Location', 'best', 'FontSize', fs-1);
     grid on; box on;
-    set(gca, 'FontSize', fs);
+    set(ax, 'FontSize', fs);
     xlim(xlims);
 end
-sgtitle('Posiciones articulares — FL Control', 'FontSize', 14, 'FontWeight', 'bold');
 
-%% 4. Figura 2 — Velocidades articulares (medidas vs deseadas)
+lgd1 = legend(axs1(1), [h_ref h_sim], {'Referencia', 'Simulación'}, ...
+              'Orientation', 'horizontal', 'FontSize', fs, ...
+              'Location', 'northoutside');
+lgd1.Layout.Tile = 'north';
+%title(tl1, 'Posiciones articulares — FL Control', 'FontSize', 14, 'FontWeight', 'bold');
+
+%% 4. Figura 2 — Velocidades articulares (simulación vs referencia)
 figure(2); clf;
-set(gcf, 'Color', 'w', 'Position', [130 130 1100 500]);
+set(gcf, 'Color', 'w', 'Position', [130 130 1100 560]);
+
+tl2 = tiledlayout(2, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
+axs2 = gobjects(1,4);
+h_ref = gobjects(1,1);
+h_sim = gobjects(1,1);
 
 for i = 1:4
-    subplot(2, 2, i);
-    plot(t, dq_des(:,i), '--', 'Color', c_ref,  'LineWidth', lw); hold on;
-    plot(t, dq(:,i),     '-',  'Color', c_real, 'LineWidth', lw);
+    axs2(i) = nexttile(tl2);
+    ax = axs2(i);
+    h1 = plot(t, dq_des(:,i), '--', 'Color', c_ref,  'LineWidth', lw); hold on;
+    h2 = plot(t, dq(:,i),     '-',  'Color', c_real, 'LineWidth', lw);
+
+    if i == 1
+        h_ref = h1;
+        h_sim = h2;
+    end
+
     xlabel('Tiempo [s]', 'FontSize', fs);
-    ylabel(sprintf('$\\dot{q}_%d$ [rad/s]', i), 'Interpreter', 'latex', 'FontSize', fs);
-    title(['Seguimiento de velocidad - ' jnames{i}], 'FontSize', fs_t);
-    legend({sprintf('$\\dot{q}_{%d,des}$', i), sprintf('$\\dot{q}_{%d,med}$', i)}, ...
-           'Interpreter', 'latex', 'Location', 'best', 'FontSize', fs-1);
+    ylabel(['$\dot{q}_{' num2str(i) '}$ [rad/s]'], ...
+       'Interpreter', 'latex', 'FontSize', fs);
+    %title(['Seguimiento de velocidad - ' jnames{i}], 'FontSize', fs_t);
     grid on; box on;
-    set(gca, 'FontSize', fs);
+    set(ax, 'FontSize', fs);
     xlim(xlims);
 end
-sgtitle('Velocidades articulares — FL Control', 'FontSize', 14, 'FontWeight', 'bold');
+
+lgd2 = legend(axs2(1), [h_ref h_sim], {'Referencia', 'Simulación'}, ...
+              'Orientation', 'horizontal', 'FontSize', fs, ...
+              'Location', 'northoutside');
+lgd2.Layout.Tile = 'north';
+%title(tl2, 'Velocidades articulares — FL Control', 'FontSize', 14, 'FontWeight', 'bold');
 
 %% 5. Figura 3 — Torques de control
 figure(3); clf;
@@ -86,11 +116,11 @@ for i = 1:4
     xlabel('Tiempo [s]', 'FontSize', fs);
     ylabel(sprintf('$\\tau_%d\\;[\\mathrm{N{\\cdot}m}]$', i), ...
            'Interpreter', 'latex', 'FontSize', fs);
-    title(['Torque de control - ' jnames{i}], 'FontSize', fs_t);
-    legend({sprintf('$\\tau_%d$', i)}, ...
-           'Interpreter', 'latex', 'Location', 'best', 'FontSize', fs-1);
+    %title(['Torque de control - ' jnames{i}], 'FontSize', fs_t);
+    %legend({sprintf('$\\tau_%d$', i)}, ...
+    %       'Interpreter', 'latex', 'Location', 'best', 'FontSize', fs-1);
     grid on; box on;
     set(gca, 'FontSize', fs);
     xlim(xlims);
 end
-sgtitle('Torques de control — FL Control', 'FontSize', 14, 'FontWeight', 'bold');
+%sgtitle('Torques de control — FL Control', 'FontSize', 14, 'FontWeight', 'bold');
