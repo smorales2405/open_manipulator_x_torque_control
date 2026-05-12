@@ -113,7 +113,7 @@ private:
 
     double tau1 = 0.0, tau2 = 0.0, tau3 = 0.0, tau4 = 0.0;
     if (mode_ == "sine") {
-      tau2 = 0.05 * std::sin(2.0 * M_PI * 0.5 * t_);
+      tau2 = 1.5 * std::sin(2.0 * M_PI * 0.5 * t_);
     }
 
     std_msgs::msg::Float64MultiArray msg;

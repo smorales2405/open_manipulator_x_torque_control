@@ -16,7 +16,7 @@ clear; clc; close all;
 script_dir = fileparts(mfilename('fullpath'));
 data_dir   = fullfile(script_dir, '..', 'data');
 
-filename = '';   % '' = archivo mas reciente
+filename = 'torque_data_20260512_133437.csv';   % '' = archivo mas reciente
 
 if isempty(filename)
     files = dir(fullfile(data_dir, 'torque_data_*.csv'));
