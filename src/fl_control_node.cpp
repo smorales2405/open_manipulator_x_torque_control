@@ -82,6 +82,9 @@ public:
     this->declare_parameter<int>("test_num", 1);
     const int test_num = this->get_parameter("test_num").as_int();
 
+    this->declare_parameter<double>("t_sim", 0.0);   // 0 = sin limite
+    t_sim_ = this->get_parameter("t_sim").as_double();
+
     const std::string urdf = std::string(PACKAGE_URDF_DIR) + "/openmani.urdf";
 
     // Load Pinocchio model
@@ -98,6 +101,11 @@ public:
       "Kp=[%.1f %.1f %.1f %.1f]  Kd=[%.1f %.1f %.1f %.1f]",
       KP[0], KP[1], KP[2], KP[3],
       KD[0], KD[1], KD[2], KD[3]);
+    if (t_sim_ > 0.0) {
+      RCLCPP_INFO(this->get_logger(), "Tiempo de simulacion: %.1f s", t_sim_);
+    } else {
+      RCLCPP_INFO(this->get_logger(), "Tiempo de simulacion: ilimitado");
+    }
 
     open_csv(test_num);
 
@@ -220,12 +228,23 @@ private:
     }
 
     t_ += 0.01;
+
+    if (t_sim_ > 0.0 && t_ >= t_sim_) {
+      RCLCPP_INFO(this->get_logger(),
+        "Simulacion completada (%.1f s). Deteniendo control.", t_sim_);
+      if (csv_.is_open()) {
+        csv_.close();
+        RCLCPP_INFO(this->get_logger(), "CSV cerrado: %s", csv_path_.c_str());
+      }
+      timer_->cancel();
+    }
   }
 
   // ── Members ───────────────────────────────────────────────────────────────
   pinocchio::Model  model_;
   pinocchio::Data   data_;
   double t_;
+  double t_sim_;
 
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr torque_pub_;
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr  joint_sub_;
