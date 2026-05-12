@@ -6,6 +6,7 @@
 #include <iomanip>
 #include <memory>
 #include <stdexcept>
+#include <string>
 
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/joint_state.hpp"
@@ -27,8 +28,16 @@ using namespace std::chrono_literals;
 #define PACKAGE_URDF_DIR "."
 #endif
 
-static constexpr double PI  = M_PI;
-static constexpr int    NARM = 4;   // controlled joints (joint1..joint4)
+static constexpr double PI   = M_PI;
+static constexpr int    NARM = 4;    // controlled joints (joint1..joint4)
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  GANANCIAS DEL CONTROLADOR  — editar aqui para cada articulacion
+//  Indice:  [joint1, joint2, joint3, joint4]
+// ═══════════════════════════════════════════════════════════════════════════
+static const Eigen::Vector4d KP = {100.0, 100.0, 100.0, 100.0};
+static const Eigen::Vector4d KD = { 20.0,  20.0,  20.0,  20.0};
+// ═══════════════════════════════════════════════════════════════════════════
 
 // ── Trajectory ──────────────────────────────────────────────────────────────
 struct Reference {
@@ -68,14 +77,12 @@ public:
   FLControlNode()
   : Node("fl_control_node"), t_(0.0)
   {
-    this->declare_parameter<double>("kp", 100.0);
-    this->declare_parameter<double>("kd",  20.0);
-    this->declare_parameter<std::string>("urdf_path",
-      std::string(PACKAGE_URDF_DIR) + "/openmani.urdf");
+    // Unico parametro en tiempo de ejecucion: numero de prueba
+    // Uso: ros2 run ... fl_control_node --ros-args -p test_num:=3
+    this->declare_parameter<int>("test_num", 1);
+    const int test_num = this->get_parameter("test_num").as_int();
 
-    kp_ = this->get_parameter("kp").as_double();
-    kd_ = this->get_parameter("kd").as_double();
-    const std::string urdf = this->get_parameter("urdf_path").as_string();
+    const std::string urdf = std::string(PACKAGE_URDF_DIR) + "/openmani.urdf";
 
     // Load Pinocchio model
     try {
@@ -85,12 +92,14 @@ public:
       throw;
     }
     data_ = pinocchio::Data(model_);
-    RCLCPP_INFO(this->get_logger(),
-      "Modelo cargado: nv=%d  nq=%d", model_.nv, model_.nq);
-    RCLCPP_INFO(this->get_logger(),
-      "Kp=%.1f  Kd=%.1f", kp_, kd_);
 
-    open_csv();
+    RCLCPP_INFO(this->get_logger(), "Modelo cargado: nv=%d", model_.nv);
+    RCLCPP_INFO(this->get_logger(),
+      "Kp=[%.1f %.1f %.1f %.1f]  Kd=[%.1f %.1f %.1f %.1f]",
+      KP[0], KP[1], KP[2], KP[3],
+      KD[0], KD[1], KD[2], KD[3]);
+
+    open_csv(test_num);
 
     torque_pub_ = this->create_publisher<std_msgs::msg::Float64MultiArray>(
       "/arm_effort_controller/commands", 10);
@@ -115,16 +124,11 @@ public:
 
 private:
   // ── CSV ───────────────────────────────────────────────────────────────────
-  void open_csv()
+  void open_csv(int test_num)
   {
     std::filesystem::create_directories(PACKAGE_DATA_DIR);
-    auto now = std::chrono::system_clock::now();
-    std::time_t t_c = std::chrono::system_clock::to_time_t(now);
-    std::tm tm{};
-    localtime_r(&t_c, &tm);
-    char fname[64];
-    std::strftime(fname, sizeof(fname), "fl_data_%Y%m%d_%H%M%S.csv", &tm);
-    csv_path_ = std::string(PACKAGE_DATA_DIR) + "/" + fname;
+    csv_path_ = std::string(PACKAGE_DATA_DIR)
+                + "/fl_data_" + std::to_string(test_num) + ".csv";
     csv_.open(csv_path_);
     if (!csv_.is_open()) {
       RCLCPP_ERROR(this->get_logger(), "No se pudo crear: %s", csv_path_.c_str());
@@ -163,71 +167,64 @@ private:
   // ── Control tick ──────────────────────────────────────────────────────────
   void tick()
   {
-    // Wait for first joint state before starting
     if (!last_js_) {return;}
 
-    // Read current state
     Eigen::Vector4d q, dq;
     read_js(q, dq);
 
-    // Desired trajectory at current time
     const Reference ref = desiredTrajectory(t_);
 
-    // Build full Pinocchio state (nv=6); gripper joints stay at 0
+    // Full Pinocchio state (nv=6); gripper joints locked at 0
     Eigen::VectorXd q_pin  = Eigen::VectorXd::Zero(model_.nv);
     Eigen::VectorXd dq_pin = Eigen::VectorXd::Zero(model_.nv);
     q_pin.head<NARM>()  = q;
     dq_pin.head<NARM>() = dq;
 
-    // ── Dynamics (Pinocchio) ─────────────────────────────────────────────
-    // Mass matrix — CRBA fills only upper triangle; symmetrize
+    // Mass matrix (CRBA fills upper triangle only; symmetrize)
     pinocchio::crba(model_, data_, q_pin);
     data_.M.triangularView<Eigen::StrictlyLower>() =
       data_.M.triangularView<Eigen::StrictlyUpper>().transpose();
 
-    // Nonlinear effects: NLE = C(q,dq)*dq + g(q), stored in data_.nle
+    // NLE = C(q,dq)*dq + g(q)
     pinocchio::nonLinearEffects(model_, data_, q_pin, dq_pin);
 
-    // Extract arm sub-system (first NARM rows/columns)
     const Eigen::Matrix4d M   = data_.M.topLeftCorner<NARM, NARM>();
     const Eigen::Vector4d nle = data_.nle.head<NARM>();
 
-    // ── Feedback Linearization ───────────────────────────────────────────
-    // tau = M(q) * (ddq_des + Kp*(q_des - q) + Kd*(dq_des - dq)) + NLE
+    // Feedback linearization:
+    // tau = M(q) * (ddq_des + Kp*(q_des-q) + Kd*(dq_des-dq)) + NLE
     const Eigen::Vector4d e   = ref.q  - q;
     const Eigen::Vector4d de  = ref.dq - dq;
-    const Eigen::Vector4d v   = ref.ddq + kp_ * e + kd_ * de;
+    const Eigen::Vector4d v   = ref.ddq
+                                + KP.asDiagonal() * e
+                                + KD.asDiagonal() * de;
     const Eigen::Vector4d tau = M * v + nle;
 
-    // Publish torque command
     std_msgs::msg::Float64MultiArray cmd;
     cmd.data.assign(tau.data(), tau.data() + NARM);
     torque_pub_->publish(cmd);
 
-    // Log at 1 Hz
     RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
       "t=%.2fs  |e|=%.4f rad  tau=[%.3f %.3f %.3f %.3f] Nm",
       t_, e.norm(), tau[0], tau[1], tau[2], tau[3]);
 
-    // Write CSV row
     if (csv_.is_open()) {
       csv_ << std::fixed << std::setprecision(6)
            << t_
-           << ',' << q[0]       << ',' << q[1]       << ',' << q[2]       << ',' << q[3]
-           << ',' << dq[0]      << ',' << dq[1]      << ',' << dq[2]      << ',' << dq[3]
-           << ',' << ref.q[0]   << ',' << ref.q[1]   << ',' << ref.q[2]   << ',' << ref.q[3]
-           << ',' << ref.dq[0]  << ',' << ref.dq[1]  << ',' << ref.dq[2]  << ',' << ref.dq[3]
-           << ',' << tau[0]     << ',' << tau[1]     << ',' << tau[2]     << ',' << tau[3]
+           << ',' << q[0]      << ',' << q[1]      << ',' << q[2]      << ',' << q[3]
+           << ',' << dq[0]     << ',' << dq[1]     << ',' << dq[2]     << ',' << dq[3]
+           << ',' << ref.q[0]  << ',' << ref.q[1]  << ',' << ref.q[2]  << ',' << ref.q[3]
+           << ',' << ref.dq[0] << ',' << ref.dq[1] << ',' << ref.dq[2] << ',' << ref.dq[3]
+           << ',' << tau[0]    << ',' << tau[1]    << ',' << tau[2]    << ',' << tau[3]
            << '\n';
     }
 
-    t_ += 0.01;   // dt = 10 ms
+    t_ += 0.01;
   }
 
   // ── Members ───────────────────────────────────────────────────────────────
   pinocchio::Model  model_;
   pinocchio::Data   data_;
-  double kp_, kd_;
   double t_;
 
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr torque_pub_;

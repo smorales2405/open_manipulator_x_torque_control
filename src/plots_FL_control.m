@@ -5,8 +5,7 @@
 %   Figura 3 — Torques de control:      tau1..tau4   [N·m]
 %
 % Uso:
-%   - Dejar filename = '' para cargar el CSV fl_data_*.csv mas reciente.
-%   - O asignar:  filename = 'fl_data_20260512_120000.csv';
+%   - Cambiar test_num para seleccionar la prueba (carga fl_data_<N>.csv).
 %   - El script localiza data/ automaticamente junto a si mismo.
 
 clear; clc; close all;
@@ -15,17 +14,9 @@ clear; clc; close all;
 script_dir = fileparts(mfilename('fullpath'));
 data_dir   = fullfile(script_dir, '..', 'data');
 
-filename = 'fl_data_20260512_141209.csv';   % '' = archivo mas reciente
-
-if isempty(filename)
-    files = dir(fullfile(data_dir, 'fl_data_*.csv'));
-    if isempty(files)
-        error('No hay archivos fl_data_*.csv en %s.\nEjecutar fl_control_node primero.', data_dir);
-    end
-    [~, idx] = max([files.datenum]);
-    filename  = files(idx).name;
-    fprintf('Cargando: %s\n', filename);
-end
+test_num = 1;   % <-- Cambiar aqui para seleccionar la prueba
+filename = sprintf('fl_data_%d.csv', test_num);
+fprintf('Cargando: %s\n', filename);
 
 T = readtable(fullfile(data_dir, filename));
 
