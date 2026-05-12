@@ -1,0 +1,89 @@
+<?xml version="1.0"?>
+<!--
+  ros2_control exclusivo para simulacion Gazebo con command_interface effort.
+  ADVERTENCIA: No compatible con hardware real Dynamixel.
+
+  NOTA IMPORTANTE sobre GazeboSystem 0.4.x:
+  GazeboSystem requiere command_interface "position" en cada joint durante
+  configureSim(). Sin el, falla la inicializacion y el controller_manager
+  nunca arranca (aunque el robot si aparece en Gazebo).
+  Por eso se declara "position" junto a "effort". En runtime, solo
+  arm_effort_controller reclamara "effort"; "position" queda disponible
+  pero sin controlador asignado, por lo que GazeboSystem lo ignora.
+-->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <xacro:macro name="open_manipulator_x_effort_system" params="name prefix">
+
+    <ros2_control name="${name}" type="system">
+
+      <hardware>
+        <plugin>gazebo_ros2_control/GazeboSystem</plugin>
+      </hardware>
+
+      <joint name="${prefix}joint1">
+        <command_interface name="position"/>
+        <command_interface name="effort">
+          <param name="min">-1.0</param>
+          <param name="max"> 1.0</param>
+        </command_interface>
+        <state_interface name="position"/>
+        <state_interface name="velocity"/>
+        <state_interface name="effort"/>
+      </joint>
+
+      <joint name="${prefix}joint2">
+        <command_interface name="position"/>
+        <command_interface name="effort">
+          <param name="min">-1.0</param>
+          <param name="max"> 1.0</param>
+        </command_interface>
+        <state_interface name="position"/>
+        <state_interface name="velocity"/>
+        <state_interface name="effort"/>
+      </joint>
+
+      <joint name="${prefix}joint3">
+        <command_interface name="position"/>
+        <command_interface name="effort">
+          <param name="min">-1.0</param>
+          <param name="max"> 1.0</param>
+        </command_interface>
+        <state_interface name="position"/>
+        <state_interface name="velocity"/>
+        <state_interface name="effort"/>
+      </joint>
+
+      <joint name="${prefix}joint4">
+        <command_interface name="position"/>
+        <command_interface name="effort">
+          <param name="min">-1.0</param>
+          <param name="max"> 1.0</param>
+        </command_interface>
+        <state_interface name="position"/>
+        <state_interface name="velocity"/>
+        <state_interface name="effort"/>
+      </joint>
+
+      <!-- Gripper: solo control de posicion -->
+      <joint name="${prefix}gripper_left_joint">
+        <command_interface name="position"/>
+        <state_interface name="position"/>
+        <state_interface name="velocity"/>
+        <state_interface name="effort"/>
+      </joint>
+
+      <joint name="${prefix}gripper_right_joint">
+        <param name="mimic">${prefix}gripper_left_joint</param>
+        <param name="multiplier">1</param>
+        <command_interface name="position"/>
+        <state_interface name="position"/>
+        <state_interface name="velocity"/>
+        <state_interface name="effort"/>
+      </joint>
+
+    </ros2_control>
+
+  </xacro:macro>
+
+</robot>

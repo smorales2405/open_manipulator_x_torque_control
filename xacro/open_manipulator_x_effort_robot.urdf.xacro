@@ -1,0 +1,51 @@
+<?xml version="1.0"?>
+<!--
+  Robot URDF/Xacro con control de esfuerzo para simulacion Gazebo.
+  Reutiliza la cinematica y meshes del paquete original de ROBOTIS,
+  pero sustituye el ros2_control xacro original por el de esfuerzo.
+  El plugin gazebo_ros2_control apunta al YAML de controladores de esfuerzo.
+-->
+<robot name="open_manipulator_x" xmlns:xacro="http://ros.org/wiki/xacro">
+
+  <xacro:arg name="prefix"  default="" />
+  <xacro:arg name="use_sim" default="true" />
+
+  <!-- Recursos graficos: colores Rviz y materiales Gazebo del paquete original -->
+  <xacro:include filename="$(find open_manipulator_x_description)/gazebo/materials.xacro" />
+
+  <!-- Propiedades de contacto Gazebo (kp, kd, mu) y transmisiones legacy del original -->
+  <xacro:include filename="$(find open_manipulator_x_description)/gazebo/open_manipulator_x.gazebo.xacro" />
+
+  <!-- Cinematica, masas e inercias del paquete original (sin modificar) -->
+  <xacro:include filename="$(find open_manipulator_x_description)/urdf/open_manipulator_x.urdf.xacro" />
+
+  <!-- ros2_control con command_interface effort (este paquete) -->
+  <xacro:include filename="$(find open_manipulator_x_torque_control)/xacro/open_manipulator_x_effort.ros2_control.xacro" />
+
+  <!-- Instanciar cadena cinematica -->
+  <xacro:open_manipulator_x prefix="$(arg prefix)" />
+
+  <!-- Instanciar propiedades Gazebo -->
+  <xacro:open_manipulator_x_gazebo prefix="$(arg prefix)" />
+
+  <!-- Instanciar hardware interface de esfuerzo -->
+  <xacro:open_manipulator_x_effort_system
+    name="OpenManipulatorXEffort"
+    prefix="$(arg prefix)" />
+
+  <!-- Plugin gazebo_ros2_control apunta al YAML separado de controladores de esfuerzo -->
+  <gazebo>
+    <plugin name="gazebo_ros2_control" filename="libgazebo_ros2_control.so">
+      <parameters>$(find open_manipulator_x_torque_control)/config/effort_controllers.yaml</parameters>
+    </plugin>
+  </gazebo>
+
+  <!-- Fijar el robot al mundo -->
+  <link name="world"/>
+  <joint name="$(arg prefix)world_fixed" type="fixed">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <parent link="world"/>
+    <child link="$(arg prefix)link1"/>
+  </joint>
+
+</robot>
