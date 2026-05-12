@@ -37,6 +37,7 @@ static constexpr int    NARM = 4;    // controlled joints (joint1..joint4)
 // ═══════════════════════════════════════════════════════════════════════════
 static const Eigen::Vector4d KP = {100.0, 100.0, 100.0, 100.0};
 static const Eigen::Vector4d KD = { 20.0,  20.0,  20.0,  20.0};
+static constexpr double TAU_MAX = 0.82;   // [N·m] limite por articulacion
 // ═══════════════════════════════════════════════════════════════════════════
 
 // ── Trajectory ──────────────────────────────────────────────────────────────
@@ -207,23 +208,25 @@ private:
                                 + KP.asDiagonal() * e
                                 + KD.asDiagonal() * de;
     const Eigen::Vector4d tau = M * v + nle;
+    const Eigen::Vector4d tau_sat =
+      tau.cwiseMin(TAU_MAX).cwiseMax(-TAU_MAX);
 
     std_msgs::msg::Float64MultiArray cmd;
-    cmd.data.assign(tau.data(), tau.data() + NARM);
+    cmd.data.assign(tau_sat.data(), tau_sat.data() + NARM);
     torque_pub_->publish(cmd);
 
     RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
       "t=%.2fs  |e|=%.4f rad  tau=[%.3f %.3f %.3f %.3f] Nm",
-      t_, e.norm(), tau[0], tau[1], tau[2], tau[3]);
+      t_, e.norm(), tau_sat[0], tau_sat[1], tau_sat[2], tau_sat[3]);
 
     if (csv_.is_open()) {
       csv_ << std::fixed << std::setprecision(6)
            << t_
-           << ',' << q[0]      << ',' << q[1]      << ',' << q[2]      << ',' << q[3]
-           << ',' << dq[0]     << ',' << dq[1]     << ',' << dq[2]     << ',' << dq[3]
-           << ',' << ref.q[0]  << ',' << ref.q[1]  << ',' << ref.q[2]  << ',' << ref.q[3]
-           << ',' << ref.dq[0] << ',' << ref.dq[1] << ',' << ref.dq[2] << ',' << ref.dq[3]
-           << ',' << tau[0]    << ',' << tau[1]    << ',' << tau[2]    << ',' << tau[3]
+           << ',' << q[0]          << ',' << q[1]          << ',' << q[2]          << ',' << q[3]
+           << ',' << dq[0]         << ',' << dq[1]         << ',' << dq[2]         << ',' << dq[3]
+           << ',' << ref.q[0]      << ',' << ref.q[1]      << ',' << ref.q[2]      << ',' << ref.q[3]
+           << ',' << ref.dq[0]     << ',' << ref.dq[1]     << ',' << ref.dq[2]     << ',' << ref.dq[3]
+           << ',' << tau_sat[0]    << ',' << tau_sat[1]    << ',' << tau_sat[2]    << ',' << tau_sat[3]
            << '\n';
     }
 
