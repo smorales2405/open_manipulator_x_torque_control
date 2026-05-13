@@ -13,16 +13,20 @@
 //
 //  Ley de control:
 //    v   = yddot_des + Kp*(y_des - y) + Kd*(ydot_des - ydot)
-//    tau = M(q) * J^{-1}(q) * (v - Jdot*qdot) + b(q,qdot)
+//    qddot = J4_dls^+ * (v - Jdot*qdot)     <- pseudo-inversa amortiguada DLS
+//    tau = M(q) * qddot + b(q,qdot)
 //
-//  Trayectoria cartesiana (frecuencia w = 2 rad/s):
-//    x_des   = 0.08 + 0.05*sin(2t)   [m]
-//    y_des   = 0.05*cos(2t)           [m]
-//    z_des   = 0.10                   [m]
-//    phi_des = pi/2                   [rad]
+//  Fases de referencia:
+//    [0, T_TRANS)  — transicion suave con polinomio de 5to orden
+//                    desde la pose inicial medida hasta el inicio de la trayectoria
+//    [T_TRANS, ∞)  — trayectoria circular cartesiana (w = 2 rad/s):
+//                      x_des   = 0.20 + 0.05*sin(2t')
+//                      y_des   = 0.05*cos(2t')
+//                      z_des   = 0.10
+//                      phi_des = 0.0  (horizontal, cerca de pose inicial)
 //
 //  Parametro ROS (unico):
-//    t_sim  — duracion de la simulacion en segundos (0 = ilimitado)
+//    t_sim — duracion de la simulacion en segundos (0 = ilimitado)
 //
 //  CSV generado: fl_xyz_data.csv  en PACKAGE_DATA_DIR
 // ============================================================================
@@ -60,50 +64,96 @@ using namespace std::chrono_literals;
 #endif
 
 static constexpr double PI   = M_PI;
-static constexpr int    NARM = 4;   // articulaciones controladas (joint1..joint4)
+static constexpr int    NARM = 4;
 
-// Nombre del frame del efector final en el URDF
 static constexpr char EFF_FRAME[] = "end_effector_link";
 
 // ============================================================================
-//  GANANCIAS DEL CONTROLADOR CARTESIANO  (editar aqui)
-//  Indice: [x,  y,  z,  phi]
-// ============================================================================
-static const Eigen::Vector4d KP = {50.0, 50.0, 50.0, 50.0};
-static const Eigen::Vector4d KD = {14.0, 14.0, 14.0, 14.0};
-static constexpr double TAU_MAX  = 0.82;   // [N·m] limite de saturacion por articulacion
+//  PARAMETROS DEL CONTROLADOR  (editar aqui)
 // ============================================================================
 
-// ── Referencia cartesiana ────────────────────────────────────────────────────
+// Ganancias cartesianas  [x,  y,  z,  phi]
+static const Eigen::Vector4d KP = {40.0, 40.0, 40.0, 40.0};
+static const Eigen::Vector4d KD = {13.0, 13.0, 13.0, 13.0};
+
+// Saturacion de torque por articulacion [N·m]
+static constexpr double TAU_MAX = 0.82;
+
+// Duracion de la fase de transicion inicial [s]
+static constexpr double T_TRANS = 2.0;
+
+// Factor de amortiguamiento para la pseudo-inversa DLS  (Damped Least Squares)
+// Limita la norma de qddot cerca de singularidades sin afectar la inversion
+// cuando el Jacobiano esta bien condicionado (usar 0.01 - 0.05).
+static constexpr double LAMBDA    = 0.01;
+static constexpr double LAMBDA_SQ = LAMBDA * LAMBDA;
+
+// Inicio de la trayectoria circular (= valor de la referencia en t'=0)
+// x_c=0.20 y phi=0.0 estan cerca de la pose inicial del robot en Gazebo
+// (x≈0.26, phi≈-0.097), lo que evita errores grandes al arranque y que
+// q4 alcance su limite fisico (~2.0 rad).
+static const Eigen::Vector4d Y_START {0.20, 0.05, 0.10, 0.0};
+
+// ============================================================================
+
+// ── Estructura de referencia cartesiana ─────────────────────────────────────
 struct CartRef {
-  Eigen::Vector4d y;      // [x, y, z, phi]
-  Eigen::Vector4d ydot;   // primera derivada analitica
-  Eigen::Vector4d yddot;  // segunda derivada analitica
+  Eigen::Vector4d y;      // posicion deseada  [x, y, z, phi]
+  Eigen::Vector4d ydot;   // velocidad deseada (1ra derivada analitica)
+  Eigen::Vector4d yddot;  // aceleracion deseada (2da derivada analitica)
 };
 
-static CartRef desiredTrajectory(double t)
+// ── Trayectoria circular (activa para t' = t - T_TRANS >= 0) ────────────────
+static CartRef circularTrajectory(double tp)
 {
   const double w = 2.0;
   CartRef ref;
 
   ref.y <<
-    0.08 + 0.05 * std::sin(w * t),
-    0.05 * std::cos(w * t),
-    0.10,
-    PI / 2.0;
+     0.20 + 0.05 * std::sin(w * tp),
+     0.05 * std::cos(w * tp),
+     0.10,
+     0.0;
 
   ref.ydot <<
-     0.05 * w * std::cos(w * t),
-    -0.05 * w * std::sin(w * t),
+     0.05 * w * std::cos(w * tp),
+    -0.05 * w * std::sin(w * tp),
      0.0,
      0.0;
 
   ref.yddot <<
-    -0.05 * w * w * std::sin(w * t),
-    -0.05 * w * w * std::cos(w * t),
+    -0.05 * w * w * std::sin(w * tp),
+    -0.05 * w * w * std::cos(w * tp),
      0.0,
      0.0;
 
+  return ref;
+}
+
+// ── Transicion con polinomio de 5to orden (zero-velocity, zero-accel en extremos) ─
+// Genera referencias suaves de y0 → y_goal durante [0, T] segundos.
+static CartRef transitionTrajectory(double t,
+                                    const Eigen::Vector4d & y0,
+                                    const Eigen::Vector4d & y_goal,
+                                    double T)
+{
+  const double tau   = std::min(1.0, t / T);
+  const double tau2  = tau  * tau;
+  const double tau3  = tau2 * tau;
+  const double tau4  = tau3 * tau;
+  const double tau5  = tau4 * tau;
+
+  // Polinomio s(tau) = 10τ³ - 15τ⁴ + 6τ⁵  →  s(0)=0, s(1)=1, s'(0)=s'(1)=0
+  const double s    =  10*tau3 - 15*tau4 +  6*tau5;
+  const double sd   = (30*tau2 - 60*tau3 + 30*tau4) / T;
+  const double sdd  = (60*tau  - 180*tau2 + 120*tau3) / (T * T);
+
+  const Eigen::Vector4d delta = y_goal - y0;
+
+  CartRef ref;
+  ref.y     = y0    +  s  * delta;
+  ref.ydot  =           sd  * delta;
+  ref.yddot =           sdd * delta;
   return ref;
 }
 
@@ -112,13 +162,13 @@ class IOControlNode : public rclcpp::Node
 {
 public:
   IOControlNode()
-  : Node("io_control_node"), t_(0.0)
+  : Node("io_control_node"), t_(0.0), y0_initialized_(false)
   {
-    // Parametro: duracion de simulacion en segundos (0 = sin limite)
+    // Unico parametro en tiempo de ejecucion
     this->declare_parameter<double>("t_sim", 0.0);
     t_sim_ = this->get_parameter("t_sim").as_double();
 
-    // Cargar modelo Pinocchio desde URDF
+    // Cargar modelo Pinocchio
     const std::string urdf = std::string(PACKAGE_URDF_DIR) + "/openmani.urdf";
     try {
       pinocchio::urdf::buildModel(urdf, model_);
@@ -128,9 +178,8 @@ public:
     }
     data_ = pinocchio::Data(model_);
 
-    // Verificar y obtener el ID del frame del efector final
     if (!model_.existFrame(EFF_FRAME)) {
-      throw std::runtime_error(std::string("Frame no encontrado en el URDF: ") + EFF_FRAME);
+      throw std::runtime_error(std::string("Frame no encontrado: ") + EFF_FRAME);
     }
     frame_id_ = model_.getFrameId(EFF_FRAME);
 
@@ -138,12 +187,10 @@ public:
       "Modelo cargado: nv=%d  frame='%s' (id=%lu)",
       model_.nv, EFF_FRAME, frame_id_);
     RCLCPP_INFO(this->get_logger(),
-      "Kp=[%.1f %.1f %.1f %.1f]  Kd=[%.1f %.1f %.1f %.1f]  tau_max=%.2f N·m",
-      KP[0], KP[1], KP[2], KP[3], KD[0], KD[1], KD[2], KD[3], TAU_MAX);
+      "Kp=[%.1f]  Kd=[%.1f]  tau_max=%.2f N·m  lambda=%.3f  T_trans=%.1f s",
+      KP[0], KD[0], TAU_MAX, LAMBDA, T_TRANS);
     if (t_sim_ > 0.0) {
       RCLCPP_INFO(this->get_logger(), "Tiempo de simulacion: %.1f s", t_sim_);
-    } else {
-      RCLCPP_INFO(this->get_logger(), "Tiempo de simulacion: ilimitado");
     }
 
     open_csv();
@@ -157,7 +204,6 @@ public:
         last_js_ = msg;
       });
 
-    // Lazo de control a 100 Hz (dt = 10 ms)
     timer_ = this->create_wall_timer(10ms, [this]() { tick(); });
   }
 
@@ -170,7 +216,7 @@ public:
   }
 
 private:
-  // ── Apertura del archivo CSV ──────────────────────────────────────────────
+  // ── CSV ───────────────────────────────────────────────────────────────────
   void open_csv()
   {
     std::filesystem::create_directories(PACKAGE_DATA_DIR);
@@ -188,7 +234,7 @@ private:
     RCLCPP_INFO(this->get_logger(), "CSV: %s", csv_path_.c_str());
   }
 
-  // ── Lectura de estados articulares (busqueda por nombre) ──────────────────
+  // ── Lectura de estados articulares (por nombre, independiente del orden) ───
   void read_js(Eigen::Vector4d & q, Eigen::Vector4d & dq)
   {
     static const std::array<std::string, NARM> names = {
@@ -214,112 +260,121 @@ private:
   {
     if (!last_js_) { return; }
 
-    // 1. Estados articulares del brazo
+    // 1. Leer estados articulares
     Eigen::Vector4d q, dq;
     read_js(q, dq);
 
-    // Vector completo para Pinocchio (gripper bloqueado en 0)
     Eigen::VectorXd q_pin  = Eigen::VectorXd::Zero(model_.nv);
     Eigen::VectorXd dq_pin = Eigen::VectorXd::Zero(model_.nv);
     q_pin.head<NARM>()  = q;
     dq_pin.head<NARM>() = dq;
 
-    // ── 2. Cinematica directa y Jacobiano en LOCAL_WORLD_ALIGNED ─────────────
-    // computeFrameJacobian: llama FK, actualiza data.oMf y data.J internamente
+    // ── 2. Cinematica directa y Jacobiano ─────────────────────────────────
     Eigen::MatrixXd J6 = Eigen::MatrixXd::Zero(6, model_.nv);
     pinocchio::computeFrameJacobian(
       model_, data_, q_pin, frame_id_, pinocchio::LOCAL_WORLD_ALIGNED, J6);
 
-    // Posicion cartesiana del efector final
     const Eigen::Vector3d p = data_.oMf[frame_id_].translation();
     const Eigen::Matrix3d R = data_.oMf[frame_id_].rotation();
-
-    // Angulo de inclinacion phi: pitch de la descomposicion ZYX
     const double phi = std::atan2(-R(2, 0),
                                    std::sqrt(R(0, 0) * R(0, 0) + R(1, 0) * R(1, 0)));
 
     // Jacobiano de tarea 4x4: filas {vx, vy, vz, wy} — columnas {j1..j4}
-    // wy (row 4 de J6) es la tasa de cambio de phi en LOCAL_WORLD_ALIGNED
     Eigen::Matrix4d J4;
-    J4.row(0) = J6.row(0).head<NARM>();   // vx
-    J4.row(1) = J6.row(1).head<NARM>();   // vy
-    J4.row(2) = J6.row(2).head<NARM>();   // vz
-    J4.row(3) = J6.row(4).head<NARM>();   // wy  (pitch)
+    J4.row(0) = J6.row(0).head<NARM>();
+    J4.row(1) = J6.row(1).head<NARM>();
+    J4.row(2) = J6.row(2).head<NARM>();
+    J4.row(3) = J6.row(4).head<NARM>();   // wy → tasa de cambio de phi
 
-    // Velocidad cartesiana actual: ydot = J4 * dq
+    // Velocidad cartesiana actual
     const Eigen::Vector4d ydot = J4 * dq;
 
-    // ── 3. Termino de bias  Jdot*qdot  via cinematica con aceleracion = 0 ───
-    // forwardKinematics(q, dq, 0): llena data.v y data.a con acel articular = 0
-    // => data.a contiene exclusivamente el termino centripeto/Coriolis (Jdot*qdot)
+    // ── 3. Bias  Jdot*qdot  (FK con aceleracion articular = 0) ───────────
     pinocchio::forwardKinematics(
       model_, data_, q_pin, dq_pin, Eigen::VectorXd::Zero(model_.nv));
-
-    // getFrameClassicalAcceleration devuelve la aceleracion clasica del frame
-    // (equivale a Jdot*qdot cuando qddot = 0)
     const pinocchio::Motion bias =
       pinocchio::getFrameClassicalAcceleration(
         model_, data_, frame_id_, pinocchio::LOCAL_WORLD_ALIGNED);
-
     Eigen::Vector4d jdqd;
-    jdqd << bias.linear()[0],    // componente x
-            bias.linear()[1],    // componente y
-            bias.linear()[2],    // componente z
-            bias.angular()[1];   // componente wy (pitch)
+    jdqd << bias.linear()[0],
+            bias.linear()[1],
+            bias.linear()[2],
+            bias.angular()[1];
 
-    // ── 4. Matrices de dinamica ───────────────────────────────────────────────
+    // ── 4. Dinamica: M(q) y b(q, qdot) ───────────────────────────────────
     pinocchio::crba(model_, data_, q_pin);
     data_.M.triangularView<Eigen::StrictlyLower>() =
       data_.M.triangularView<Eigen::StrictlyUpper>().transpose();
     pinocchio::nonLinearEffects(model_, data_, q_pin, dq_pin);
-
     const Eigen::Matrix4d M4   = data_.M.topLeftCorner<NARM, NARM>();
     const Eigen::Vector4d nle4 = data_.nle.head<NARM>();
 
-    // ── 5. Referencia cartesiana y errores ────────────────────────────────────
-    const CartRef ref = desiredTrajectory(t_);
+    // ── 5. Pose cartesiana actual y captura de condicion inicial ──────────
     const Eigen::Vector4d y { p[0], p[1], p[2], phi };
 
+    if (!y0_initialized_) {
+      y0_ = y;
+      y0_initialized_ = true;
+      RCLCPP_INFO(this->get_logger(),
+        "Pose inicial capturada: x=%.3f  y=%.3f  z=%.3f  phi=%.3f rad",
+        y0_[0], y0_[1], y0_[2], y0_[3]);
+    }
+
+    // ── 6. Referencia segun fase ──────────────────────────────────────────
+    CartRef ref;
+    if (t_ < T_TRANS) {
+      // Fase de transicion: polinomio 5to orden  y0 → Y_START
+      ref = transitionTrajectory(t_, y0_, Y_START, T_TRANS);
+    } else {
+      // Fase circular: parametro de tiempo relativo al fin de la transicion
+      ref = circularTrajectory(t_ - T_TRANS);
+    }
+
+    // ── 7. Errores cartesianos ─────────────────────────────────────────────
     const Eigen::Vector4d ey    = ref.y    - y;
     const Eigen::Vector4d eydot = ref.ydot - ydot;
 
-    // ── 6. Entrada auxiliar v y ley de control IO ─────────────────────────────
-    // v = yddot_des + Kp*(y_des - y) + Kd*(ydot_des - ydot)
+    // ── 8. Entrada auxiliar v ─────────────────────────────────────────────
     const Eigen::Vector4d v =
       ref.yddot + KP.asDiagonal() * ey + KD.asDiagonal() * eydot;
 
-    // Aceleracion articular deseada: qddot = J4^{-1} * (v - Jdot*qdot)
-    // Se usa fullPivLu para mayor estabilidad numerica cerca de singularidades
-    const Eigen::Vector4d qddot = J4.fullPivLu().solve(v - jdqd);
+    // ── 9. Pseudo-inversa amortiguada DLS ─────────────────────────────────
+    // qddot = J4ᵀ (J4 J4ᵀ + λ²I)⁻¹ (v - Jdot*qdot)
+    // Cuando el Jacobiano es bien condicionado: equivalente a J4⁻¹(v - jdqd)
+    // Cerca de singularidades: limita la norma de qddot evitando divergencia
+    const Eigen::Matrix4d A =
+      J4 * J4.transpose() + LAMBDA_SQ * Eigen::Matrix4d::Identity();
+    const Eigen::Vector4d qddot = J4.transpose() * A.ldlt().solve(v - jdqd);
 
-    // Torque: tau = M(q) * qddot + b(q, qdot)
+    // ── 10. Torque y saturacion ───────────────────────────────────────────
     const Eigen::Vector4d tau     = M4 * qddot + nle4;
     const Eigen::Vector4d tau_sat = tau.cwiseMin(TAU_MAX).cwiseMax(-TAU_MAX);
 
-    // ── 7. Publicar torques ───────────────────────────────────────────────────
+    // ── 11. Publicar ──────────────────────────────────────────────────────
     std_msgs::msg::Float64MultiArray cmd;
     cmd.data.assign(tau_sat.data(), tau_sat.data() + NARM);
     torque_pub_->publish(cmd);
 
+    const char * phase = (t_ < T_TRANS) ? "TRANS" : "CIRC ";
     RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-      "t=%.2fs  y=[%.3f %.3f %.3f %.3f]  |ey|=%.4f  tau=[%.3f %.3f %.3f %.3f]",
-      t_, y[0], y[1], y[2], y[3], ey.norm(),
+      "[%s] t=%.2fs  y=[%.3f %.3f %.3f %.3f]  |ey|=%.4f  tau=[%.3f %.3f %.3f %.3f]",
+      phase, t_, y[0], y[1], y[2], y[3], ey.norm(),
       tau_sat[0], tau_sat[1], tau_sat[2], tau_sat[3]);
 
-    // ── 8. Registro CSV ───────────────────────────────────────────────────────
+    // ── 12. CSV ───────────────────────────────────────────────────────────
     if (csv_.is_open()) {
       csv_ << std::fixed << std::setprecision(6)
            << t_
-           << ',' << q[0]         << ',' << q[1]         << ',' << q[2]         << ',' << q[3]
-           << ',' << y[0]         << ',' << y[1]         << ',' << y[2]         << ',' << y[3]
-           << ',' << ref.y[0]     << ',' << ref.y[1]     << ',' << ref.y[2]     << ',' << ref.y[3]
-           << ',' << tau_sat[0]   << ',' << tau_sat[1]   << ',' << tau_sat[2]   << ',' << tau_sat[3]
+           << ',' << q[0]       << ',' << q[1]       << ',' << q[2]       << ',' << q[3]
+           << ',' << y[0]       << ',' << y[1]       << ',' << y[2]       << ',' << y[3]
+           << ',' << ref.y[0]   << ',' << ref.y[1]   << ',' << ref.y[2]   << ',' << ref.y[3]
+           << ',' << tau_sat[0] << ',' << tau_sat[1] << ',' << tau_sat[2] << ',' << tau_sat[3]
            << '\n';
     }
 
     t_ += 0.01;
 
-    // ── 9. Detener si se cumplio el tiempo de simulacion ─────────────────────
+    // ── 13. Parar al cumplirse el tiempo de simulacion ────────────────────
     if (t_sim_ > 0.0 && t_ >= t_sim_) {
       RCLCPP_INFO(this->get_logger(),
         "Simulacion completada (%.1f s). Deteniendo control.", t_sim_);
@@ -335,8 +390,12 @@ private:
   pinocchio::Model      model_;
   pinocchio::Data       data_;
   pinocchio::FrameIndex frame_id_;
+
   double t_;
   double t_sim_;
+
+  Eigen::Vector4d y0_;          // pose cartesiana inicial medida
+  bool            y0_initialized_;
 
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr torque_pub_;
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr  joint_sub_;
