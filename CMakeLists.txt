@@ -35,8 +35,21 @@ target_compile_definitions(fl_control_node PRIVATE
   "PACKAGE_URDF_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/urdf\""
   COAL_DISABLE_HPP_FCL_WARNINGS)
 
+# ── io_control_node ──────────────────────────────────────────────────────────
+add_executable(io_control_node src/io_control_node.cpp)
+ament_target_dependencies(io_control_node rclcpp std_msgs sensor_msgs)
+target_link_libraries(io_control_node
+  pinocchio::pinocchio_default
+  pinocchio::pinocchio_parsers
+  Eigen3::Eigen)
+target_compile_features(io_control_node PUBLIC cxx_std_17)
+target_compile_definitions(io_control_node PRIVATE
+  "PACKAGE_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\""
+  "PACKAGE_URDF_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/urdf\""
+  COAL_DISABLE_HPP_FCL_WARNINGS)
+
 # ── Install ──────────────────────────────────────────────────────────────────
-install(TARGETS torque_test_node fl_control_node
+install(TARGETS torque_test_node fl_control_node io_control_node
   DESTINATION lib/${PROJECT_NAME})
 
 install(DIRECTORY xacro config launch scripts data urdf

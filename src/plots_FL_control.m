@@ -68,7 +68,7 @@ lgd1 = legend(axs1(1), [h_ref h_sim], {'Referencia', 'Simulación'}, ...
               'Orientation', 'horizontal', 'FontSize', fs, ...
               'Location', 'northoutside');
 lgd1.Layout.Tile = 'north';
-%title(tl1, 'Posiciones articulares — FL Control', 'FontSize', 14, 'FontWeight', 'bold');
+title(tl1, 'FL Control - Posiciones Articulares', 'FontSize', 14, 'FontWeight', 'bold');
 
 %% 4. Figura 2 — Velocidades articulares (simulación vs referencia)
 figure(2); clf;
