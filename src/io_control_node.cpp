@@ -19,11 +19,9 @@
 //  Fases de referencia:
 //    [0, T_TRANS)  — transicion suave con polinomio de 5to orden
 //                    desde la pose inicial medida hasta el inicio de la trayectoria
-//    [T_TRANS, ∞)  — trayectoria circular cartesiana (w = 2 rad/s):
-//                      x_des   = 0.20 + 0.05*sin(2t')
-//                      y_des   = 0.05*cos(2t')
-//                      z_des   = 0.10
-//                      phi_des = 0.0  (horizontal, cerca de pose inicial)
+//    [T_TRANS, ∞)  — trayectoria circular cartesiana (w = 1 rad/s):                                                          
+//                      x_des   = 0.20 + 0.05*sin(t')          
+//                      y_des   = 0.05*cos(t')    
 //
 //  Parametro ROS (unico):
 //    t_sim — duracion de la simulacion en segundos (0 = ilimitado)
@@ -73,8 +71,10 @@ static constexpr char EFF_FRAME[] = "end_effector_link";
 // ============================================================================
 
 // Ganancias cartesianas  [x,  y,  z,  phi]
-static const Eigen::Vector4d KP = {40.0, 40.0, 40.0, 40.0};
-static const Eigen::Vector4d KD = {13.0, 13.0, 13.0, 13.0};
+// phi usa ganancias mas altas (wn≈11 rad/s) para rechazar el acoplamiento                                                    
+// cinematico periodico inducido por la trayectoria circular (w=1 rad/s).                                                     
+static const Eigen::Vector4d KP = {40.0, 40.0, 40.0, 120.0};   
+static const Eigen::Vector4d KD = {13.0, 13.0, 13.0,  22.0};   
 
 // Saturacion de torque por articulacion [N·m]
 static constexpr double TAU_MAX = 0.82;
@@ -106,7 +106,7 @@ struct CartRef {
 // ── Trayectoria circular (activa para t' = t - T_TRANS >= 0) ────────────────
 static CartRef circularTrajectory(double tp)
 {
-  const double w = 2.0;
+  const double w = 1.0;   // 2.0→1.0 rad/s: periodo 6.3 s, menor acoplamiento en phi       
   CartRef ref;
 
   ref.y <<
