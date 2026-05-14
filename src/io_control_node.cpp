@@ -92,7 +92,7 @@ static constexpr double LAMBDA_SQ = LAMBDA * LAMBDA;
 // x_c=0.20 y phi=0.0 estan cerca de la pose inicial del robot en Gazebo
 // (x≈0.26, phi≈-0.097), lo que evita errores grandes al arranque y que
 // q4 alcance su limite fisico (~2.0 rad).
-static const Eigen::Vector4d Y_START {0.20, 0.05, 0.10, 0.0};
+static const Eigen::Vector4d Y_START {0.20, 0.05, 0.10, M_PI/4.0};
 
 // ============================================================================
 
@@ -113,7 +113,7 @@ static CartRef circularTrajectory(double tp)
      0.20 + 0.05 * std::sin(w * tp),
      0.05 * std::cos(w * tp),
      0.10,
-     0.0;
+     M_PI/4.0;
 
   ref.ydot <<
      0.05 * w * std::cos(w * tp),
