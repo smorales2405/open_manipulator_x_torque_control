@@ -380,6 +380,9 @@ private:
     if (t_sim_ > 0.0 && t_ >= t_sim_) {
       RCLCPP_INFO(this->get_logger(),
         "Simulacion completada (%.1f s). Deteniendo control.", t_sim_);
+      std_msgs::msg::Float64MultiArray zero;
+      zero.data.assign(NARM, 0.0);
+      torque_pub_->publish(zero);
       if (csv_.is_open()) {
         csv_.close();
         RCLCPP_INFO(this->get_logger(), "CSV cerrado: %s", csv_path_.c_str());
