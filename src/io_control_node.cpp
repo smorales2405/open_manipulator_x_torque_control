@@ -4,8 +4,8 @@
 //
 //  Salida de tarea:
 //    y = [x, y, z, phi]^T
-//    donde (x,y,z) es la posicion cartesiana del efector final y phi es el
-//    angulo de inclinacion (pitch ZYX) del mismo.
+//    donde (x,y,z) es la posicion cartesiana del efector final y
+//    phi = q2 + q3 + q4  es el angulo de inclinacion analitico del efector final.
 //
 //  Cinematica diferencial:
 //    ydot  = J(q) * qdot
@@ -220,7 +220,7 @@ private:
   void open_csv()
   {
     std::filesystem::create_directories(PACKAGE_DATA_DIR);
-    csv_path_ = std::string(PACKAGE_DATA_DIR) + "/fl_xyz_data.csv";
+    csv_path_ = std::string(PACKAGE_DATA_DIR) + "/fl_xyz_new_data.csv";
     csv_.open(csv_path_);
     if (!csv_.is_open()) {
       RCLCPP_ERROR(this->get_logger(), "No se pudo crear: %s", csv_path_.c_str());
@@ -230,6 +230,8 @@ private:
          << "q1,q2,q3,q4,"
          << "x,y,z,phi,"
          << "x_des,y_des,z_des,phi_des,"
+         << "xdot,ydot,zdot,phidot,"
+         << "xdot_des,ydot_des,zdot_des,phidot_des,"
          << "tau1,tau2,tau3,tau4\n";
     RCLCPP_INFO(this->get_logger(), "CSV: %s", csv_path_.c_str());
   }
@@ -275,16 +277,14 @@ private:
       model_, data_, q_pin, frame_id_, pinocchio::LOCAL_WORLD_ALIGNED, J6);
 
     const Eigen::Vector3d p = data_.oMf[frame_id_].translation();
-    const Eigen::Matrix3d R = data_.oMf[frame_id_].rotation();
-    const double phi = std::atan2(-R(2, 0),
-                                   std::sqrt(R(0, 0) * R(0, 0) + R(1, 0) * R(1, 0)));
+    const double phi = q[1] + q[2] + q[3];  // analitico: phi = q2 + q3 + q4
 
-    // Jacobiano de tarea 4x4: filas {vx, vy, vz, wy} — columnas {j1..j4}
+    // Jacobiano de tarea 4x4: filas {vx, vy, vz, dphi/dq} — columnas {j1..j4}
     Eigen::Matrix4d J4;
     J4.row(0) = J6.row(0).head<NARM>();
     J4.row(1) = J6.row(1).head<NARM>();
     J4.row(2) = J6.row(2).head<NARM>();
-    J4.row(3) = J6.row(4).head<NARM>();   // wy → tasa de cambio de phi
+    J4.row(3) << 0.0, 1.0, 1.0, 1.0;   // dphi/dq = [0,1,1,1] (constante analitico)
 
     // Velocidad cartesiana actual
     const Eigen::Vector4d ydot = J4 * dq;
@@ -299,7 +299,7 @@ private:
     jdqd << bias.linear()[0],
             bias.linear()[1],
             bias.linear()[2],
-            bias.angular()[1];
+            0.0;   // Jdot_phi * qdot = 0 (fila [0,1,1,1] es constante)
 
     // ── 4. Dinamica: M(q) y b(q, qdot) ───────────────────────────────────
     pinocchio::crba(model_, data_, q_pin);
@@ -365,10 +365,12 @@ private:
     if (csv_.is_open()) {
       csv_ << std::fixed << std::setprecision(6)
            << t_
-           << ',' << q[0]       << ',' << q[1]       << ',' << q[2]       << ',' << q[3]
-           << ',' << y[0]       << ',' << y[1]       << ',' << y[2]       << ',' << y[3]
-           << ',' << ref.y[0]   << ',' << ref.y[1]   << ',' << ref.y[2]   << ',' << ref.y[3]
-           << ',' << tau_sat[0] << ',' << tau_sat[1] << ',' << tau_sat[2] << ',' << tau_sat[3]
+           << ',' << q[0]           << ',' << q[1]           << ',' << q[2]           << ',' << q[3]
+           << ',' << y[0]           << ',' << y[1]           << ',' << y[2]           << ',' << y[3]
+           << ',' << ref.y[0]       << ',' << ref.y[1]       << ',' << ref.y[2]       << ',' << ref.y[3]
+           << ',' << ydot[0]        << ',' << ydot[1]        << ',' << ydot[2]        << ',' << ydot[3]
+           << ',' << ref.ydot[0]    << ',' << ref.ydot[1]    << ',' << ref.ydot[2]    << ',' << ref.ydot[3]
+           << ',' << tau_sat[0]     << ',' << tau_sat[1]     << ',' << tau_sat[2]     << ',' << tau_sat[3]
            << '\n';
     }
 
