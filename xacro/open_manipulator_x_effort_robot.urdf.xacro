@@ -40,10 +40,63 @@
     </plugin>
   </gazebo>
 
-  <!-- Fijar el robot al mundo -->
+  <!-- Ancla al mundo -->
   <link name="world"/>
+
+  <!-- Base Plate-02 (ROBOTIS)  300×300×10 mm, STL en mm → scale 0.001 -->
+  <!-- Frame del link = cara superior de la placa (z=0.010 m en el mundo) -->
+  <!-- La malla ocupa z=[−0.010, 0] en coordenadas locales del link       -->
+  <link name="base_plate_02_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="file://$(find open_manipulator_x_torque_control)/meshes/base_plate_02.stl"
+              scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="grey"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 -0.005" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.300 0.300 0.010"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0 0 -0.005" rpy="0 0 0"/>
+      <mass value="0.500"/>
+      <inertia ixx="3.754e-03" ixy="0.0" ixz="0.0"
+               iyy="3.754e-03" iyz="0.0"
+               izz="7.500e-03"/>
+    </inertial>
+  </link>
+
+  <!-- Material y colision Gazebo para la placa.
+       self_collide permite que el brazo colisione con la placa (intra-modelo).
+       ODE ignora contactos entre links estaticos, por lo que link1 y la placa
+       no generan inestabilidad aunque esten en contacto. -->
+  <gazebo reference="base_plate_02_link">
+    <kp>1000000.0</kp>
+    <kd>100.0</kd>
+    <mu1>0.6</mu1>
+    <mu2>0.6</mu2>
+    <self_collide>true</self_collide>
+    <material>Gazebo/White</material>
+  </gazebo>
+
+  <!-- Placa anclada directamente al mundo. Ambos joints van a world para que
+       Gazebo no fusione base_plate_02_link con link1 al convertir URDF→SDF. -->
+  <!-- Placa rotada -90 grados en Z: eje Y de la placa → eje X del mundo.
+       Asi los orificios quedan en el borde X- y el brazo trabaja sobre +X. -->
+  <joint name="world_to_base_plate" type="fixed">
+    <origin xyz="0 0 0.010" rpy="0 0 -1.5708"/>
+    <parent link="world"/>
+    <child link="base_plate_02_link"/>
+  </joint>
+
+  <!-- Robot sobre el centroide de los 4 orificios en world frame.
+       x=-0.127m = centroide tras rotacion de la placa (23.4 mm del borde X-) -->
   <joint name="$(arg prefix)world_fixed" type="fixed">
-    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <origin xyz="-0.127 0 0.010" rpy="0 0 0"/>
     <parent link="world"/>
     <child link="$(arg prefix)link1"/>
   </joint>
