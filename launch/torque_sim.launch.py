@@ -1,37 +1,20 @@
 #!/usr/bin/env python3
 #
-# Launch para simulacion Gazebo con control de esfuerzo/torque.
+# Launch para simulacion Gazebo Fortress con control de esfuerzo/torque.
 #
 # Orden de arranque:
-#   1. cleanup_gazebo   → mata gzserver/gzclient huerfanos de sesiones previas
-#   2. [OnProcessExit cleanup] → robot_state_publisher + gazebo (gzserver+gzclient)
-#                                + spawn_entity
+#   1. cleanup_gz       → mata procesos gz huerfanos de sesiones previas
+#   2. [OnProcessExit cleanup] → robot_state_publisher + gz_sim + clock_bridge
+#                                + spawn (ros_gz_sim create)
 #   3. [OnProcessExit spawn]  → joint_state_broadcaster spawner
 #   4. [OnProcessExit jsb]    → arm_effort_controller + gripper_controller
 #
-# GAZEBO_PLUGIN_PATH fix:
-#   gazebo_ros2_control/package.xml tiene <export></export> vacio, por lo que
-#   GazeboRosPaths.get_paths() no devuelve /opt/ros/humble/lib.
-#   gzserver.launch.py SI appenda os.environ['GAZEBO_PLUGIN_PATH'] al env que
-#   pasa a gzserver (ver gzserver.launch.py lineas 60-62), por lo que basta con
-#   setear os.environ ANTES de que se evaluen los includes.
-#
-# rcl --param robot_description fix:
-#   gazebo_ros2_control 0.4.x pasa el URDF como --param robot_description:=<xml>
-#   a rclcpp::NodeOptions; rcl usa yaml-cpp para parsear el valor, que falla si:
-#     (a) el string contiene saltos de linea
-#     (b) hay ': ' (colon-espacio) en comentarios XML
-#   xacro_oneline.sh elimina comentarios y saltos de linea del output de xacro.
-
-import os
-from os import environ
-from os.path import pathsep
-
-_ROS_LIB = '/opt/ros/humble/lib'
-if _ROS_LIB not in environ.get('GAZEBO_PLUGIN_PATH', ''):
-    os.environ['GAZEBO_PLUGIN_PATH'] = (
-        _ROS_LIB + pathsep + environ.get('GAZEBO_PLUGIN_PATH', '')
-    ).rstrip(pathsep)
+# Notas de migracion Gazebo Classic → Fortress:
+#   - gazebo_ros             → ros_gz_sim
+#   - gazebo.launch.py       → gz_sim.launch.py
+#   - spawn_entity.py        → ros_gz_sim create  (-name en lugar de -entity)
+#   - GAZEBO_PLUGIN_PATH     → no se necesita (gz_ros2_control usa ament index)
+#   - /clock bridge          → ros_gz_bridge obligatorio con use_sim_time:=true
 
 from launch import LaunchDescription
 from launch.actions import (
@@ -60,14 +43,15 @@ def generate_launch_description():
     start_rviz = LaunchConfiguration('start_rviz')
 
     world = PathJoinSubstitution([
-        FindPackageShare('open_manipulator_x_bringup'),
+        FindPackageShare('open_manipulator_x_torque_control'),
         'worlds',
-        'empty_world.model',
+        'empty_world_fortress.sdf',
     ])
 
-    # Command uses shlex.split (no shell), so pipes don't work inline.
-    # xacro_oneline.sh: strips XML comments and newlines so the URDF is a
-    # single comment-free line.  Both are required for rcl yaml-cpp parsing.
+    # xacro_oneline.sh: elimina comentarios XML y saltos de linea del URDF.
+    # Sigue siendo util porque robot_state_publisher recibe robot_description
+    # como parametro ROS (parseado por yaml-cpp), que falla con newlines y
+    # con ': ' dentro de comentarios XML.
     robot_description = ParameterValue(
         Command([
             PathJoinSubstitution([
@@ -88,18 +72,18 @@ def generate_launch_description():
         value_type=str,
     )
 
-    # Pattern [g]zserver avoids pkill matching its own bash process:
-    # the cmdline literal "[g]zserver" does not contain "gzserver" as substring.
-    cleanup_gazebo = ExecuteProcess(
+    # Mata procesos gz huerfanos de sesiones anteriores.
+    # En Fortress el simulador corre como proceso unico 'gz' (no gzserver/gzclient).
+    cleanup_gz = ExecuteProcess(
         cmd=[
             'bash', '-c',
-            'pkill -9 -f "[g]zserver" 2>/dev/null; '
-            'pkill -9 -f "[g]zclient" 2>/dev/null; '
+            'pkill -9 -f "[g]z sim" 2>/dev/null; '
+            'pkill -9 -f "ruby.*gz" 2>/dev/null; '
             'sleep 1; '
-            'echo "[cleanup] Gazebo processes cleared"',
+            'echo "[cleanup] gz processes cleared"',
         ],
         output='screen',
-        name='cleanup_gazebo',
+        name='cleanup_gz',
     )
 
     robot_state_pub = Node(
@@ -112,26 +96,38 @@ def generate_launch_description():
         output='screen',
     )
 
-    gazebo = IncludeLaunchDescription(
+    gz_sim = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([
             PathJoinSubstitution([
-                FindPackageShare('gazebo_ros'),
+                FindPackageShare('ros_gz_sim'),
                 'launch',
-                'gazebo.launch.py',
+                'gz_sim.launch.py',
             ])
         ]),
         launch_arguments={
-            'verbose': 'false',
-            'world': world,
+            'gz_args': ['-r ', world],
+            'on_exit_shutdown': 'true',
         }.items(),
     )
 
-    spawn_entity = Node(
-        package='gazebo_ros',
-        executable='spawn_entity.py',
+    # Bridge de /clock: obligatorio para que use_sim_time funcione en ROS 2.
+    # gz_ros2_control no publica /clock automaticamente; ros_gz_bridge si.
+    clock_bridge = Node(
+        package='ros_gz_bridge',
+        executable='parameter_bridge',
+        arguments=['/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock'],
+        output='screen',
+        name='clock_bridge',
+    )
+
+    # Gazebo Fortress: spawn via ros_gz_sim create
+    # Usa -name (no -entity) y lee robot_description del topic /robot_description.
+    spawn_robot = Node(
+        package='ros_gz_sim',
+        executable='create',
         arguments=[
+            '-name', 'open_manipulator_x_effort',
             '-topic', 'robot_description',
-            '-entity', 'open_manipulator_x_effort',
             '-x', '0.0', '-y', '0.0', '-z', '0.01',
         ],
         output='screen',
@@ -185,18 +181,18 @@ def generate_launch_description():
         condition=IfCondition(start_rviz),
     )
 
-    # cleanup → RSP + Gazebo (gzserver+gzclient) + spawn_entity juntos
+    # cleanup → RSP + gz_sim + clock_bridge + spawn juntos
     start_after_cleanup = RegisterEventHandler(
         event_handler=OnProcessExit(
-            target_action=cleanup_gazebo,
-            on_exit=[robot_state_pub, gazebo, spawn_entity],
+            target_action=cleanup_gz,
+            on_exit=[robot_state_pub, gz_sim, clock_bridge, spawn_robot],
         )
     )
 
-    # spawn_entity termina → jsb_spawner
+    # spawn termina → jsb_spawner
     jsb_after_spawn = RegisterEventHandler(
         event_handler=OnProcessExit(
-            target_action=spawn_entity,
+            target_action=spawn_robot,
             on_exit=[jsb_spawner],
         )
     )
@@ -221,7 +217,7 @@ def generate_launch_description():
             description='Lanzar RViz2 para visualizacion',
         ),
 
-        cleanup_gazebo,
+        cleanup_gz,
         start_after_cleanup,
         jsb_after_spawn,
         controllers_after_jsb,

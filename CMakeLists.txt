@@ -52,7 +52,7 @@ target_compile_definitions(io_control_node PRIVATE
 install(TARGETS torque_test_node fl_control_node io_control_node
   DESTINATION lib/${PROJECT_NAME})
 
-install(DIRECTORY xacro config launch scripts data urdf meshes
+install(DIRECTORY xacro config launch scripts data urdf meshes worlds
   DESTINATION share/${PROJECT_NAME})
 
 ament_package()

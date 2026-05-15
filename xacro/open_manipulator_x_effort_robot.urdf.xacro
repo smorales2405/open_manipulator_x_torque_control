@@ -3,7 +3,7 @@
   Robot URDF/Xacro con control de esfuerzo para simulacion Gazebo.
   Reutiliza la cinematica y meshes del paquete original de ROBOTIS,
   pero sustituye el ros2_control xacro original por el de esfuerzo.
-  El plugin gazebo_ros2_control apunta al YAML de controladores de esfuerzo.
+  El plugin gz_ros2_control apunta al YAML de controladores de esfuerzo.
 -->
 <robot name="open_manipulator_x" xmlns:xacro="http://ros.org/wiki/xacro">
 
@@ -33,9 +33,10 @@
     name="OpenManipulatorXEffort"
     prefix="$(arg prefix)" />
 
-  <!-- Plugin gazebo_ros2_control apunta al YAML separado de controladores de esfuerzo -->
+  <!-- Plugin gz_ros2_control para Gazebo Fortress apunta al YAML de controladores -->
   <gazebo>
-    <plugin name="gazebo_ros2_control" filename="libgazebo_ros2_control.so">
+    <plugin filename="gz_ros2_control-system"
+            name="gz_ros2_control::GazeboSimROS2ControlPlugin">
       <parameters>$(find open_manipulator_x_torque_control)/config/effort_controllers.yaml</parameters>
     </plugin>
   </gazebo>
@@ -70,17 +71,15 @@
     </inertial>
   </link>
 
-  <!-- Material y colision Gazebo para la placa.
+  <!-- Propiedades de contacto Gazebo para la placa.
        self_collide permite que el brazo colisione con la placa (intra-modelo).
-       ODE ignora contactos entre links estaticos, por lo que link1 y la placa
-       no generan inestabilidad aunque esten en contacto. -->
+       Nota: material Gazebo/White eliminado — no existe en Ogre2 (Fortress). -->
   <gazebo reference="base_plate_02_link">
     <kp>1000000.0</kp>
     <kd>100.0</kd>
     <mu1>0.6</mu1>
     <mu2>0.6</mu2>
     <self_collide>true</self_collide>
-    <material>Gazebo/White</material>
   </gazebo>
 
   <!-- Placa anclada directamente al mundo. Ambos joints van a world para que
