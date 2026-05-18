@@ -107,8 +107,30 @@ lgd2 = legend(axs2(1), [h_ref h_sim], {'Referencia', 'Simulación'}, ...
 lgd2.Layout.Tile = 'north';
 %title(tl2, 'Velocidades articulares — FL Control', 'FontSize', 14, 'FontWeight', 'bold');
 
-%% 5. Figura 3 — Torques de control
+%% 5. Figura 3 — Errores de seguimiento articular
+e_q = q - q_des;
+
 figure(3); clf;
+set(gcf, 'Color', 'w', 'Position', [130 130 1100 560]);
+tl3 = tiledlayout(2, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
+axs3 = gobjects(1, 4);
+
+for i = 1:4
+    axs3(i) = nexttile(tl3);
+    plot(t, e_q(:,i), '-', 'Color', c_real, 'LineWidth', lw);
+    yline(0, ':', 'LineWidth', 0.8);
+    xlabel('Tiempo [s]', 'FontSize', fs);
+    ylabel(sprintf('$e_{q_%d}$ [rad]', i), 'Interpreter', 'latex', 'FontSize', fs);
+    grid on; box on;
+    set(gca, 'FontSize', fs);
+    xlim(xlims);
+end
+
+title(tl3, 'FL Control - Errores de Seguimiento Articular', ...
+      'FontSize', 14, 'FontWeight', 'bold');
+
+%% 6. Figura 4 — Torques de control
+figure(4); clf;
 set(gcf, 'Color', 'w', 'Position', [160 -340 1100 500]);
 
 for i = 1:4
@@ -118,29 +140,27 @@ for i = 1:4
     xlabel('Tiempo [s]', 'FontSize', fs);
     ylabel(sprintf('$\\tau_%d\\;[\\mathrm{N{\\cdot}m}]$', i), ...
            'Interpreter', 'latex', 'FontSize', fs);
-    %title(['Torque de control - ' jnames{i}], 'FontSize', fs_t);
-    %legend({sprintf('$\\tau_%d$', i)}, ...
-    %       'Interpreter', 'latex', 'Location', 'best', 'FontSize', fs-1);
     grid on; box on;
     set(gca, 'FontSize', fs);
     xlim(xlims);
 end
-%sgtitle('Torques de control — FL Control', 'FontSize', 14, 'FontWeight', 'bold');
 
-%% 6. Exportacion de figuras
+%% 7. Exportacion de figuras
 if EXPORT_FIGS
     out_dir = fullfile(data_dir, 'plots', sprintf('test%d', test_num));
     if ~exist(out_dir, 'dir'), mkdir(out_dir); end
 
     % PNG (raster, 300 dpi)
-    exportgraphics(figure(1), fullfile(out_dir, 'plot_q.png'),   'Resolution', 300);
-    exportgraphics(figure(2), fullfile(out_dir, 'plot_dq.png'),  'Resolution', 300);
-    exportgraphics(figure(3), fullfile(out_dir, 'plot_tau.png'), 'Resolution', 300);
+    exportgraphics(figure(1), fullfile(out_dir, 'plot_q.png'),    'Resolution', 300);
+    exportgraphics(figure(2), fullfile(out_dir, 'plot_dq.png'),   'Resolution', 300);
+    exportgraphics(figure(3), fullfile(out_dir, 'plot_eq.png'),   'Resolution', 300);
+    exportgraphics(figure(4), fullfile(out_dir, 'plot_tau.png'),  'Resolution', 300);
 
     % EPS (vectorial)
-    exportgraphics(figure(1), fullfile(out_dir, 'plot_q.eps'),   'ContentType', 'vector', 'Resolution', 600);
-    exportgraphics(figure(2), fullfile(out_dir, 'plot_dq.eps'),  'ContentType', 'vector', 'Resolution', 600);
-    exportgraphics(figure(3), fullfile(out_dir, 'plot_tau.eps'), 'ContentType', 'vector', 'Resolution', 600);
+    exportgraphics(figure(1), fullfile(out_dir, 'plot_q.eps'),    'ContentType', 'vector', 'Resolution', 600);
+    exportgraphics(figure(2), fullfile(out_dir, 'plot_dq.eps'),   'ContentType', 'vector', 'Resolution', 600);
+    exportgraphics(figure(3), fullfile(out_dir, 'plot_eq.eps'),   'ContentType', 'vector', 'Resolution', 600);
+    exportgraphics(figure(4), fullfile(out_dir, 'plot_tau.eps'),  'ContentType', 'vector', 'Resolution', 600);
 
     fprintf('Figuras exportadas en: %s\n', out_dir);
 end

@@ -93,10 +93,32 @@ lgd2.Layout.Tile = 'north';
 title(tl2, 'IO Control - Seguimiento Cartesiano', ...
       'FontSize', 14, 'FontWeight', 'bold');
 
-%% 5. Figura 3 — Velocidades cartesianas
-ydot_labels = {'$\dot{x}$ [m/s]', '$\dot{y}$ [m/s]', '$\dot{z}$ [m/s]', '$\dot{\phi}$ [rad/s]'};
+%% 5. Figura 3 — Errores de seguimiento cartesiano
+e_y = y - y_des;
+e_labels = {'$e_x$ [m]', '$e_y$ [m]', '$e_z$ [m]', '$e_\phi$ [rad]'};
 
 figure(3); clf;
+set(gcf, 'Color', 'w', 'Position', [160 100 1100 540]);
+tl3  = tiledlayout(2, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
+
+for i = 1:4
+    nexttile(tl3);
+    plot(t, e_y(:,i), '-', 'Color', c_real, 'LineWidth', lw);
+    yline(0, ':', 'LineWidth', 0.8);
+    xlabel('Tiempo [s]', 'FontSize', fs);
+    ylabel(e_labels{i}, 'Interpreter', 'latex', 'FontSize', fs);
+    grid on; box on;
+    set(gca, 'FontSize', fs);
+    xlim(xlims);
+end
+
+title(tl3, 'IO Control - Errores de Seguimiento Cartesiano', ...
+      'FontSize', 14, 'FontWeight', 'bold');
+
+%% 6. Figura 4 — Velocidades cartesianas
+ydot_labels = {'$\dot{x}$ [m/s]', '$\dot{y}$ [m/s]', '$\dot{z}$ [m/s]', '$\dot{\phi}$ [rad/s]'};
+
+figure(4); clf;
 set(gcf, 'Color', 'w', 'Position', [160 -380 1100 540]);
 tl4  = tiledlayout(2, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
 axs4 = gobjects(1, 4);
@@ -124,13 +146,13 @@ lgd4.Layout.Tile = 'north';
 title(tl4, 'IO Control - Velocidades Cartesianas', ...
     'FontSize', 14, 'FontWeight', 'bold');
 
-%% 6. Figura 4 — Torques de control
-figure(4); clf;
+%% 7. Figura 5 — Torques de control
+figure(5); clf;
 set(gcf, 'Color', 'w', 'Position', [160 -380 1100 500]);
-tl3 = tiledlayout(2, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
+tl5 = tiledlayout(2, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
 
 for i = 1:4
-    nexttile(tl3);
+    nexttile(tl5);
     plot(t, tau(:,i), '-', 'Color', c_tau(i,:), 'LineWidth', lw);
     yline(0, ':', 'LineWidth', 0.8);
     yline( 0.82, '--k', 'LineWidth', 0.8);   % limite superior
@@ -143,12 +165,10 @@ for i = 1:4
     xlim(xlims);
 end
 
-title(tl3, 'IO Control - Torques de Control', ...
+title(tl5, 'IO Control - Torques de Control', ...
       'FontSize', 14, 'FontWeight', 'bold');
 
-
-
-%% 7. Exportacion de figuras
+%% 8. Exportacion de figuras
 if EXPORT_FIGS
     out_dir = fullfile(data_dir, 'plots', sprintf('test%d', test_num));
     if ~exist(out_dir, 'dir'), mkdir(out_dir); end
@@ -156,15 +176,16 @@ if EXPORT_FIGS
     % PNG (raster, 300 dpi)
     exportgraphics(figure(1), fullfile(out_dir, 'plot_q.png'),                  'Resolution', 300);
     exportgraphics(figure(2), fullfile(out_dir, 'plot_tracking_cartesian.png'),  'Resolution', 300);
-    exportgraphics(figure(3), fullfile(out_dir, 'plot_ydot_cartesian.png'),      'Resolution', 300);
-    exportgraphics(figure(4), fullfile(out_dir, 'plot_tau.png'),                 'Resolution', 300);
-
+    exportgraphics(figure(3), fullfile(out_dir, 'plot_ey_cartesian.png'),        'Resolution', 300);
+    exportgraphics(figure(4), fullfile(out_dir, 'plot_ydot_cartesian.png'),      'Resolution', 300);
+    exportgraphics(figure(5), fullfile(out_dir, 'plot_tau.png'),                 'Resolution', 300);
 
     % EPS (vectorial)
     exportgraphics(figure(1), fullfile(out_dir, 'plot_q.eps'),                  'ContentType', 'vector', 'Resolution', 600);
     exportgraphics(figure(2), fullfile(out_dir, 'plot_tracking_cartesian.eps'),  'ContentType', 'vector', 'Resolution', 600);
-    exportgraphics(figure(3), fullfile(out_dir, 'plot_ydot_cartesian.eps'),      'ContentType', 'vector', 'Resolution', 600);
-    exportgraphics(figure(4), fullfile(out_dir, 'plot_tau.eps'),                 'ContentType', 'vector', 'Resolution', 600);
+    exportgraphics(figure(3), fullfile(out_dir, 'plot_ey_cartesian.eps'),        'ContentType', 'vector', 'Resolution', 600);
+    exportgraphics(figure(4), fullfile(out_dir, 'plot_ydot_cartesian.eps'),      'ContentType', 'vector', 'Resolution', 600);
+    exportgraphics(figure(5), fullfile(out_dir, 'plot_tau.eps'),                 'ContentType', 'vector', 'Resolution', 600);
 
     fprintf('Figuras exportadas en: %s\n', out_dir);
 end
