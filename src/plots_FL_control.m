@@ -14,7 +14,9 @@ clear; clc; close all;
 script_dir = fileparts(mfilename('fullpath'));
 data_dir   = fullfile(script_dir, '..', 'data', 'act1');
 
-test_num = 4;   % <-- Cambiar aqui para seleccionar la prueba
+test_num    = 5;      % <-- Cambiar aqui para seleccionar la prueba
+EXPORT_FIGS = false;  % true = exportar PNG y EPS en data/plots/act1/test<N>/
+
 filename = sprintf('fl_data_%d.csv', test_num);
 fprintf('Cargando: %s\n', filename);
 
@@ -68,7 +70,7 @@ lgd1 = legend(axs1(1), [h_ref h_sim], {'Referencia', 'Simulación'}, ...
               'Orientation', 'horizontal', 'FontSize', fs, ...
               'Location', 'northoutside');
 lgd1.Layout.Tile = 'north';
-title(tl1, 'FL Control - Posiciones Articulares', 'FontSize', 14, 'FontWeight', 'bold');
+%title(tl1, 'FL Control - Posiciones Articulares', 'FontSize', 14, 'FontWeight', 'bold');
 
 %% 4. Figura 2 — Velocidades articulares (simulación vs referencia)
 figure(2); clf;
@@ -124,3 +126,21 @@ for i = 1:4
     xlim(xlims);
 end
 %sgtitle('Torques de control — FL Control', 'FontSize', 14, 'FontWeight', 'bold');
+
+%% 6. Exportacion de figuras
+if EXPORT_FIGS
+    out_dir = fullfile(data_dir, 'plots', sprintf('test%d', test_num));
+    if ~exist(out_dir, 'dir'), mkdir(out_dir); end
+
+    % PNG (raster, 300 dpi)
+    exportgraphics(figure(1), fullfile(out_dir, 'plot_q.png'),   'Resolution', 300);
+    exportgraphics(figure(2), fullfile(out_dir, 'plot_dq.png'),  'Resolution', 300);
+    exportgraphics(figure(3), fullfile(out_dir, 'plot_tau.png'), 'Resolution', 300);
+
+    % EPS (vectorial)
+    exportgraphics(figure(1), fullfile(out_dir, 'plot_q.eps'),   'ContentType', 'vector', 'Resolution', 600);
+    exportgraphics(figure(2), fullfile(out_dir, 'plot_dq.eps'),  'ContentType', 'vector', 'Resolution', 600);
+    exportgraphics(figure(3), fullfile(out_dir, 'plot_tau.eps'), 'ContentType', 'vector', 'Resolution', 600);
+
+    fprintf('Figuras exportadas en: %s\n', out_dir);
+end

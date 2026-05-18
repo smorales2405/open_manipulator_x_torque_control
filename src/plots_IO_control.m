@@ -14,7 +14,9 @@ clear; clc; close all;
 script_dir = fileparts(mfilename('fullpath'));
 data_dir   = fullfile(script_dir, '..', 'data', 'act2');
 
-test_num = 1;   % <-- Cambiar aqui para seleccionar la prueba
+test_num    = 1;      % <-- Cambiar aqui para seleccionar la prueba
+EXPORT_FIGS = false;  % true = exportar PNG y EPS en data/plots/act2/test<N>/
+
 filename = sprintf('io_data_%d.csv', test_num);
 fprintf('Cargando: %s\n', filename);
 
@@ -91,32 +93,10 @@ lgd2.Layout.Tile = 'north';
 title(tl2, 'IO Control - Seguimiento Cartesiano', ...
       'FontSize', 14, 'FontWeight', 'bold');
 
-%% 5. Figura 3 — Torques de control
-figure(3); clf;
-set(gcf, 'Color', 'w', 'Position', [160 -380 1100 500]);
-tl3 = tiledlayout(2, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
-
-for i = 1:4
-    nexttile(tl3);
-    plot(t, tau(:,i), '-', 'Color', c_tau(i,:), 'LineWidth', lw);
-    yline(0, ':', 'LineWidth', 0.8);
-    yline( 0.82, '--k', 'LineWidth', 0.8);   % limite superior
-    yline(-0.82, '--k', 'LineWidth', 0.8);   % limite inferior
-    xlabel('Tiempo [s]', 'FontSize', fs);
-    ylabel(sprintf('$\\tau_%d\\;[\\mathrm{N{\\cdot}m}]$', i), ...
-           'Interpreter', 'latex', 'FontSize', fs);
-    grid on; box on;
-    set(gca, 'FontSize', fs);
-    xlim(xlims);
-end
-
-title(tl3, 'IO Control - Torques de Control', ...
-      'FontSize', 14, 'FontWeight', 'bold');
-
-%% 6. Figura 4 — Velocidades cartesianas
+%% 5. Figura 3 — Velocidades cartesianas
 ydot_labels = {'$\dot{x}$ [m/s]', '$\dot{y}$ [m/s]', '$\dot{z}$ [m/s]', '$\dot{\phi}$ [rad/s]'};
 
-figure(4); clf;
+figure(3); clf;
 set(gcf, 'Color', 'w', 'Position', [160 -380 1100 540]);
 tl4  = tiledlayout(2, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
 axs4 = gobjects(1, 4);
@@ -139,30 +119,52 @@ for i = 1:4
 end
 
 lgd4 = legend(axs4(1), [h_ref4, h_sim4], {'Referencia', 'Simulacion'}, ...
-              'Orientation', 'horizontal', 'FontSize', fs, 'Location', 'northoutside');
+    'Orientation', 'horizontal', 'FontSize', fs, 'Location', 'northoutside');
 lgd4.Layout.Tile = 'north';
 title(tl4, 'IO Control - Velocidades Cartesianas', ...
-      'FontSize', 14, 'FontWeight', 'bold');
+    'FontSize', 14, 'FontWeight', 'bold');
 
-%% 7. Exportacion opcional para informe
+%% 6. Figura 4 — Torques de control
+figure(4); clf;
+set(gcf, 'Color', 'w', 'Position', [160 -380 1100 500]);
+tl3 = tiledlayout(2, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
 
-% Carpeta de salida
-output_dir = fullfile(data_dir, 'plots', sprintf('test%d', test_num));
-
-% Crear carpeta si no existe
-if ~exist(output_dir, 'dir')
-    mkdir(output_dir);
+for i = 1:4
+    nexttile(tl3);
+    plot(t, tau(:,i), '-', 'Color', c_tau(i,:), 'LineWidth', lw);
+    yline(0, ':', 'LineWidth', 0.8);
+    yline( 0.82, '--k', 'LineWidth', 0.8);   % limite superior
+    yline(-0.82, '--k', 'LineWidth', 0.8);   % limite inferior
+    xlabel('Tiempo [s]', 'FontSize', fs);
+    ylabel(sprintf('$\\tau_%d\\;[\\mathrm{N{\\cdot}m}]$', i), ...
+           'Interpreter', 'latex', 'FontSize', fs);
+    grid on; box on;
+    set(gca, 'FontSize', fs);
+    xlim(xlims);
 end
 
-% Guardar figuras
-exportgraphics(figure(1), fullfile(output_dir, 'plot_q.png'), ...
-    'Resolution', 300);
+title(tl3, 'IO Control - Torques de Control', ...
+      'FontSize', 14, 'FontWeight', 'bold');
 
-exportgraphics(figure(2), fullfile(output_dir, 'plot_tracking_cartesian.png'), ...
-    'Resolution', 300);
 
-exportgraphics(figure(3), fullfile(output_dir, 'torques_plot.png'), ...
-    'Resolution', 300);
 
-exportgraphics(figure(4), fullfile(output_dir, 'plot_ydot_cartesian.png'), ...
-    'Resolution', 300);
+%% 7. Exportacion de figuras
+if EXPORT_FIGS
+    out_dir = fullfile(data_dir, 'plots', sprintf('test%d', test_num));
+    if ~exist(out_dir, 'dir'), mkdir(out_dir); end
+
+    % PNG (raster, 300 dpi)
+    exportgraphics(figure(1), fullfile(out_dir, 'plot_q.png'),                  'Resolution', 300);
+    exportgraphics(figure(2), fullfile(out_dir, 'plot_tracking_cartesian.png'),  'Resolution', 300);
+    exportgraphics(figure(3), fullfile(out_dir, 'plot_ydot_cartesian.png'),      'Resolution', 300);
+    exportgraphics(figure(4), fullfile(out_dir, 'plot_tau.png'),                 'Resolution', 300);
+
+
+    % EPS (vectorial)
+    exportgraphics(figure(1), fullfile(out_dir, 'plot_q.eps'),                  'ContentType', 'vector', 'Resolution', 600);
+    exportgraphics(figure(2), fullfile(out_dir, 'plot_tracking_cartesian.eps'),  'ContentType', 'vector', 'Resolution', 600);
+    exportgraphics(figure(3), fullfile(out_dir, 'plot_ydot_cartesian.eps'),      'ContentType', 'vector', 'Resolution', 600);
+    exportgraphics(figure(4), fullfile(out_dir, 'plot_tau.eps'),                 'ContentType', 'vector', 'Resolution', 600);
+
+    fprintf('Figuras exportadas en: %s\n', out_dir);
+end
