@@ -169,7 +169,6 @@ static const Eigen::Vector4d KD = {0.0, 0.0, 0.0, 0.0};   // COMPLETAR 1a  [x, y
 
 static constexpr double TAU_MAX   = 0.0;   // COMPLETAR limite de torque por articulacion [N·m]
 static constexpr double LAMBDA    = 0.01;   // factor DLS
-static constexpr double LAMBDA_SQ = LAMBDA * LAMBDA;
 // ═══════════════════════════════════════════════════════════════════════════
 
 // ── Nodo de control ──────────────────────────────────────────────────────────
@@ -369,7 +368,7 @@ private:
     //    M4     (4×4)  — matriz de masa inercial  M(q)
     //    nle4   (4×1)  — efectos no lineales      b(q,dq)
     //    KP, KD        — ganancias (definidas en Seccion 1)
-    //    LAMBDA_SQ     — lambda^2 para la pseudo-inversa DLS
+    //    LAMBDA        — lambda para la pseudo-inversa DLS
     //    TAU_MAX       — saturacion de torque
     //
     //  Ley de control IO Linearization:
