@@ -12,7 +12,7 @@
 //    qddot = J4_dls^+ * (v - Jdot*qdot)     (pseudo-inversa DLS)
 //    tau   = M(q) * qddot + b(q,dq)
 //
-//  El alumno debe completar las secciones marcadas con TODO:
+//  El alumno debe completar las secciones marcadas con COMPLETAR:
 //    SECCION 1 — Ganancias y parametros del controlador
 //    SECCION 2 — Trayectoria de referencia cartesiana
 //    SECCION 3 — Ley de control
@@ -73,50 +73,9 @@ static constexpr int    NARM = 4;
 static constexpr char EFF_FRAME[] = "end_effector_link";
 
 // ═══════════════════════════════════════════════════════════════════════════
-//  SECCION 1 — GANANCIAS Y PARAMETROS DEL CONTROLADOR
+//  SECCION 1 — TRAYECTORIA DE REFERENCIA CARTESIANA
 //
-//  TODO 1a: Asignar las ganancias cartesianas Kp y Kd.
-//    Indice:  [x, y, z, phi]
-//    Referencia de disenio:
-//      - Sistema de 2do orden desacoplado: wn = sqrt(Kp),  zeta = Kd/(2*wn)
-//      - Para amortiguamiento critico:     Kd = 2*sqrt(Kp)
-//      - La frecuencia natural debe ser >> frecuencia de la trayectoria
-//
-//  TODO 1b: Definir Y_START — punto inicial de la trayectoria circular.
-//    Debe coincidir con ref.y en t'=0 (i.e., circularTrajectory(0)).
-//    El robot parte de su pose Gazebo y transiciona hacia Y_START en T_TRANS s.
-//
-//  Parametros configurables (ajustar si es necesario):
-//    TAU_MAX — saturacion de torque por articulacion [N·m]  (motor: 0.82)
-//    T_TRANS — duracion de la fase de transicion inicial [s]
-//    LAMBDA  — factor de amortiguamiento DLS (rango tipico: 0.01 – 0.05)
-// ═══════════════════════════════════════════════════════════════════════════
-
-static const Eigen::Vector4d KP = {0.0, 0.0, 0.0, 0.0};   // TODO 1a  [x, y, z, phi]
-static const Eigen::Vector4d KD = {0.0, 0.0, 0.0, 0.0};   // TODO 1a  [x, y, z, phi]
-
-static constexpr double TAU_MAX   = 0.82;   // limite de torque por articulacion [N·m]
-static constexpr double T_TRANS   = 2.0;    // duracion de la transicion inicial  [s]
-static constexpr double LAMBDA    = 0.01;   // factor DLS
-static constexpr double LAMBDA_SQ = LAMBDA * LAMBDA;
-
-static const Eigen::Vector4d Y_START {0.0, 0.0, 0.0, 0.0};  // TODO 1b  [x, y, z, phi]
-
-// ═══════════════════════════════════════════════════════════════════════════
-
-
-// ── Estructura de referencia cartesiana ─────────────────────────────────────
-struct CartRef {
-  Eigen::Vector4d y;      // posicion deseada    [x, y, z, phi]
-  Eigen::Vector4d ydot;   // velocidad deseada   (1ra derivada analitica)
-  Eigen::Vector4d yddot;  // aceleracion deseada (2da derivada analitica)
-};
-
-
-// ═══════════════════════════════════════════════════════════════════════════
-//  SECCION 2 — TRAYECTORIA DE REFERENCIA CARTESIANA
-//
-//  TODO: Definir y_des(t'), ydot_des(t') e yddot_des(t').
+//  COMPLETAR: Definir y_des(t'), ydot_des(t') e yddot_des(t').
 //
 //  Parametro de entrada:
 //    tp  — tiempo relativo al inicio de la fase circular [s]  (tp = t - T_TRANS)
@@ -126,15 +85,26 @@ struct CartRef {
 //    ref.ydot = primera derivada temporal de ref.y (analitica)
 //    ref.yddot= segunda derivada temporal de ref.y (analitica)
 //
-//  Nota: ref.ydot y ref.yddot son derivadas ANALITICAS, no diferencias finitas.
+//  Parametros configurables (ajustar si es necesario):
+//    T_TRANS — duracion de la fase de transicion inicial [s]
 // ═══════════════════════════════════════════════════════════════════════════
 
+static constexpr double T_TRANS   = 2.0;    // duracion de la transicion inicial  [s]
+static const Eigen::Vector4d Y_START {0.0, 0.0, 0.0, 0.0};  // COMPLETAR 1b  [x, y, z, phi]
+
+// ── Estructura de referencia cartesiana ─────────────────────────────────────
+struct CartRef {
+  Eigen::Vector4d y;      // posicion deseada    [x, y, z, phi]
+  Eigen::Vector4d ydot;   // velocidad deseada   (1ra derivada analitica)
+  Eigen::Vector4d yddot;  // aceleracion deseada (2da derivada analitica)
+};
+// ═══════════════════════════════════════════════════════════════════════════
 static CartRef circularTrajectory(double tp)
 {
   CartRef ref;
 
   // -------------------------------------------------------------------
-  // TODO: implementar aqui
+  // COMPLETAR: implementar aqui
   // -------------------------------------------------------------------
 
   (void)tp;  // suprimir advertencia de compilador hasta que tp sea usado
@@ -144,9 +114,7 @@ static CartRef circularTrajectory(double tp)
 
   return ref;
 }
-
 // ═══════════════════════════════════════════════════════════════════════════
-
 
 // ── Transicion suave con polinomio de 5to orden ─────────────────────────────
 // Genera referencias continuas de y0 → y_goal en el intervalo [0, T] segundos.
@@ -175,7 +143,34 @@ static CartRef transitionTrajectory(double t,
   ref.yddot =      sdd * delta;
   return ref;
 }
+// ═══════════════════════════════════════════════════════════════════════════
 
+// ═══════════════════════════════════════════════════════════════════════════
+//  SECCION 2 — GANANCIAS Y PARAMETROS DEL CONTROLADOR
+//
+//  COMPLETAR 1a: Asignar las ganancias cartesianas Kp y Kd.
+//    Indice:  [x, y, z, phi]
+//    Referencia de disenio:
+//      - Sistema de 2do orden desacoplado: wn = sqrt(Kp),  zeta = Kd/(2*wn)
+//      - Para amortiguamiento critico:     Kd = 2*sqrt(Kp)
+//      - La frecuencia natural debe ser >> frecuencia de la trayectoria
+//
+//  COMPLETAR 1b: Definir Y_START — punto inicial de la trayectoria circular.
+//    Debe coincidir con ref.y en t'=0 (i.e., circularTrajectory(0)).
+//    El robot parte de su pose Gazebo y transiciona hacia Y_START en T_TRANS s.
+//
+//  Parametros configurables (ajustar si es necesario):
+//    TAU_MAX — saturacion de torque por articulacion [N·m]  
+//    LAMBDA  — factor de amortiguamiento DLS (rango tipico: 0.01 – 0.05)
+// ═══════════════════════════════════════════════════════════════════════════
+
+static const Eigen::Vector4d KP = {0.0, 0.0, 0.0, 0.0};   // COMPLETAR 1a  [x, y, z, phi]
+static const Eigen::Vector4d KD = {0.0, 0.0, 0.0, 0.0};   // COMPLETAR 1a  [x, y, z, phi]
+
+static constexpr double TAU_MAX   = 0.0;   // COMPLETAR limite de torque por articulacion [N·m]
+static constexpr double LAMBDA    = 0.01;   // factor DLS
+static constexpr double LAMBDA_SQ = LAMBDA * LAMBDA;
+// ═══════════════════════════════════════════════════════════════════════════
 
 // ── Nodo de control ──────────────────────────────────────────────────────────
 class IOControlNode : public rclcpp::Node
@@ -363,7 +358,7 @@ private:
     }
 
     // ══════════════════════════════════════════════════════════════════════
-    //  SECCION 3 — LEY DE CONTROL  (TODO: implementar)
+    //  SECCION 3 — LEY DE CONTROL  (COMPLETAR)
     //
     //  Disponible:
     //    y      (4×1)  — salida de tarea actual        [x, y, z, phi]

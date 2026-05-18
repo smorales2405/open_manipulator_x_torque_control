@@ -6,9 +6,9 @@
 //
 //    tau = M(q) * [ ddq_des + Kp*(q_des - q) + Kd*(dq_des - dq) ] + NLE(q,dq)
 //
-//  El alumno debe completar las secciones marcadas con TODO:
-//    SECCION 1 — Ganancias del controlador
-//    SECCION 2 — Trayectoria de referencia articular
+//  El alumno debe completar las secciones marcadas con COMPLETAR:
+//    SECCION 1 — Trayectoria de referencia articular
+//    SECCION 2 — Ganancias del controlador
 //    SECCION 3 — Ley de control
 //
 //  Infraestructura proporcionada (NO modificar):
@@ -58,37 +58,17 @@ using namespace std::chrono_literals;
 static constexpr double PI   = M_PI;
 static constexpr int    NARM = 4;    // articulaciones controladas (joint1..joint4)
 
+
 // ═══════════════════════════════════════════════════════════════════════════
-//  SECCION 1 — GANANCIAS DEL CONTROLADOR
+//  SECCION 1 — TRAYECTORIA DE REFERENCIA ARTICULAR
 //
-//  TODO: Asignar los valores de Kp, Kd y el limite de torque.
-//
-//  Indice de cada elemento:  [joint1, joint2, joint3, joint4]
-//  Referencia de disenio:
-//    - Sistema de 2do orden desacoplado: wn = sqrt(Kp),  zeta = Kd / (2*wn)
-//    - Para amortiguamiento critico:     Kd = 2*sqrt(Kp)
-//    - Torque maximo del motor:          TAU_MAX = 0.82 N·m
-// ═══════════════════════════════════════════════════════════════════════════
-
-static const Eigen::Vector4d KP = {0.0, 0.0, 0.0, 0.0};   // TODO
-static const Eigen::Vector4d KD = {0.0, 0.0, 0.0, 0.0};   // TODO
-static constexpr double TAU_MAX = 0.0;                      // TODO  [N·m]
-
-// ═══════════════════════════════════════════════════════════════════════════
-
-
 // ── Estructura de referencia articular ──────────────────────────────────────
 struct Reference {
   Eigen::Vector4d q;    // posicion deseada     [rad]
   Eigen::Vector4d dq;   // velocidad deseada    [rad/s]
   Eigen::Vector4d ddq;  // aceleracion deseada  [rad/s²]
 };
-
-
-// ═══════════════════════════════════════════════════════════════════════════
-//  SECCION 2 — TRAYECTORIA DE REFERENCIA ARTICULAR
-//
-//  TODO: Definir q_des(t), dq_des(t) y ddq_des(t) para cada articulacion.
+//  COMPLETAR: Definir q_des(t), dq_des(t) y ddq_des(t) para cada articulacion.
 //
 //  Parametro de entrada:
 //    t  — tiempo actual de simulacion [s]
@@ -98,8 +78,6 @@ struct Reference {
 //    ref.dq  << dq1_des(t),  dq2_des(t),  dq3_des(t),  dq4_des(t);
 //    ref.ddq << ddq1_des(t), ddq2_des(t), ddq3_des(t), ddq4_des(t);
 //
-//  Nota: dq_des y ddq_des son las derivadas ANALITICAS de q_des.
-//        No usar diferencias finitas.
 // ═══════════════════════════════════════════════════════════════════════════
 
 static Reference desiredTrajectory(double t)
@@ -107,7 +85,7 @@ static Reference desiredTrajectory(double t)
   Reference ref;
 
   // -------------------------------------------------------------------
-  // TODO: implementar aqui
+  // COMPLETAR: implementar aqui
   // -------------------------------------------------------------------
 
   (void)t;  // suprimir advertencia de compilador hasta que t sea usado
@@ -120,6 +98,22 @@ static Reference desiredTrajectory(double t)
 
 // ═══════════════════════════════════════════════════════════════════════════
 
+// ═══════════════════════════════════════════════════════════════════════════
+//  SECCION 2 — GANANCIAS DEL CONTROLADOR
+//
+//  COMPLETAR: Asignar los valores de Kp, Kd y el limite de torque.
+//
+//  Indice de cada elemento:  [joint1, joint2, joint3, joint4]
+//  Referencia de diseño:
+//    - Sistema de 2do orden desacoplado: wn = sqrt(Kp),  zeta = Kd / (2*wn)
+//    - Para amortiguamiento critico:     Kd = 2*sqrt(Kp)
+// ═══════════════════════════════════════════════════════════════════════════
+
+static const Eigen::Vector4d KP = {0.0, 0.0, 0.0, 0.0};   // COMPLETAR
+static const Eigen::Vector4d KD = {0.0, 0.0, 0.0, 0.0};   // COMPLETAR
+static constexpr double TAU_MAX = 0.0;                      // COMPLETAR  [N·m]
+
+// ═══════════════════════════════════════════════════════════════════════════
 
 // ── Nodo de control ──────────────────────────────────────────────────────────
 class FLControlNode : public rclcpp::Node
@@ -237,7 +231,7 @@ private:
     dq_pin.head<NARM>() = dq;
 
     // ── 3. Matriz de masa  M(q)  [NARM x NARM] ────────────────────────────
-    // crba() llena solo el triangulo superior; se simetriza a continuacion.
+    // crba() llena solo el triangulo superior.
     pinocchio::crba(model_, data_, q_pin);
     data_.M.triangularView<Eigen::StrictlyLower>() =
       data_.M.triangularView<Eigen::StrictlyUpper>().transpose();
@@ -249,7 +243,7 @@ private:
     const Eigen::Vector4d nle = data_.nle.head<NARM>();
 
     // ══════════════════════════════════════════════════════════════════════
-    //  SECCION 3 — LEY DE CONTROL  (TODO: implementar)
+    //  SECCION 3 — LEY DE CONTROL  (COMPLETAR)
     //
     //  Disponible:
     //    q, dq                    — posicion y velocidad articular medidas
