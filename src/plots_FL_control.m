@@ -14,7 +14,7 @@ clear; clc; close all;
 script_dir = fileparts(mfilename('fullpath'));
 data_dir   = fullfile(script_dir, '..', 'data');
 
-test_num = 1;   % <-- Cambiar aqui para seleccionar la prueba
+test_num = 4;   % <-- Cambiar aqui para seleccionar la prueba
 filename = sprintf('fl_data_%d.csv', test_num);
 fprintf('Cargando: %s\n', filename);
 

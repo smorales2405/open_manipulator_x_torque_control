@@ -35,7 +35,7 @@ static constexpr int    NARM = 4;    // controlled joints (joint1..joint4)
 //  GANANCIAS DEL CONTROLADOR  — editar aqui para cada articulacion
 //  Indice:  [joint1, joint2, joint3, joint4]
 // ═══════════════════════════════════════════════════════════════════════════
-static const Eigen::Vector4d KP = {100.0, 100.0, 100.0, 100.0};
+static const Eigen::Vector4d KP = {200.0, 200.0, 200.0, 200.0};
 static const Eigen::Vector4d KD = { 20.0,  20.0,  20.0,  20.0};
 static constexpr double TAU_MAX = 0.82;   // [N·m] limite por articulacion
 // ═══════════════════════════════════════════════════════════════════════════
