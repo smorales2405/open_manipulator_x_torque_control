@@ -181,9 +181,9 @@ private:
   // ── CSV ───────────────────────────────────────────────────────────────────
   void open_csv(int test_num)
   {
-    std::filesystem::create_directories(PACKAGE_DATA_DIR);
-    csv_path_ = std::string(PACKAGE_DATA_DIR)
-                + "/fl_data_" + std::to_string(test_num) + ".csv";
+    std::filesystem::create_directories(std::string(PACKAGE_DATA_DIR) + "/act1");
+    csv_path_ = std::string(PACKAGE_DATA_DIR) + "/act1/fl_data_"
+                + std::to_string(test_num) + ".csv";
     csv_.open(csv_path_);
     if (!csv_.is_open()) {
       RCLCPP_ERROR(this->get_logger(), "No se pudo crear: %s", csv_path_.c_str());

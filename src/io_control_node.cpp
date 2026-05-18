@@ -23,10 +23,11 @@
 //                      x_des   = 0.20 + 0.05*sin(t')          
 //                      y_des   = 0.05*cos(t')    
 //
-//  Parametro ROS (unico):
-//    t_sim — duracion de la simulacion en segundos (0 = ilimitado)
+//  Parametros ROS:
+//    test_num — identificador del CSV generado (io_data_<test_num>.csv)
+//    t_sim    — duracion de la simulacion en segundos (0 = ilimitado)
 //
-//  CSV generado: fl_xyz_data.csv  en PACKAGE_DATA_DIR
+//  CSV generado: io_data_<test_num>.csv  en PACKAGE_DATA_DIR/act2/
 // ============================================================================
 
 #include <chrono>
@@ -164,7 +165,9 @@ public:
   IOControlNode()
   : Node("io_control_node"), t_(0.0), y0_initialized_(false)
   {
-    // Unico parametro en tiempo de ejecucion
+    this->declare_parameter<int>("test_num", 1);
+    const int test_num = this->get_parameter("test_num").as_int();
+
     this->declare_parameter<double>("t_sim", 0.0);
     t_sim_ = this->get_parameter("t_sim").as_double();
 
@@ -193,7 +196,7 @@ public:
       RCLCPP_INFO(this->get_logger(), "Tiempo de simulacion: %.1f s", t_sim_);
     }
 
-    open_csv();
+    open_csv(test_num);
 
     torque_pub_ = this->create_publisher<std_msgs::msg::Float64MultiArray>(
       "/arm_effort_controller/commands", 10);
@@ -217,10 +220,11 @@ public:
 
 private:
   // ── CSV ───────────────────────────────────────────────────────────────────
-  void open_csv()
+  void open_csv(int test_num)
   {
-    std::filesystem::create_directories(PACKAGE_DATA_DIR);
-    csv_path_ = std::string(PACKAGE_DATA_DIR) + "/fl_xyz_new_data.csv";
+    std::filesystem::create_directories(std::string(PACKAGE_DATA_DIR) + "/act2");
+    csv_path_ = std::string(PACKAGE_DATA_DIR) + "/act2/io_data_"
+                + std::to_string(test_num) + ".csv";
     csv_.open(csv_path_);
     if (!csv_.is_open()) {
       RCLCPP_ERROR(this->get_logger(), "No se pudo crear: %s", csv_path_.c_str());

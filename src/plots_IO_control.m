@@ -6,14 +6,17 @@
 %   Figura 3 — Torques de control tau1..tau4  [N·m]
 %   Figura 4 — Velocidades cartesianas: xdot, ydot, zdot, phidot  vs referencia
 %
-% Carga automaticamente fl_xyz_data.csv desde data/ (junto al script).
+% Carga automaticamente data/act2/io_data_<test_num>.csv (junto al script).
 
 clear; clc; close all;
 
 %% 1. Carga de datos
 script_dir = fileparts(mfilename('fullpath'));
-data_dir   = fullfile(script_dir, '..', 'data');
-filename   = 'fl_xyz_new_data.csv';
+data_dir   = fullfile(script_dir, '..', 'data', 'act2');
+
+test_num = 1;   % <-- Cambiar aqui para seleccionar la prueba
+filename = sprintf('io_data_%d.csv', test_num);
+fprintf('Cargando: %s\n', filename);
 
 filepath = fullfile(data_dir, filename);
 if ~isfile(filepath)
@@ -143,10 +146,8 @@ title(tl4, 'IO Control - Velocidades Cartesianas', ...
 
 %% 7. Exportacion opcional para informe
 
-test_num = 1;
-
 % Carpeta de salida
-output_dir = fullfile('../data/plots/cartesian/', sprintf('test%d', test_num));
+output_dir = fullfile(data_dir, 'plots', sprintf('test%d', test_num));
 
 % Crear carpeta si no existe
 if ~exist(output_dir, 'dir')

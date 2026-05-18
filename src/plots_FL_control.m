@@ -5,14 +5,14 @@
 %   Figura 3 — Torques de control:      tau1..tau4   [N·m]
 %
 % Uso:
-%   - Cambiar test_num para seleccionar la prueba (carga fl_data_<N>.csv).
-%   - El script localiza data/ automaticamente junto a si mismo.
+%   - Cambiar test_num para seleccionar la prueba (carga data/act1/fl_data_<N>.csv).
+%   - El script localiza data/act1/ automaticamente junto a si mismo.
 
 clear; clc; close all;
 
 %% 1. Carga de datos
 script_dir = fileparts(mfilename('fullpath'));
-data_dir   = fullfile(script_dir, '..', 'data');
+data_dir   = fullfile(script_dir, '..', 'data', 'act1');
 
 test_num = 4;   % <-- Cambiar aqui para seleccionar la prueba
 filename = sprintf('fl_data_%d.csv', test_num);
