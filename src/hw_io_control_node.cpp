@@ -18,10 +18,10 @@
  *
  * Parámetros ROS 2 (--ros-args -p nombre:=valor):
  *   port_name       [string]  "/dev/ttyUSB0"
- *   gain_scale      [double]  1.0
- *   deadzone_ticks  [double]  0.0
- *   viscous_comp    [double]  0.0
- *   duration_s      [double]  25.0  (0 = sin límite)
+ *   gain_scale      [double]  10.0
+ *   deadzone_ticks  [double]  30.0
+ *   viscous_comp    [double]  50.0
+ *   duration_s      [double]  20.0  (0 = sin límite)
  *   log_id          [int]     1     (CSV: hw_io_data_<log_id>.csv)
  *
  * Publisher: /hw/joint_states (sensor_msgs/JointState) — monitoreo
@@ -216,10 +216,10 @@ public:
   {
     // ── Parámetros ──────────────────────────────────────────────────────────
     this->declare_parameter<std::string>("port_name",     "/dev/ttyUSB0");
-    this->declare_parameter<double>     ("gain_scale",     1.0);
-    this->declare_parameter<double>     ("deadzone_ticks", 0.0);
-    this->declare_parameter<double>     ("viscous_comp",   0.0);
-    this->declare_parameter<double>     ("duration_s",     25.0);
+    this->declare_parameter<double>     ("gain_scale",     10.0);
+    this->declare_parameter<double>     ("deadzone_ticks", 30.0);
+    this->declare_parameter<double>     ("viscous_comp",   5.0);
+    this->declare_parameter<double>     ("duration_s",     20.0);
     this->declare_parameter<int>        ("log_id",         1);
 
     port_name_      = this->get_parameter("port_name").as_string();

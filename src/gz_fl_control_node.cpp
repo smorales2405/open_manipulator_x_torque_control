@@ -76,7 +76,7 @@ class FLControlNode : public rclcpp::Node
 {
 public:
   FLControlNode()
-  : Node("fl_control_node"), t_(0.0)
+  : Node("gz_fl_control_node"), t_(0.0)
   {
     // Unico parametro en tiempo de ejecucion: numero de prueba
     // Uso: ros2 run ... fl_control_node --ros-args -p test_num:=3

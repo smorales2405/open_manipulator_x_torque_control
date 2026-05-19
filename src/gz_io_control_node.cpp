@@ -163,7 +163,7 @@ class IOControlNode : public rclcpp::Node
 {
 public:
   IOControlNode()
-  : Node("io_control_node"), t_(0.0), y0_initialized_(false)
+  : Node("gz_io_control_node"), t_(0.0), y0_initialized_(false)
   {
     this->declare_parameter<int>("test_num", 1);
     const int test_num = this->get_parameter("test_num").as_int();
