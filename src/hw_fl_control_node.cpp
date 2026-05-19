@@ -192,9 +192,7 @@ class HWFLControlNode : public rclcpp::Node
 public:
   HWFLControlNode()
   : Node("hw_fl_control_node"),
-    hw_active_(false), q_initial_captured_(false),
-    integral_error_(Vec4::Zero()),
-    last_tick_time_(std::chrono::high_resolution_clock::now())
+    hw_active_(false), q_initial_captured_(false)
   {
     // ── Parámetros ──────────────────────────────────────────────────────────
     this->declare_parameter<std::string>("port_name",     "/dev/ttyUSB0");
@@ -418,35 +416,25 @@ private:
 
   Vec4 compute_torque(const Vec4& q, const Vec4& dq, const Reference& ref)
   {
-    Vec4 kp, kd, ki;
+    Vec4 kp, kd;
     kp << 100.0, 100.0, 100.0, 100.0;
     kd <<  20.0,  20.0,  20.0,  20.0;
-    ki <<   0.0,   0.0,   0.0,   0.0;
     kp *= gain_scale_;
     kd *= std::sqrt(std::max(gain_scale_, 0.0));
 
-    const auto now = std::chrono::high_resolution_clock::now();
-    const double dt = std::chrono::duration<double>(now - last_tick_time_).count();
-    last_tick_time_ = now;
-
-    const Vec4 q_err  = q - ref.q;
-    const Vec4 dq_err = dq - ref.dq;
-
-    if (dt > 1e-4 && dt < 0.05) integral_error_ += q_err * dt;
-    for (int i = 0; i < NUM_JOINTS; ++i)
-      integral_error_(i) = std::max(-1.0, std::min(1.0, integral_error_(i)));
-
-    const Vec4 v = ref.ddq - kd.cwiseProduct(dq_err) - kp.cwiseProduct(q_err);
+    const Vec4 eq  = q - ref.q;
+    const Vec4 deq = dq - ref.dq;
+    const Vec4 v   = ref.ddq - kd.cwiseProduct(deq) - kp.cwiseProduct(eq);
 
     Eigen::VectorXd q_pin   = Eigen::VectorXd::Zero(model_.nv);
     Eigen::VectorXd dq_pin  = Eigen::VectorXd::Zero(model_.nv);
     Eigen::VectorXd ddq_pin = Eigen::VectorXd::Zero(model_.nv);
-    q_pin.head(NUM_JOINTS)  = q;
-    dq_pin.head(NUM_JOINTS) = dq;
+    q_pin.head(NUM_JOINTS)   = q;
+    dq_pin.head(NUM_JOINTS)  = dq;
     ddq_pin.head(NUM_JOINTS) = v;
 
     const Eigen::VectorXd tau_full = pinocchio::rnea(model_, data_, q_pin, dq_pin, ddq_pin);
-    return tau_full.head(NUM_JOINTS) - ki.cwiseProduct(integral_error_);
+    return tau_full.head(NUM_JOINTS);
   }
 
   std::array<int16_t, NUM_JOINTS> torque_to_current(const Vec4& tau, const Vec4& dq)
@@ -604,9 +592,7 @@ private:
   bool hw_active_;
   bool q_initial_captured_;
   Vec4 q_initial_;
-  Vec4 integral_error_;
   std::chrono::high_resolution_clock::time_point start_time_;
-  std::chrono::high_resolution_clock::time_point last_tick_time_;
   int log_cnt_{0};
 
   rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr js_pub_;
