@@ -226,8 +226,8 @@ public:
     RCLCPP_INFO(get_logger(), "Pinocchio: nv=%d", model_.nv);
 
     // ── CSV ──────────────────────────────────────────────────────────────────
-    std::filesystem::create_directories(std::string(PACKAGE_DATA_DIR) + "/act1");
-    csv_path_ = std::string(PACKAGE_DATA_DIR) + "/act1/hw_fl_data_"
+    std::filesystem::create_directories(std::string(PACKAGE_DATA_DIR) + "/real/act1");
+    csv_path_ = std::string(PACKAGE_DATA_DIR) + "/real/act1/hw_fl_data_"
                 + std::to_string(log_id) + ".csv";
     csv_.open(csv_path_);
     if (csv_.is_open()) {

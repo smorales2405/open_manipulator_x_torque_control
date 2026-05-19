@@ -23,28 +23,28 @@ target_compile_features(torque_test_node PUBLIC cxx_std_17)
 target_compile_definitions(torque_test_node PRIVATE
   "PACKAGE_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\"")
 
-# ── fl_control_node ──────────────────────────────────────────────────────────
-add_executable(fl_control_node src/fl_control_node.cpp)
-ament_target_dependencies(fl_control_node rclcpp std_msgs sensor_msgs)
-target_link_libraries(fl_control_node
+# ── gz_fl_control_node ───────────────────────────────────────────────────────
+add_executable(gz_fl_control_node src/gz_fl_control_node.cpp)
+ament_target_dependencies(gz_fl_control_node rclcpp std_msgs sensor_msgs)
+target_link_libraries(gz_fl_control_node
   pinocchio::pinocchio_default
   pinocchio::pinocchio_parsers
   Eigen3::Eigen)
-target_compile_features(fl_control_node PUBLIC cxx_std_17)
-target_compile_definitions(fl_control_node PRIVATE
+target_compile_features(gz_fl_control_node PUBLIC cxx_std_17)
+target_compile_definitions(gz_fl_control_node PRIVATE
   "PACKAGE_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\""
   "PACKAGE_URDF_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/urdf\""
   COAL_DISABLE_HPP_FCL_WARNINGS)
 
-# ── io_control_node ──────────────────────────────────────────────────────────
-add_executable(io_control_node src/io_control_node.cpp)
-ament_target_dependencies(io_control_node rclcpp std_msgs sensor_msgs)
-target_link_libraries(io_control_node
+# ── gz_io_control_node ───────────────────────────────────────────────────────
+add_executable(gz_io_control_node src/gz_io_control_node.cpp)
+ament_target_dependencies(gz_io_control_node rclcpp std_msgs sensor_msgs)
+target_link_libraries(gz_io_control_node
   pinocchio::pinocchio_default
   pinocchio::pinocchio_parsers
   Eigen3::Eigen)
-target_compile_features(io_control_node PUBLIC cxx_std_17)
-target_compile_definitions(io_control_node PRIVATE
+target_compile_features(gz_io_control_node PUBLIC cxx_std_17)
+target_compile_definitions(gz_io_control_node PRIVATE
   "PACKAGE_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\""
   "PACKAGE_URDF_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/urdf\""
   COAL_DISABLE_HPP_FCL_WARNINGS)
@@ -81,7 +81,7 @@ target_compile_definitions(hw_io_control_node PRIVATE
 
 # ── Install ──────────────────────────────────────────────────────────────────
 install(TARGETS
-    torque_test_node fl_control_node io_control_node
+    torque_test_node gz_fl_control_node gz_io_control_node
     hw_fl_control_node hw_io_control_node
   DESTINATION lib/${PROJECT_NAME})
 

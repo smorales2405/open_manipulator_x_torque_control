@@ -238,8 +238,8 @@ private:
   // ── CSV ───────────────────────────────────────────────────────────────────
   void open_csv(int test_num)
   {
-    std::filesystem::create_directories(std::string(PACKAGE_DATA_DIR) + "/act2");
-    csv_path_ = std::string(PACKAGE_DATA_DIR) + "/act2/io_data_"
+    std::filesystem::create_directories(std::string(PACKAGE_DATA_DIR) + "/sim/act2");
+    csv_path_ = std::string(PACKAGE_DATA_DIR) + "/sim/act2/gz_io_data_"
                 + std::to_string(test_num) + ".csv";
     csv_.open(csv_path_);
     if (!csv_.is_open()) {
