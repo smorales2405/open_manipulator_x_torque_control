@@ -1,166 +1,140 @@
 %% plots_FL_control.m
-% Grafica las senales del controlador Feedback Linearization:
-%   Figura 1 — Posiciones articulares:  q vs q_des   [rad]
-%   Figura 2 — Velocidades articulares: dq vs dq_des [rad/s]
-%   Figura 3 — Torques de control:      tau1..tau4   [N·m]
+% Graficas para Actividad 1 — Control FL (Feedback Linearization)
+% OpenMANIPULATOR-X, Laboratorio 4
 %
-% Uso:
-%   - Cambiar test_num para seleccionar la prueba (carga data/act1/fl_data_<N>.csv).
-%   - El script localiza data/act1/ automaticamente junto a si mismo.
+%   Figura 1 — Seguimiento de posiciones articulares  q1..q4
+%   Figura 2 — Seguimiento de velocidades articulares dq1..dq4
+%   Figura 3 — Torques de control tau1..tau4
+%
+% Configurar las dos variables de la seccion "Configuracion" y ejecutar.
 
 clear; clc; close all;
 
-%% 1. Carga de datos
-script_dir = fileparts(mfilename('fullpath'));
-data_dir   = fullfile(script_dir, '..', 'data', 'act1');
+%% ── Configuracion ────────────────────────────────────────────────────────────
+mode     = 'sim';   % 'sim'  = simulacion Gazebo
+                    % 'real' = implementacion hardware real
+test_num = 1;       % Numero de log (coincide con log_id del nodo C++)
 
-test_num    = 5;      % <-- Cambiar aqui para seleccionar la prueba
-EXPORT_FIGS = false;  % true = exportar PNG y EPS en data/plots/act1/test<N>/
+% Directorio raiz del paquete ROS 2
+pkg_dir = '/home/utec/open_manx_ws/src/open_manipulator_x_torque_control';
 
-filename = sprintf('fl_data_%d.csv', test_num);
-fprintf('Cargando: %s\n', filename);
+%% ── Rutas dinamicas ──────────────────────────────────────────────────────────
+switch mode
+    case 'sim'
+        csvFile    = fullfile(pkg_dir, 'data', 'sim', 'act1', ...
+                              sprintf('gz_fl_data_%d.csv', test_num));
+        output_dir = fullfile(pkg_dir, 'plots', 'sim', 'act1', ...
+                              sprintf('test%d', test_num));
+        mode_label = 'Simulacion';
+    case 'real'
+        csvFile    = fullfile(pkg_dir, 'data', 'real', 'act1', ...
+                              sprintf('hw_fl_data_%d.csv', test_num));
+        output_dir = fullfile(pkg_dir, 'plots', 'real', 'act1', ...
+                              sprintf('test%d', test_num));
+        mode_label = 'Implementacion';
+    otherwise
+        error('mode debe ser ''sim'' o ''real''.');
+end
 
-T = readtable(fullfile(data_dir, filename));
+%% ── Carga de datos ───────────────────────────────────────────────────────────
+if ~isfile(csvFile)
+    error('Archivo no encontrado:\n  %s\nVerificar mode y test_num.', csvFile);
+end
+T = readtable(csvFile);
+fprintf('[%s] Cargado: %s  (%d muestras)\n', mode_label, csvFile, height(T));
 
 t      = T.t - T.t(1);
+
 q      = [T.q1,      T.q2,      T.q3,      T.q4     ];
-dq     = [T.dq1,     T.dq2,     T.dq3,     T.dq4    ];
 q_des  = [T.q1_des,  T.q2_des,  T.q3_des,  T.q4_des ];
+
+dq     = [T.dq1,     T.dq2,     T.dq3,     T.dq4    ];
 dq_des = [T.dq1_des, T.dq2_des, T.dq3_des, T.dq4_des];
+
 tau    = [T.tau1,    T.tau2,    T.tau3,    T.tau4   ];
 
-%% 2. Estilo
-lw     = 1.6;
-fs     = 11;
-fs_t   = 12;
-c_real = [0.0000 0.4470 0.7410];   % azul    — medicion
-c_ref  = [0.8500 0.3250 0.0980];   % naranja — referencia
-c_tau  = lines(4);
-xlims  = [t(1), t(end)];
-jnames = {'Articulacion 1','Articulacion 2','Articulacion 3','Articulacion 4'};
+%% ── Estilo ───────────────────────────────────────────────────────────────────
+lw         = 1.6;
+fs         = 11;
+fs_title   = 12;
+color_ref  = [0.8500 0.3250 0.0980];   % naranja — referencia
+color_meas = [0.0000 0.4470 0.7410];   % azul    — medicion
+color_tau  = [0.4660 0.6740 0.1880];   % verde   — torque
+jointNames = {'Articulacion 1', 'Articulacion 2', ...
+              'Articulacion 3', 'Articulacion 4'};
+xlims = [t(1), t(end)];
 
-%% 3. Figura 1 — Posiciones articulares (simulación vs referencia)
+%% ── Figura 1 — Posiciones articulares ────────────────────────────────────────
 figure(1); clf;
-set(gcf, 'Color', 'w', 'Position', [100 600 1100 560]);
-
-tl1 = tiledlayout(2, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
-axs1 = gobjects(1,4);
-h_ref = gobjects(1,1);
-h_sim = gobjects(1,1);
+set(gcf, 'Color', 'w', 'Position', [100 100 1100 700]);
 
 for i = 1:4
-    axs1(i) = nexttile(tl1);
-    ax = axs1(i);
-    h1 = plot(t, q_des(:,i), '--', 'Color', c_ref,  'LineWidth', lw); hold on;
-    h2 = plot(t, q(:,i),     '-',  'Color', c_real, 'LineWidth', lw);
-
-    if i == 1
-        h_ref = h1;
-        h_sim = h2;
-    end
-
+    subplot(2,2,i);
+    plot(t, q_des(:,i), '--', 'Color', color_ref,  'LineWidth', lw); hold on;
+    plot(t, q(:,i),     '-',  'Color', color_meas, 'LineWidth', lw);
     xlabel('Tiempo [s]', 'FontSize', fs);
     ylabel(sprintf('$q_%d$ [rad]', i), 'Interpreter', 'latex', 'FontSize', fs);
+    title(['Seguimiento de posicion - ' jointNames{i}], 'FontSize', fs_title);
+    legend({sprintf('$q_{%d,des}$', i), sprintf('$q_{%d,med}$', i)}, ...
+           'Interpreter', 'latex', 'Location', 'best');
     grid on; box on;
-    set(ax, 'FontSize', fs);
+    set(gca, 'FontSize', fs);
     xlim(xlims);
 end
 
-lgd1 = legend(axs1(1), [h_ref h_sim], {'Referencia', 'Simulación'}, ...
-              'Orientation', 'horizontal', 'FontSize', fs, ...
-              'Location', 'northoutside');
-lgd1.Layout.Tile = 'north';
-%title(tl1, 'FL Control - Posiciones Articulares', 'FontSize', 14, 'FontWeight', 'bold');
+sgtitle(sprintf('[%s] Seguimiento de posiciones articulares', mode_label), ...
+        'FontSize', 14, 'FontWeight', 'bold');
 
-%% 4. Figura 2 — Velocidades articulares (simulación vs referencia)
+%% ── Figura 2 — Velocidades articulares ───────────────────────────────────────
 figure(2); clf;
-set(gcf, 'Color', 'w', 'Position', [130 130 1100 560]);
-
-tl2 = tiledlayout(2, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
-axs2 = gobjects(1,4);
-h_ref = gobjects(1,1);
-h_sim = gobjects(1,1);
+set(gcf, 'Color', 'w', 'Position', [120 120 1100 700]);
 
 for i = 1:4
-    axs2(i) = nexttile(tl2);
-    ax = axs2(i);
-    h1 = plot(t, dq_des(:,i), '--', 'Color', c_ref,  'LineWidth', lw); hold on;
-    h2 = plot(t, dq(:,i),     '-',  'Color', c_real, 'LineWidth', lw);
-
-    if i == 1
-        h_ref = h1;
-        h_sim = h2;
-    end
-
+    subplot(2,2,i);
+    plot(t, dq_des(:,i), '--', 'Color', color_ref,  'LineWidth', lw); hold on;
+    plot(t, dq(:,i),     '-',  'Color', color_meas, 'LineWidth', lw);
     xlabel('Tiempo [s]', 'FontSize', fs);
-    ylabel(['$\dot{q}_{' num2str(i) '}$ [rad/s]'], ...
-       'Interpreter', 'latex', 'FontSize', fs);
-    %title(['Seguimiento de velocidad - ' jnames{i}], 'FontSize', fs_t);
-    grid on; box on;
-    set(ax, 'FontSize', fs);
-    xlim(xlims);
-end
-
-lgd2 = legend(axs2(1), [h_ref h_sim], {'Referencia', 'Simulación'}, ...
-              'Orientation', 'horizontal', 'FontSize', fs, ...
-              'Location', 'northoutside');
-lgd2.Layout.Tile = 'north';
-%title(tl2, 'Velocidades articulares — FL Control', 'FontSize', 14, 'FontWeight', 'bold');
-
-%% 5. Figura 3 — Errores de seguimiento articular
-e_q = q - q_des;
-
-figure(3); clf;
-set(gcf, 'Color', 'w', 'Position', [130 130 1100 560]);
-tl3 = tiledlayout(2, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
-axs3 = gobjects(1, 4);
-
-for i = 1:4
-    axs3(i) = nexttile(tl3);
-    plot(t, e_q(:,i), '-', 'Color', c_real, 'LineWidth', lw);
-    yline(0, ':', 'LineWidth', 0.8);
-    xlabel('Tiempo [s]', 'FontSize', fs);
-    ylabel(sprintf('$e_{q_%d}$ [rad]', i), 'Interpreter', 'latex', 'FontSize', fs);
-    grid on; box on;
-    set(gca, 'FontSize', fs);
-    xlim(xlims);
-end
-
-title(tl3, 'FL Control - Errores de Seguimiento Articular', ...
-      'FontSize', 14, 'FontWeight', 'bold');
-
-%% 6. Figura 4 — Torques de control
-figure(4); clf;
-set(gcf, 'Color', 'w', 'Position', [160 -340 1100 500]);
-
-for i = 1:4
-    subplot(2, 2, i);
-    plot(t, tau(:,i), '-', 'Color', c_tau(i,:), 'LineWidth', lw);
-    yline(0, ':', 'LineWidth', 0.8);
-    xlabel('Tiempo [s]', 'FontSize', fs);
-    ylabel(sprintf('$\\tau_%d\\;[\\mathrm{N{\\cdot}m}]$', i), ...
+    ylabel(sprintf('$\\dot{q}_%d$ [rad/s]', i), ...
            'Interpreter', 'latex', 'FontSize', fs);
+    title(['Seguimiento de velocidad - ' jointNames{i}], 'FontSize', fs_title);
+    legend({sprintf('$\\dot{q}_{%d,des}$', i), sprintf('$\\dot{q}_{%d,med}$', i)}, ...
+           'Interpreter', 'latex', 'Location', 'best');
     grid on; box on;
     set(gca, 'FontSize', fs);
     xlim(xlims);
 end
 
-%% 7. Exportacion de figuras
-if EXPORT_FIGS
-    out_dir = fullfile(data_dir, 'plots', sprintf('test%d', test_num));
-    if ~exist(out_dir, 'dir'), mkdir(out_dir); end
+sgtitle(sprintf('[%s] Seguimiento de velocidades articulares', mode_label), ...
+        'FontSize', 14, 'FontWeight', 'bold');
 
-    % PNG (raster, 300 dpi)
-    exportgraphics(figure(1), fullfile(out_dir, 'plot_q.png'),    'Resolution', 300);
-    exportgraphics(figure(2), fullfile(out_dir, 'plot_dq.png'),   'Resolution', 300);
-    exportgraphics(figure(3), fullfile(out_dir, 'plot_eq.png'),   'Resolution', 300);
-    exportgraphics(figure(4), fullfile(out_dir, 'plot_tau.png'),  'Resolution', 300);
+%% ── Figura 3 — Torques de control ────────────────────────────────────────────
+figure(3); clf;
+set(gcf, 'Color', 'w', 'Position', [140 140 1100 700]);
 
-    % EPS (vectorial)
-    exportgraphics(figure(1), fullfile(out_dir, 'plot_q.eps'),    'ContentType', 'vector', 'Resolution', 600);
-    exportgraphics(figure(2), fullfile(out_dir, 'plot_dq.eps'),   'ContentType', 'vector', 'Resolution', 600);
-    exportgraphics(figure(3), fullfile(out_dir, 'plot_eq.eps'),   'ContentType', 'vector', 'Resolution', 600);
-    exportgraphics(figure(4), fullfile(out_dir, 'plot_tau.eps'),  'ContentType', 'vector', 'Resolution', 600);
-
-    fprintf('Figuras exportadas en: %s\n', out_dir);
+for i = 1:4
+    subplot(2,2,i);
+    plot(t, tau(:,i), '-', 'Color', color_tau, 'LineWidth', lw); hold on;
+    yline(0, ':', 'LineWidth', 0.8);
+    xlabel('Tiempo [s]', 'FontSize', fs);
+    ylabel(sprintf('$\\tau_%d\\;[\\mathrm{N\\cdot m}]$', i), ...
+           'Interpreter', 'latex', 'FontSize', fs);
+    title(['Torque de control - ' jointNames{i}], 'FontSize', fs_title);
+    legend({sprintf('$\\tau_%d$', i)}, 'Interpreter', 'latex', 'Location', 'best');
+    grid on; box on;
+    set(gca, 'FontSize', fs);
+    xlim(xlims);
 end
+
+sgtitle(sprintf('[%s] Torques de control calculados', mode_label), ...
+        'FontSize', 14, 'FontWeight', 'bold');
+
+%% ── Exportacion ──────────────────────────────────────────────────────────────
+if ~exist(output_dir, 'dir')
+    mkdir(output_dir);
+end
+
+exportgraphics(figure(1), fullfile(output_dir, 'tracking_plot_q.jpg'),  'Resolution', 300);
+exportgraphics(figure(2), fullfile(output_dir, 'tracking_plot_dq.jpg'), 'Resolution', 300);
+exportgraphics(figure(3), fullfile(output_dir, 'torques_plot.jpg'),     'Resolution', 300);
+
+fprintf('Graficas guardadas en: %s\n', output_dir);
