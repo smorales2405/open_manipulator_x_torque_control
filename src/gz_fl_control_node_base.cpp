@@ -1,6 +1,6 @@
 // ============================================================================
-//  fl_control_node_base.cpp
-//  Plantilla: Controlador Feedback Linearization — OpenMANIPULATOR-X
+//  gz_fl_control_node_base.cpp
+//  Plantilla: Controlador Feedback Linearization — OpenMANIPULATOR-X (simulacion Gazebo)
 //
 //  Ley de control (espacio articular):
 //
@@ -120,7 +120,7 @@ class FLControlNode : public rclcpp::Node
 {
 public:
   FLControlNode()
-  : Node("fl_control_node"), t_(0.0)
+  : Node("gz_fl_control_node"), t_(0.0)
   {
     this->declare_parameter<int>("test_num", 1);
     const int test_num = this->get_parameter("test_num").as_int();
