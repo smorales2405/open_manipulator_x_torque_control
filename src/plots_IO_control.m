@@ -12,10 +12,10 @@
 clear; clc; close all;
 
 %% ── Configuracion ────────────────────────────────────────────────────────────
-mode        = 'sim';   % 'sim'  = simulacion Gazebo
+mode        = 'real';   % 'sim'  = simulacion Gazebo
                        % 'real' = implementacion hardware real
 test_num    = 1;       % Numero de log (coincide con log_id del nodo C++)
-EXPORT_FIGS = true;    % true  = guardar PNG (300 dpi) y EPS vectorial (600 dpi)
+EXPORT_FIGS = false;    % true  = guardar PNG (300 dpi) y EPS vectorial (600 dpi)
                        % false = solo visualizar
 
 % Directorio raiz del paquete ROS 2
@@ -148,8 +148,8 @@ title(tl3, sprintf('[%s] IO Control - Torques de Control', mode_label), ...
 %% ── Figura 4 — Velocidades cartesianas ──────────────────────────────────────
 ylabels_vel = {'$\dot{x}$ [m/s]', '$\dot{y}$ [m/s]', ...
                '$\dot{z}$ [m/s]', '$\dot{\phi}$ [rad/s]'};
-titles_vel  = {'Velocidad \dot{x}', 'Velocidad \dot{y}', ...
-               'Velocidad \dot{z}', 'Velocidad \dot{\phi}'};
+titles_vel  = {'Velocidad $\dot{x}$', 'Velocidad $\dot{y}$', ...
+               'Velocidad $\dot{z}$', 'Velocidad $\dot{\phi}$'};
 
 figure(4); clf;
 set(gcf, 'Color', 'w', 'Position', [190 -920 1100 540]);
@@ -168,7 +168,7 @@ for i = 1:4
     end
     xlabel('Tiempo [s]', 'FontSize', fs);
     ylabel(ylabels_vel{i}, 'Interpreter', 'latex', 'FontSize', fs);
-    title(titles_vel{i}, 'FontSize', fs);
+    title(titles_vel{i}, 'FontSize', fs, 'Interpreter', 'latex');
     grid on; box on;
     set(gca, 'FontSize', fs);
     xlim(xlims);
