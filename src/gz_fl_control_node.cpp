@@ -1,3 +1,30 @@
+// ============================================================================
+//  gz_fl_control_node.cpp
+//  Feedback Linearization / Computed Torque — OpenMANIPULATOR-X (simulacion Gazebo)
+//
+//  Ley de control:
+//    v   = ddq_des - Kd*(dq - dq_des) - Kp*(q - q_des)
+//    tau = M(q)*v + h(q, dq)           <- RNEA (Pinocchio)
+//
+//  Fases de referencia:
+//    [0, T_TRANS)  — transicion suave con polinomio de 5to orden
+//                    desde la posicion inicial medida hasta el inicio de la trayectoria
+//    [T_TRANS, ∞)  — trayectoria sinusoidal articular (w = 1 rad/s):
+//                      q1_des =  (pi/4)*sin(t')
+//                      q2_des = -0.5 + 0.5*sin(t')
+//                      q3_des =  0.3 - 0.5*sin(t')
+//                      q4_des =  pi/4
+//
+//  Suscriptor: /joint_states           (sensor_msgs/JointState)
+//  Publicador: /arm_effort_controller/commands  (std_msgs/Float64MultiArray)
+//
+//  Parametros ROS:
+//    test_num — identificador del CSV generado (gz_fl_data_<test_num>.csv)
+//    t_sim    — duracion de la simulacion en segundos (0 = ilimitado)
+//
+//  CSV generado: gz_fl_data_<test_num>.csv  en PACKAGE_DATA_DIR/sim/act1/
+// ============================================================================
+
 #include <chrono>
 #include <cmath>
 #include <ctime>
@@ -54,7 +81,7 @@ static Reference desiredTrajectory(double t)
     (PI / 4.0) * std::sin(w * t),
     -0.5 + 0.5 * std::sin(w * t),
      0.3 - 0.5 * std::sin(w * t),
-     1.5;
+     (PI/4.0);
 
   ref.dq <<
      (PI / 4.0) * w * std::cos(w * t),
