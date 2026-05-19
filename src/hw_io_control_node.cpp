@@ -1,0 +1,738 @@
+/*
+ * hw_io_control_node.cpp
+ * Input-Output Linearization cartesiana — OpenMANIPULATOR-X hardware real
+ * vía Dynamixel SDK directo, sin ros2_control.
+ *
+ * Salida de tarea:  y = [x, y, z, phi]^T
+ *   (x,y,z) posición cartesiana del efector final (frame end_effector_link).
+ *   phi = q2 + q3 + q4  ángulo de inclinación analítico.
+ *
+ * Ley de control:
+ *   v     = yddot_des + Kp*(y_des - y) + Kd*(ydot_des - ydot)
+ *   qddot = J4^T (J4 J4^T + lambda^2 I)^-1 (v - Jdot*qdot)   [DLS]
+ *   tau   = M(q)*qddot + b(q,qdot)
+ *
+ * Trayectoria:
+ *   Fase [0, T_TRANS):  transición quintica cartesiana y0_capturada → Y_START
+ *   Fase [T_TRANS, ∞):  x=0.17+0.05*sin(t'), y=0.05*cos(t'), z=0.27, phi=0.22 rad
+ *
+ * Parámetros ROS 2 (--ros-args -p nombre:=valor):
+ *   port_name       [string]  "/dev/ttyUSB0"
+ *   gain_scale      [double]  1.0
+ *   deadzone_ticks  [double]  0.0
+ *   viscous_comp    [double]  0.0
+ *   duration_s      [double]  25.0  (0 = sin límite)
+ *   log_id          [int]     1     (CSV: hw_io_data_<log_id>.csv)
+ *
+ * Publisher: /hw/joint_states (sensor_msgs/JointState) — monitoreo
+ *
+ * ADVERTENCIA: No ejecutar junto a hardware.launch.py ni ningún proceso
+ * que acceda a /dev/ttyUSB0 (ros2_control_node, dynamixel_hardware_interface).
+ */
+
+#include <array>
+#include <chrono>
+#include <cmath>
+#include <filesystem>
+#include <fstream>
+#include <iomanip>
+#include <memory>
+#include <stdexcept>
+#include <string>
+
+#include "rclcpp/rclcpp.hpp"
+#include "sensor_msgs/msg/joint_state.hpp"
+
+#include <Eigen/Dense>
+#include <Eigen/LU>
+
+#include <pinocchio/fwd.hpp>
+#include <pinocchio/algorithm/crba.hpp>
+#include <pinocchio/algorithm/rnea.hpp>
+#include <pinocchio/algorithm/kinematics.hpp>
+#include <pinocchio/algorithm/frames.hpp>
+#include <pinocchio/parsers/urdf.hpp>
+
+#include "dynamixel_sdk/dynamixel_sdk.h"
+
+#ifndef PACKAGE_DATA_DIR
+#define PACKAGE_DATA_DIR "."
+#endif
+#ifndef PACKAGE_URDF_DIR
+#define PACKAGE_URDF_DIR "."
+#endif
+
+using namespace std::chrono_literals;
+
+// ============================================================
+// Constantes Dynamixel / conversión de unidades
+// ============================================================
+
+static constexpr double PI = 3.14159265358979323846;
+static constexpr int    NUM_JOINTS = 4;
+
+static const std::array<uint8_t, NUM_JOINTS> DXL_ID = {11, 12, 13, 14};
+static constexpr int    BAUDRATE         = 1000000;
+static constexpr double PROTOCOL_VERSION = 2.0;
+
+static constexpr uint16_t ADDR_OPERATING_MODE   = 11;
+static constexpr uint16_t ADDR_CURRENT_LIMIT    = 38;
+static constexpr uint16_t ADDR_TORQUE_ENABLE    = 64;
+static constexpr uint16_t ADDR_GOAL_CURRENT     = 102;
+static constexpr uint16_t ADDR_PRESENT_CURRENT  = 126;
+static constexpr uint16_t ADDR_PRESENT_VELOCITY = 128;
+static constexpr uint16_t ADDR_PRESENT_POSITION = 132;
+
+static constexpr uint16_t LEN_GOAL_CURRENT     = 2;
+static constexpr uint16_t LEN_PRESENT_CURRENT  = 2;
+static constexpr uint16_t LEN_PRESENT_VELOCITY = 4;
+static constexpr uint16_t LEN_PRESENT_POSITION = 4;
+
+static constexpr uint8_t CURRENT_CONTROL_MODE = 0;
+static constexpr uint8_t TORQUE_ENABLE_VAL    = 1;
+static constexpr uint8_t TORQUE_DISABLE_VAL   = 0;
+
+static constexpr double POS_UNIT_RAD           = 2.0 * PI / 4096.0;
+static constexpr double VEL_UNIT_RAD_S         = 0.229 * 2.0 * PI / 60.0;
+static constexpr double CURRENT_UNIT_A         = 0.00269;
+static constexpr double TORQUE_CONSTANT_NM_A   = 1.666;
+static constexpr double TORQUE_PER_CURRENT_TICK = TORQUE_CONSTANT_NM_A * CURRENT_UNIT_A;
+
+static const std::array<int32_t, NUM_JOINTS> JOINT_ZERO_TICK = {2048, 2048, 2048, 2048};
+static const std::array<double,  NUM_JOINTS> ENCODER_SIGN    = {+1.0, -1.0, -1.0, -1.0};
+static const std::array<double,  NUM_JOINTS> CURRENT_SIGN    = {+1.0, +1.0, +1.0, +1.0};
+
+static const std::array<double, NUM_JOINTS> JOINT_LOWER = {
+  -1.570796, -1.570796, -1.570796, -1.790707812546182
+};
+static const std::array<double, NUM_JOINTS> JOINT_UPPER = {
+  +1.570796, +1.570796, +1.570796, +2.0420352248333655
+};
+
+static constexpr uint16_t CURRENT_LIMIT_REGISTER = 300;
+static constexpr int16_t  CURRENT_CMD_LIMIT_J123 = 190;
+static constexpr int16_t  CURRENT_CMD_LIMIT_J4   = 152;
+static constexpr int16_t  CURRENT_MEASURED_PEAK  = 220;
+
+// ── Parámetros del controlador IO (idénticos a act_2) ─────────────────────
+static const Eigen::Vector4d KP_Y = {200.0, 80.0, 250.0, 250.0};
+static const Eigen::Vector4d KD_Y = {0.0, 0.0, 0.0, 0.0};
+static constexpr double TAU_MAX   = 1.5;
+static constexpr double LAMBDA    = 0.01;
+static constexpr double LAMBDA_SQ = LAMBDA * LAMBDA;
+
+// Punto de inicio de la trayectoria cartesiana [x, y, z, phi] en t'=0
+static const Eigen::Vector4d Y_START{0.17, 0.05, 0.27, 0.22};
+static constexpr double T_TRANS = 3.0;
+
+static constexpr char EFF_FRAME_NAME[] = "end_effector_link";
+
+using Vec4 = Eigen::Matrix<double, NUM_JOINTS, 1>;
+
+// ============================================================
+// Utilidades de conversión (idénticas a act_2)
+// ============================================================
+
+static int32_t toSigned32(uint32_t v)
+{
+  if (v > 0x7FFFFFFFu) return -static_cast<int32_t>(0xFFFFFFFFu - v + 1u);
+  return static_cast<int32_t>(v);
+}
+
+static int16_t toSigned16(uint32_t v)
+{
+  const uint16_t w = static_cast<uint16_t>(v & 0xFFFFu);
+  if (w > 0x7FFFu) return -static_cast<int16_t>(0xFFFFu - w + 1u);
+  return static_cast<int16_t>(w);
+}
+
+static int32_t wrappedTickDiff(int32_t raw, int32_t zero)
+{
+  int32_t d = raw - zero;
+  while (d >  2048) d -= 4096;
+  while (d < -2048) d += 4096;
+  return d;
+}
+
+static void currentToBytes(int16_t cur, uint8_t p[2])
+{
+  const uint16_t w = static_cast<uint16_t>(cur);
+  p[0] = DXL_LOBYTE(w);
+  p[1] = DXL_HIBYTE(w);
+}
+
+static int16_t clampCurrent(double x, int16_t lim)
+{
+  return static_cast<int16_t>(std::lround(
+    std::min(std::max(x, -static_cast<double>(lim)), static_cast<double>(lim))));
+}
+
+// ============================================================
+// Trayectoria cartesiana (idéntica a act_2)
+// ============================================================
+
+struct CartRef {
+  Eigen::Vector4d y, ydot, yddot;
+};
+
+static CartRef cartesianTrajectory(double t)
+{
+  const double w = 1.0;
+  CartRef r;
+  r.y    << 0.17 + 0.05*std::sin(w*t),   0.05*std::cos(w*t),  0.27,  0.22;
+  r.ydot <<  0.05*w*std::cos(w*t),       -0.05*w*std::sin(w*t), 0.0,  0.0;
+  r.yddot<< -0.05*w*w*std::sin(w*t),     -0.05*w*w*std::cos(w*t), 0.0, 0.0;
+  return r;
+}
+
+static CartRef cartesianTransition(double t,
+                                    const Eigen::Vector4d& y0,
+                                    const Eigen::Vector4d& yf,
+                                    double T)
+{
+  const double tau  = std::min(1.0, t / T);
+  const double tau2 = tau*tau, tau3=tau2*tau, tau4=tau3*tau, tau5=tau4*tau;
+  const double s    =  10*tau3 - 15*tau4 +  6*tau5;
+  const double sd   = (30*tau2 - 60*tau3 + 30*tau4) / T;
+  const double sdd  = (60*tau  - 180*tau2 + 120*tau3) / (T*T);
+  const Eigen::Vector4d delta = yf - y0;
+  CartRef r;
+  r.y     = y0 + s   * delta;
+  r.ydot  =      sd  * delta;
+  r.yddot =      sdd * delta;
+  return r;
+}
+
+// ============================================================
+// Nodo ROS 2
+// ============================================================
+
+class HWIOControlNode : public rclcpp::Node
+{
+public:
+  HWIOControlNode()
+  : Node("hw_io_control_node"),
+    hw_active_(false), y0_initialized_(false)
+  {
+    // ── Parámetros ──────────────────────────────────────────────────────────
+    this->declare_parameter<std::string>("port_name",     "/dev/ttyUSB0");
+    this->declare_parameter<double>     ("gain_scale",     1.0);
+    this->declare_parameter<double>     ("deadzone_ticks", 0.0);
+    this->declare_parameter<double>     ("viscous_comp",   0.0);
+    this->declare_parameter<double>     ("duration_s",     25.0);
+    this->declare_parameter<int>        ("log_id",         1);
+
+    port_name_      = this->get_parameter("port_name").as_string();
+    gain_scale_     = this->get_parameter("gain_scale").as_double();
+    deadzone_ticks_ = this->get_parameter("deadzone_ticks").as_double();
+    viscous_comp_   = this->get_parameter("viscous_comp").as_double();
+    duration_s_     = this->get_parameter("duration_s").as_double();
+    const int log_id = this->get_parameter("log_id").as_int();
+
+    RCLCPP_INFO(get_logger(),
+      "puerto=%s  gain=%.2f  dz=%.1f  visc=%.2f  dur=%.1fs  id=%d",
+      port_name_.c_str(), gain_scale_, deadzone_ticks_, viscous_comp_, duration_s_, log_id);
+    RCLCPP_INFO(get_logger(),
+      "Kp_y=[%.1f %.1f %.1f %.1f]  Kd_y=[%.1f %.1f %.1f %.1f]  lambda=%.3f  tau_max=%.2f",
+      KP_Y[0], KP_Y[1], KP_Y[2], KP_Y[3],
+      KD_Y[0], KD_Y[1], KD_Y[2], KD_Y[3],
+      LAMBDA, TAU_MAX);
+
+    // ── Pinocchio ────────────────────────────────────────────────────────────
+    const std::string urdf = std::string(PACKAGE_URDF_DIR) + "/openmani.urdf";
+    try {
+      pinocchio::urdf::buildModel(urdf, model_);
+    } catch (const std::exception& e) {
+      RCLCPP_FATAL(get_logger(), "Pinocchio URDF: %s", e.what());
+      throw;
+    }
+    data_ = pinocchio::Data(model_);
+
+    if (!model_.existFrame(EFF_FRAME_NAME)) {
+      RCLCPP_FATAL(get_logger(), "Frame '%s' no encontrado en URDF", EFF_FRAME_NAME);
+      throw std::runtime_error("Frame not found");
+    }
+    frame_id_ = model_.getFrameId(EFF_FRAME_NAME);
+    RCLCPP_INFO(get_logger(), "Pinocchio: nv=%d  frame='%s' (id=%lu)",
+      model_.nv, EFF_FRAME_NAME, frame_id_);
+
+    // ── CSV ──────────────────────────────────────────────────────────────────
+    std::filesystem::create_directories(std::string(PACKAGE_DATA_DIR) + "/act2");
+    csv_path_ = std::string(PACKAGE_DATA_DIR) + "/act2/hw_io_data_"
+                + std::to_string(log_id) + ".csv";
+    csv_.open(csv_path_);
+    if (csv_.is_open()) {
+      csv_ << "t,q1,q2,q3,q4,"
+              "x,y,z,phi,x_des,y_des,z_des,phi_des,"
+              "xdot,ydot,zdot,phidot,xdot_des,ydot_des,zdot_des,phidot_des,"
+              "tau1,tau2,tau3,tau4,"
+              "curr_cmd1,curr_cmd2,curr_cmd3,curr_cmd4,"
+              "curr_meas1,curr_meas2,curr_meas3,curr_meas4,"
+              "det_J4\n";
+      RCLCPP_INFO(get_logger(), "CSV: %s", csv_path_.c_str());
+    } else {
+      RCLCPP_WARN(get_logger(), "No se pudo crear CSV: %s", csv_path_.c_str());
+    }
+
+    // ── Publisher de monitoreo ────────────────────────────────────────────────
+    js_pub_ = this->create_publisher<sensor_msgs::msg::JointState>("/hw/joint_states", 10);
+
+    // ── SDK ──────────────────────────────────────────────────────────────────
+    if (!init_hardware()) {
+      RCLCPP_FATAL(get_logger(), "Fallo hardware init. Abortando.");
+      throw std::runtime_error("Hardware init failed");
+    }
+
+    // ── Timer 100 Hz ─────────────────────────────────────────────────────────
+    start_time_ = std::chrono::high_resolution_clock::now();
+    timer_ = this->create_wall_timer(10ms, [this]() { tick(); });
+    RCLCPP_INFO(get_logger(), "Control IO activo a 100 Hz. Ctrl+C para detener.");
+  }
+
+  ~HWIOControlNode()
+  {
+    if (timer_) timer_->cancel();
+    shutdown_hardware();
+    if (csv_.is_open()) { csv_.flush(); csv_.close(); }
+    RCLCPP_INFO(get_logger(), "Nodo finalizado.");
+  }
+
+private:
+  // ─────────────────────────────────────────────────────────────────────────
+  //  Hardware
+  // ─────────────────────────────────────────────────────────────────────────
+
+  bool init_hardware()
+  {
+    port_handler_   = dynamixel::PortHandler::getPortHandler(port_name_.c_str());
+    packet_handler_ = dynamixel::PacketHandler::getPacketHandler(PROTOCOL_VERSION);
+
+    if (!port_handler_->openPort()) {
+      RCLCPP_ERROR(get_logger(), "No se pudo abrir %s", port_name_.c_str());
+      return false;
+    }
+    if (!port_handler_->setBaudRate(BAUDRATE)) {
+      RCLCPP_ERROR(get_logger(), "No se pudo configurar baudrate");
+      port_handler_->closePort();
+      return false;
+    }
+
+    for (const auto id : DXL_ID)
+      dxl_write1(id, ADDR_TORQUE_ENABLE, TORQUE_DISABLE_VAL, "pre-disable");
+
+    for (const auto id : DXL_ID) {
+      if (!dxl_write1(id, ADDR_OPERATING_MODE, CURRENT_CONTROL_MODE, "set mode") ||
+          !dxl_write2(id, ADDR_CURRENT_LIMIT, CURRENT_LIMIT_REGISTER, "set limit") ||
+          !dxl_write1(id, ADDR_TORQUE_ENABLE, TORQUE_ENABLE_VAL, "enable torque")) {
+        port_handler_->closePort();
+        return false;
+      }
+      RCLCPP_INFO(get_logger(), "DXL ID %d listo", static_cast<int>(id));
+    }
+
+    grp_pos_  = std::make_unique<dynamixel::GroupSyncRead>(
+      port_handler_, packet_handler_, ADDR_PRESENT_POSITION, LEN_PRESENT_POSITION);
+    grp_vel_  = std::make_unique<dynamixel::GroupSyncRead>(
+      port_handler_, packet_handler_, ADDR_PRESENT_VELOCITY, LEN_PRESENT_VELOCITY);
+    grp_cur_  = std::make_unique<dynamixel::GroupSyncRead>(
+      port_handler_, packet_handler_, ADDR_PRESENT_CURRENT,  LEN_PRESENT_CURRENT);
+    grp_wcur_ = std::make_unique<dynamixel::GroupSyncWrite>(
+      port_handler_, packet_handler_, ADDR_GOAL_CURRENT, LEN_GOAL_CURRENT);
+
+    for (const auto id : DXL_ID) {
+      grp_pos_->addParam(id);
+      grp_vel_->addParam(id);
+      grp_cur_->addParam(id);
+    }
+
+    hw_active_ = true;
+    RCLCPP_INFO(get_logger(), "Hardware inicializado en %s", port_name_.c_str());
+    return true;
+  }
+
+  void shutdown_hardware()
+  {
+    if (!hw_active_) return;
+    hw_active_ = false;
+
+    if (grp_wcur_) {
+      const std::array<int16_t, NUM_JOINTS> zero = {0, 0, 0, 0};
+      send_currents(zero);
+      rclcpp::sleep_for(std::chrono::milliseconds(20));
+    }
+    for (const auto id : DXL_ID)
+      dxl_write1(id, ADDR_TORQUE_ENABLE, TORQUE_DISABLE_VAL, "shutdown disable");
+
+    if (port_handler_) {
+      port_handler_->closePort();
+      RCLCPP_INFO(get_logger(), "Puerto cerrado.");
+    }
+  }
+
+  bool dxl_write1(uint8_t id, uint16_t addr, uint8_t val, const char* lbl)
+  {
+    uint8_t err = 0;
+    const int r = packet_handler_->write1ByteTxRx(port_handler_, id, addr, val, &err);
+    if (r != COMM_SUCCESS || err != 0) {
+      RCLCPP_WARN(get_logger(), "[ID %d] %s: r=%d err=%d", id, lbl, r, err);
+      return false;
+    }
+    return true;
+  }
+
+  bool dxl_write2(uint8_t id, uint16_t addr, uint16_t val, const char* lbl)
+  {
+    uint8_t err = 0;
+    const int r = packet_handler_->write2ByteTxRx(port_handler_, id, addr, val, &err);
+    if (r != COMM_SUCCESS || err != 0) {
+      RCLCPP_WARN(get_logger(), "[ID %d] %s: r=%d err=%d", id, lbl, r, err);
+      return false;
+    }
+    return true;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  //  Lectura / escritura SDK
+  // ─────────────────────────────────────────────────────────────────────────
+
+  bool read_state(Vec4& q, Vec4& dq, std::array<int16_t, NUM_JOINTS>& cur)
+  {
+    if (grp_pos_->txRxPacket() != COMM_SUCCESS ||
+        grp_vel_->txRxPacket() != COMM_SUCCESS ||
+        grp_cur_->txRxPacket() != COMM_SUCCESS) {
+      RCLCPP_ERROR(get_logger(), "SyncRead fallo");
+      return false;
+    }
+    for (int i = 0; i < NUM_JOINTS; ++i) {
+      const uint8_t id = DXL_ID[i];
+      if (!grp_pos_->isAvailable(id, ADDR_PRESENT_POSITION, LEN_PRESENT_POSITION) ||
+          !grp_vel_->isAvailable(id, ADDR_PRESENT_VELOCITY, LEN_PRESENT_VELOCITY) ||
+          !grp_cur_->isAvailable(id, ADDR_PRESENT_CURRENT,  LEN_PRESENT_CURRENT)) {
+        RCLCPP_ERROR(get_logger(), "[ID %d] dato no disponible", id);
+        return false;
+      }
+      const int32_t rp = toSigned32(static_cast<uint32_t>(
+        grp_pos_->getData(id, ADDR_PRESENT_POSITION, LEN_PRESENT_POSITION)));
+      const int32_t rv = toSigned32(static_cast<uint32_t>(
+        grp_vel_->getData(id, ADDR_PRESENT_VELOCITY, LEN_PRESENT_VELOCITY)));
+      const int16_t rc = toSigned16(static_cast<uint32_t>(
+        grp_cur_->getData(id, ADDR_PRESENT_CURRENT,  LEN_PRESENT_CURRENT)));
+
+      q(i)   = ENCODER_SIGN[i] * static_cast<double>(wrappedTickDiff(rp, JOINT_ZERO_TICK[i])) * POS_UNIT_RAD;
+      dq(i)  = ENCODER_SIGN[i] * static_cast<double>(rv) * VEL_UNIT_RAD_S;
+      cur[i] = rc;
+    }
+    return true;
+  }
+
+  bool send_currents(const std::array<int16_t, NUM_JOINTS>& cmd)
+  {
+    uint8_t p[NUM_JOINTS][2];
+    for (int i = 0; i < NUM_JOINTS; ++i) {
+      currentToBytes(cmd[i], p[i]);
+      grp_wcur_->addParam(DXL_ID[i], p[i]);
+    }
+    const int r = grp_wcur_->txPacket();
+    grp_wcur_->clearParam();
+    if (r != COMM_SUCCESS) {
+      RCLCPP_ERROR(get_logger(), "SyncWrite fallo");
+      return false;
+    }
+    return true;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  //  Conversión torque → corriente (idéntica a act_2)
+  // ─────────────────────────────────────────────────────────────────────────
+
+  std::array<int16_t, NUM_JOINTS> torque_to_current(const Vec4& tau, const Vec4& dq)
+  {
+    static const std::array<double,  NUM_JOINTS> dz_gain  = {0.8, 0.9, 0.9, 1.0};
+    static const std::array<int16_t, NUM_JOINTS> cur_lim  = {
+      CURRENT_CMD_LIMIT_J123, CURRENT_CMD_LIMIT_J123, CURRENT_CMD_LIMIT_J123, CURRENT_CMD_LIMIT_J4
+    };
+    std::array<int16_t, NUM_JOINTS> cmd{};
+    for (int i = 0; i < NUM_JOINTS; ++i) {
+      double c = CURRENT_SIGN[i] * ENCODER_SIGN[i] * tau(i) / TORQUE_PER_CURRENT_TICK;
+      c += CURRENT_SIGN[i] * ENCODER_SIGN[i] * viscous_comp_ * dq(i);
+      if (deadzone_ticks_ > 0.0)
+        c += dz_gain[i] * deadzone_ticks_ * std::tanh(30.0 * c * CURRENT_UNIT_A);
+      cmd[i] = clampCurrent(c, cur_lim[i]);
+    }
+    return cmd;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  //  Ley de control IO (idéntica a act_2)
+  // ─────────────────────────────────────────────────────────────────────────
+
+  struct IOOut {
+    Vec4            tau;
+    Eigen::Vector4d y_actual, ydot_actual, ydot_des;
+    double          det_J4;
+  };
+
+  IOOut compute_io_control(const Vec4& q, const Vec4& dq, const CartRef& ref)
+  {
+    Eigen::VectorXd q_pin  = Eigen::VectorXd::Zero(model_.nv);
+    Eigen::VectorXd dq_pin = Eigen::VectorXd::Zero(model_.nv);
+    q_pin.head(NUM_JOINTS)  = q;
+    dq_pin.head(NUM_JOINTS) = dq;
+
+    // FK + Jacobiano 6×nv
+    Eigen::MatrixXd J6 = Eigen::MatrixXd::Zero(6, model_.nv);
+    pinocchio::computeFrameJacobian(model_, data_, q_pin, frame_id_,
+                                     pinocchio::LOCAL_WORLD_ALIGNED, J6);
+
+    const Eigen::Vector3d p   = data_.oMf[frame_id_].translation();
+    const double phi          = q[1] + q[2] + q[3];
+
+    // Jacobiano de tarea 4×4
+    Eigen::Matrix4d J4;
+    J4.row(0) = J6.row(0).head<NUM_JOINTS>();
+    J4.row(1) = J6.row(1).head<NUM_JOINTS>();
+    J4.row(2) = J6.row(2).head<NUM_JOINTS>();
+    J4.row(3) << 0.0, 1.0, 1.0, 1.0;
+
+    const Eigen::Vector4d ydot = J4 * dq;
+
+    // Término de bias  Jdot*qdot  (FK con qddot=0)
+    pinocchio::forwardKinematics(model_, data_, q_pin, dq_pin,
+                                  Eigen::VectorXd::Zero(model_.nv));
+    const pinocchio::Motion bias =
+      pinocchio::getFrameClassicalAcceleration(model_, data_, frame_id_,
+                                                pinocchio::LOCAL_WORLD_ALIGNED);
+    Eigen::Vector4d jdqd;
+    jdqd << bias.linear()[0], bias.linear()[1], bias.linear()[2], 0.0;
+
+    // Dinámica M(q) y b(q,qdot)
+    pinocchio::crba(model_, data_, q_pin);
+    data_.M.triangularView<Eigen::StrictlyLower>() =
+      data_.M.triangularView<Eigen::StrictlyUpper>().transpose();
+    pinocchio::nonLinearEffects(model_, data_, q_pin, dq_pin);
+
+    const Eigen::Matrix4d M4   = data_.M.topLeftCorner<NUM_JOINTS, NUM_JOINTS>();
+    const Eigen::Vector4d nle4 = data_.nle.head<NUM_JOINTS>();
+
+    // Errores
+    const Eigen::Vector4d y_actual{p[0], p[1], p[2], phi};
+    const Eigen::Vector4d ey    = ref.y    - y_actual;
+    const Eigen::Vector4d eydot = ref.ydot - ydot;
+
+    const Eigen::Vector4d kp_y = KP_Y * gain_scale_;
+    const Eigen::Vector4d kd_y = KD_Y * std::sqrt(std::max(gain_scale_, 0.0));
+
+    // Entrada auxiliar
+    const Eigen::Vector4d v = ref.yddot + kp_y.asDiagonal()*ey + kd_y.asDiagonal()*eydot;
+
+    // Pseudo-inversa DLS
+    const Eigen::Matrix4d A = J4*J4.transpose() + LAMBDA_SQ*Eigen::Matrix4d::Identity();
+    const Eigen::Vector4d qddot = J4.transpose() * A.ldlt().solve(v - jdqd);
+
+    // Torque con saturación
+    const Eigen::Vector4d tau_unsat = M4*qddot + nle4;
+    const Eigen::Vector4d tau_sat   = tau_unsat.cwiseMin(TAU_MAX).cwiseMax(-TAU_MAX);
+
+    IOOut out;
+    out.tau        = tau_sat;
+    out.y_actual   = y_actual;
+    out.ydot_actual = ydot;
+    out.ydot_des   = ref.ydot;
+    out.det_J4     = J4.determinant();
+    return out;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  //  Parada de emergencia
+  // ─────────────────────────────────────────────────────────────────────────
+
+  void emergency_stop(const std::string& reason)
+  {
+    RCLCPP_ERROR(get_logger(), "PARADA: %s", reason.c_str());
+    timer_->cancel();
+    shutdown_hardware();
+    if (csv_.is_open()) { csv_.flush(); csv_.close(); }
+    rclcpp::shutdown();
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  //  Callback del timer (100 Hz)
+  // ─────────────────────────────────────────────────────────────────────────
+
+  void tick()
+  {
+    if (!hw_active_) return;
+
+    const auto tp  = std::chrono::high_resolution_clock::now();
+    const double t = std::chrono::duration<double>(tp - start_time_).count();
+
+    if (duration_s_ > 0.0 && t >= duration_s_) {
+      RCLCPP_INFO(get_logger(), "Duración completada (%.1f s).", duration_s_);
+      timer_->cancel();
+      shutdown_hardware();
+      if (csv_.is_open()) { csv_.flush(); csv_.close(); }
+      rclcpp::shutdown();
+      return;
+    }
+
+    // 1. Lectura de estado
+    Vec4 q, dq;
+    std::array<int16_t, NUM_JOINTS> cur_meas{};
+    if (!read_state(q, dq, cur_meas)) {
+      emergency_stop("SyncRead fallido");
+      return;
+    }
+
+    Eigen::VectorXd q_pin  = Eigen::VectorXd::Zero(model_.nv);
+    Eigen::VectorXd dq_pin = Eigen::VectorXd::Zero(model_.nv);
+    q_pin.head(NUM_JOINTS)  = q;
+    dq_pin.head(NUM_JOINTS) = dq;
+
+    // 2. Capturar pose cartesiana inicial (primer tick)
+    if (!y0_initialized_) {
+      pinocchio::forwardKinematics(model_, data_, q_pin);
+      pinocchio::updateFramePlacement(model_, data_, frame_id_);
+      const Eigen::Vector3d p0 = data_.oMf[frame_id_].translation();
+      const double phi0        = q[1] + q[2] + q[3];
+      y0_ = Eigen::Vector4d{p0[0], p0[1], p0[2], phi0};
+      y0_initialized_ = true;
+      RCLCPP_INFO(get_logger(),
+        "y_inicial=[%.3f %.3f %.3f %.3f]  Y_START=[%.3f %.3f %.3f %.3f]",
+        y0_[0], y0_[1], y0_[2], y0_[3],
+        Y_START[0], Y_START[1], Y_START[2], Y_START[3]);
+    }
+
+    // 3. Verificar límites articulares del estado real
+    for (int i = 0; i < NUM_JOINTS; ++i) {
+      if (q(i) < JOINT_LOWER[i] || q(i) > JOINT_UPPER[i]) {
+        emergency_stop("Articulacion " + std::to_string(i+1) + " fuera de limites: "
+                       + std::to_string(q(i)) + " rad");
+        return;
+      }
+    }
+
+    // 4. Referencia cartesiana
+    const CartRef ref = (t < T_TRANS)
+      ? cartesianTransition(t, y0_, Y_START, T_TRANS)
+      : cartesianTrajectory(t - T_TRANS);
+
+    // 5. Ley de control IO
+    const IOOut ctrl = compute_io_control(q, dq, ref);
+
+    // 6. Conversión torque → corriente
+    const auto cur_cmd = torque_to_current(ctrl.tau, dq);
+
+    // 7. Escribir corriente
+    if (!send_currents(cur_cmd)) {
+      emergency_stop("SyncWrite fallido");
+      return;
+    }
+
+    // 8. Verificar corriente medida
+    for (int i = 0; i < NUM_JOINTS; ++i) {
+      if (std::abs(cur_meas[i]) > CURRENT_MEASURED_PEAK) {
+        emergency_stop("Corriente insegura J" + std::to_string(i+1)
+                       + ": " + std::to_string(cur_meas[i]) + " ticks");
+        return;
+      }
+    }
+
+    // 9. Publicar JointState de monitoreo
+    {
+      sensor_msgs::msg::JointState js;
+      js.header.stamp = this->now();
+      js.name         = {"joint1", "joint2", "joint3", "joint4"};
+      js.position     = {q(0), q(1), q(2), q(3)};
+      js.velocity     = {dq(0), dq(1), dq(2), dq(3)};
+      js.effort = {
+        static_cast<double>(cur_meas[0]) * TORQUE_PER_CURRENT_TICK,
+        static_cast<double>(cur_meas[1]) * TORQUE_PER_CURRENT_TICK,
+        static_cast<double>(cur_meas[2]) * TORQUE_PER_CURRENT_TICK,
+        static_cast<double>(cur_meas[3]) * TORQUE_PER_CURRENT_TICK
+      };
+      js_pub_->publish(js);
+    }
+
+    // 10. CSV
+    if (csv_.is_open()) {
+      const char* phase = (t < T_TRANS) ? "TRANS" : "TRAJ";
+      (void)phase;
+      csv_ << std::fixed << std::setprecision(6)
+           << t
+           << ',' << q(0) << ',' << q(1) << ',' << q(2) << ',' << q(3)
+           << ',' << ctrl.y_actual[0] << ',' << ctrl.y_actual[1]
+           << ',' << ctrl.y_actual[2] << ',' << ctrl.y_actual[3]
+           << ',' << ref.y[0] << ',' << ref.y[1] << ',' << ref.y[2] << ',' << ref.y[3]
+           << ',' << ctrl.ydot_actual[0] << ',' << ctrl.ydot_actual[1]
+           << ',' << ctrl.ydot_actual[2] << ',' << ctrl.ydot_actual[3]
+           << ',' << ctrl.ydot_des[0] << ',' << ctrl.ydot_des[1]
+           << ',' << ctrl.ydot_des[2] << ',' << ctrl.ydot_des[3]
+           << ',' << ctrl.tau[0] << ',' << ctrl.tau[1]
+           << ',' << ctrl.tau[2] << ',' << ctrl.tau[3]
+           << ',' << cur_cmd[0] << ',' << cur_cmd[1]
+           << ',' << cur_cmd[2] << ',' << cur_cmd[3]
+           << ',' << cur_meas[0] << ',' << cur_meas[1]
+           << ',' << cur_meas[2] << ',' << cur_meas[3]
+           << ',' << ctrl.det_J4
+           << '\n';
+    }
+
+    // 11. Log periódico
+    if (++log_cnt_ % 100 == 0) {
+      if (csv_.is_open()) csv_.flush();
+      const char* phase = (t < T_TRANS) ? "TRANS" : "TRAJ ";
+      RCLCPP_INFO(get_logger(),
+        "[%s] t=%.2fs  y=[%.3f %.3f %.3f %.3f]  |ey|=%.4f  detJ=%.4f",
+        phase, t,
+        ctrl.y_actual[0], ctrl.y_actual[1], ctrl.y_actual[2], ctrl.y_actual[3],
+        (ref.y - ctrl.y_actual).norm(), ctrl.det_J4);
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  //  Miembros
+  // ─────────────────────────────────────────────────────────────────────────
+
+  pinocchio::Model      model_;
+  pinocchio::Data       data_;
+  pinocchio::FrameIndex frame_id_;
+
+  std::string port_name_;
+  double gain_scale_, deadzone_ticks_, viscous_comp_, duration_s_;
+
+  dynamixel::PortHandler*   port_handler_{nullptr};
+  dynamixel::PacketHandler* packet_handler_{nullptr};
+  std::unique_ptr<dynamixel::GroupSyncRead>  grp_pos_, grp_vel_, grp_cur_;
+  std::unique_ptr<dynamixel::GroupSyncWrite> grp_wcur_;
+
+  bool hw_active_;
+  bool y0_initialized_;
+  Eigen::Vector4d y0_;
+
+  std::chrono::high_resolution_clock::time_point start_time_;
+  int log_cnt_{0};
+
+  rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr js_pub_;
+  rclcpp::TimerBase::SharedPtr timer_;
+
+  std::ofstream csv_;
+  std::string   csv_path_;
+};
+
+// ============================================================
+// main
+// ============================================================
+
+int main(int argc, char* argv[])
+{
+  rclcpp::init(argc, argv);
+  try {
+    rclcpp::spin(std::make_shared<HWIOControlNode>());
+  } catch (const std::exception& e) {
+    RCLCPP_FATAL(rclcpp::get_logger("hw_io_control_node"), "Excepcion: %s", e.what());
+    rclcpp::shutdown();
+    return 1;
+  }
+  rclcpp::shutdown();
+  return 0;
+}

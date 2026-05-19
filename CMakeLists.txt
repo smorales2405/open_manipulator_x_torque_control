@@ -14,6 +14,7 @@ find_package(std_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(Eigen3 REQUIRED NO_MODULE)
 find_package(pinocchio REQUIRED)
+find_package(dynamixel_sdk REQUIRED)
 
 # ── torque_test_node ─────────────────────────────────────────────────────────
 add_executable(torque_test_node src/torque_test_node.cpp)
@@ -48,8 +49,40 @@ target_compile_definitions(io_control_node PRIVATE
   "PACKAGE_URDF_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/urdf\""
   COAL_DISABLE_HPP_FCL_WARNINGS)
 
+# ── hw_fl_control_node ───────────────────────────────────────────────────────
+add_executable(hw_fl_control_node src/hw_fl_control_node.cpp)
+ament_target_dependencies(hw_fl_control_node rclcpp sensor_msgs)
+target_include_directories(hw_fl_control_node PRIVATE ${dynamixel_sdk_INCLUDE_DIRS})
+target_link_libraries(hw_fl_control_node
+  ${dynamixel_sdk_LIBRARIES}
+  pinocchio::pinocchio_default
+  pinocchio::pinocchio_parsers
+  Eigen3::Eigen)
+target_compile_features(hw_fl_control_node PUBLIC cxx_std_17)
+target_compile_definitions(hw_fl_control_node PRIVATE
+  "PACKAGE_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\""
+  "PACKAGE_URDF_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/urdf\""
+  COAL_DISABLE_HPP_FCL_WARNINGS)
+
+# ── hw_io_control_node ───────────────────────────────────────────────────────
+add_executable(hw_io_control_node src/hw_io_control_node.cpp)
+ament_target_dependencies(hw_io_control_node rclcpp sensor_msgs)
+target_include_directories(hw_io_control_node PRIVATE ${dynamixel_sdk_INCLUDE_DIRS})
+target_link_libraries(hw_io_control_node
+  ${dynamixel_sdk_LIBRARIES}
+  pinocchio::pinocchio_default
+  pinocchio::pinocchio_parsers
+  Eigen3::Eigen)
+target_compile_features(hw_io_control_node PUBLIC cxx_std_17)
+target_compile_definitions(hw_io_control_node PRIVATE
+  "PACKAGE_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\""
+  "PACKAGE_URDF_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/urdf\""
+  COAL_DISABLE_HPP_FCL_WARNINGS)
+
 # ── Install ──────────────────────────────────────────────────────────────────
-install(TARGETS torque_test_node fl_control_node io_control_node
+install(TARGETS
+    torque_test_node fl_control_node io_control_node
+    hw_fl_control_node hw_io_control_node
   DESTINATION lib/${PROJECT_NAME})
 
 install(DIRECTORY xacro config launch scripts data urdf meshes worlds

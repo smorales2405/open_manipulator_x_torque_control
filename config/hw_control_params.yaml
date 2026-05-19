@@ -1,0 +1,49 @@
+# Parámetros para los nodos de control de hardware real
+# OpenMANIPULATOR-X — Dynamixel SDK directo, sin ros2_control
+#
+# ADVERTENCIA: No usar estos nodos junto con hardware.launch.py
+# ni cualquier proceso que abra /dev/ttyUSB0.
+#
+# Uso rápido (sobreescribir desde CLI):
+#   ros2 launch ... torque_hw_act1.launch.py gain_scale:=0.5 log_id:=3
+# -------------------------------------------------------------------
+
+hw_fl_control_node:
+  ros__parameters:
+    # Puerto serie del U2D2 (verificar con: ls /dev/ttyUSB*)
+    port_name: "/dev/ttyUSB0"
+
+    # Escala de ganancias Kp y Kd  (1.0 = base, Kp=100, Kd=20 por articulación)
+    # Empezar con 0.3 para la primera prueba; subir gradualmente.
+    gain_scale: 1.0
+
+    # Compensación de zona muerta [ticks de corriente]  (0 = deshabilitado)
+    deadzone_ticks: 0.0
+
+    # Compensación viscosa [adimensional, corriente/rad·s]  (0 = deshabilitado)
+    viscous_comp: 0.0
+
+    # Duración del experimento [s]  (0 = sin límite, detener con Ctrl+C)
+    duration_s: 25.0
+
+    # Identificador del CSV de salida  (data/act1/hw_fl_data_<log_id>.csv)
+    log_id: 1
+
+# -------------------------------------------------------------------
+
+hw_io_control_node:
+  ros__parameters:
+    port_name: "/dev/ttyUSB0"
+
+    # Escala de ganancias cartesianas Kp_y  (1.0 = base, ver código)
+    # Empezar con 0.3; subir gradualmente.
+    gain_scale: 1.0
+
+    deadzone_ticks: 0.0
+    viscous_comp: 0.0
+
+    # Duración [s]  (debe ser > T_TRANS = 3.0 s)
+    duration_s: 25.0
+
+    # Identificador del CSV de salida  (data/act2/hw_io_data_<log_id>.csv)
+    log_id: 1
