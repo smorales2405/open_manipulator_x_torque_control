@@ -12,9 +12,11 @@
 clear; clc; close all;
 
 %% ── Configuracion ────────────────────────────────────────────────────────────
-mode     = 'sim';   % 'sim'  = simulacion Gazebo
-                    % 'real' = implementacion hardware real
-test_num = 1;       % Numero de log (coincide con log_id del nodo C++)
+mode        = 'sim';   % 'sim'  = simulacion Gazebo
+                       % 'real' = implementacion hardware real
+test_num    = 1;       % Numero de log (coincide con log_id del nodo C++)
+EXPORT_FIGS = true;    % true  = guardar PNG (300 dpi) y EPS vectorial (600 dpi)
+                       % false = solo visualizar
 
 % Directorio raiz del paquete ROS 2
 pkg_dir = '/home/utec/open_manx_ws/src/open_manipulator_x_torque_control';
@@ -180,13 +182,22 @@ title(tl4, sprintf('[%s] IO Control - Seguimiento de Velocidades Cartesianas', m
       'FontSize', fs_ttl, 'FontWeight', 'bold');
 
 %% ── Exportacion ──────────────────────────────────────────────────────────────
-if ~exist(output_dir, 'dir')
-    mkdir(output_dir);
+if EXPORT_FIGS
+    if ~exist(output_dir, 'dir')
+        mkdir(output_dir);
+    end
+
+    % PNG (raster, 300 dpi)
+    exportgraphics(figure(1), fullfile(output_dir, 'plot_q.png'),                   'Resolution', 300);
+    exportgraphics(figure(2), fullfile(output_dir, 'plot_tracking_cartesian.png'),  'Resolution', 300);
+    exportgraphics(figure(3), fullfile(output_dir, 'torques_plot.png'),             'Resolution', 300);
+    exportgraphics(figure(4), fullfile(output_dir, 'plot_tracking_velocity.png'),   'Resolution', 300);
+
+    % EPS (vectorial, 600 dpi)
+    exportgraphics(figure(1), fullfile(output_dir, 'plot_q.eps'),                   'ContentType', 'vector', 'Resolution', 600);
+    exportgraphics(figure(2), fullfile(output_dir, 'plot_tracking_cartesian.eps'),  'ContentType', 'vector', 'Resolution', 600);
+    exportgraphics(figure(3), fullfile(output_dir, 'torques_plot.eps'),             'ContentType', 'vector', 'Resolution', 600);
+    exportgraphics(figure(4), fullfile(output_dir, 'plot_tracking_velocity.eps'),   'ContentType', 'vector', 'Resolution', 600);
+
+    fprintf('Graficas guardadas en: %s\n', output_dir);
 end
-
-exportgraphics(figure(1), fullfile(output_dir, 'plot_q.jpg'),                    'Resolution', 300);
-exportgraphics(figure(2), fullfile(output_dir, 'plot_tracking_cartesian.jpg'),   'Resolution', 300);
-exportgraphics(figure(3), fullfile(output_dir, 'torques_plot.jpg'),              'Resolution', 300);
-exportgraphics(figure(4), fullfile(output_dir, 'plot_tracking_velocity.jpg'),    'Resolution', 300);
-
-fprintf('Graficas guardadas en: %s\n', output_dir);
