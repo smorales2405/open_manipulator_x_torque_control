@@ -2,10 +2,10 @@
 % Graficas para Actividad 2 — Control IO (Input-Output Linearization)
 % OpenMANIPULATOR-X, Laboratorio 4
 %
-%   Figura 1 — Posiciones articulares q1..q4
-%   Figura 2 — Seguimiento cartesiano: x, y, z, phi  vs referencia
+%   Figura 1 — Seguimiento cartesiano: x, y, z, phi  vs referencia
+%   Figura 2 — Seguimiento de velocidades cartesianas: xdot, ydot, zdot, phidot
 %   Figura 3 — Torques de control tau1..tau4
-%   Figura 4 — Seguimiento de velocidades cartesianas: xdot, ydot, zdot, phidot
+%   Figura 4 — Posiciones articulares q1..q4
 %
 % Configurar las dos variables de la seccion "Configuracion" y ejecutar.
 
@@ -69,38 +69,19 @@ xlims     = [t(1), t(end)];
 jointNames = {'Articulacion 1', 'Articulacion 2', ...
               'Articulacion 3', 'Articulacion 4'};
 
-%% ── Figura 1 — Posiciones articulares ────────────────────────────────────────
-figure(1); clf;
-set(gcf, 'Color', 'w', 'Position', [100 620 1100 520]);
-tl1 = tiledlayout(2, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
-
-for i = 1:4
-    nexttile(tl1);
-    plot(t, q(:,i), '-', 'Color', c_meas, 'LineWidth', lw);
-    xlabel('Tiempo [s]', 'FontSize', fs);
-    ylabel(sprintf('$q_%d$ [rad]', i), 'Interpreter', 'latex', 'FontSize', fs);
-    title(jointNames{i}, 'FontSize', fs);
-    grid on; box on;
-    set(gca, 'FontSize', fs);
-    xlim(xlims);
-end
-
-title(tl1, sprintf('[%s] IO Control - Posiciones Articulares', mode_label), ...
-      'FontSize', fs_ttl, 'FontWeight', 'bold');
-
-%% ── Figura 2 — Seguimiento cartesiano ───────────────────────────────────────
+%% ── Figura 1 — Seguimiento cartesiano ───────────────────────────────────────
 ylabels_cart = {'$x$ [m]', '$y$ [m]', '$z$ [m]', '$\phi$ [rad]'};
 titles_cart  = {'Posicion x', 'Posicion y', 'Posicion z', 'Orientacion \phi'};
 
-figure(2); clf;
-set(gcf, 'Color', 'w', 'Position', [130 100 1100 540]);
-tl2  = tiledlayout(2, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
-axs2 = gobjects(1, 4);
+figure(1); clf;
+set(gcf, 'Color', 'w', 'Position', [100 620 1100 540]);
+tl1  = tiledlayout(2, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
+axs1 = gobjects(1, 4);
 h_ref_h = [];
 h_mea_h = [];
 
 for i = 1:4
-    axs2(i) = nexttile(tl2);
+    axs1(i) = nexttile(tl1);
     h1 = plot(t, y_des(:,i), '--', 'Color', c_ref,  'LineWidth', lw); hold on;
     h2 = plot(t, y(:,i),     '-',  'Color', c_meas, 'LineWidth', lw);
     if i == 1
@@ -115,11 +96,47 @@ for i = 1:4
     xlim(xlims);
 end
 
-lgd2 = legend(axs2(1), [h_ref_h, h_mea_h], {'Referencia', 'Medicion'}, ...
+lgd1 = legend(axs1(1), [h_ref_h, h_mea_h], {'Referencia', 'Medicion'}, ...
+              'Orientation', 'horizontal', 'FontSize', fs, 'Location', 'northoutside');
+lgd1.Layout.Tile = 'north';
+
+title(tl1, sprintf('[%s] IO Control - Seguimiento Cartesiano', mode_label), ...
+      'FontSize', fs_ttl, 'FontWeight', 'bold');
+
+%% ── Figura 2 — Velocidades cartesianas ──────────────────────────────────────
+ylabels_vel = {'$\dot{x}$ [m/s]', '$\dot{y}$ [m/s]', ...
+               '$\dot{z}$ [m/s]', '$\dot{\phi}$ [rad/s]'};
+titles_vel  = {'Velocidad $\dot{x}$', 'Velocidad $\dot{y}$', ...
+               'Velocidad $\dot{z}$', 'Velocidad $\dot{\phi}$'};
+
+figure(2); clf;
+set(gcf, 'Color', 'w', 'Position', [130 100 1100 540]);
+tl2  = tiledlayout(2, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
+axs2 = gobjects(1, 4);
+h_ref_v = [];
+h_mea_v = [];
+
+for i = 1:4
+    axs2(i) = nexttile(tl2);
+    h1 = plot(t, ydot_des(:,i), '--', 'Color', c_ref,  'LineWidth', lw); hold on;
+    h2 = plot(t, ydot(:,i),     '-',  'Color', c_meas, 'LineWidth', lw);
+    if i == 1
+        h_ref_v = h1;
+        h_mea_v = h2;
+    end
+    xlabel('Tiempo [s]', 'FontSize', fs);
+    ylabel(ylabels_vel{i}, 'Interpreter', 'latex', 'FontSize', fs);
+    title(titles_vel{i}, 'FontSize', fs, 'Interpreter', 'latex');
+    grid on; box on;
+    set(gca, 'FontSize', fs);
+    xlim(xlims);
+end
+
+lgd2 = legend(axs2(1), [h_ref_v, h_mea_v], {'Referencia', 'Medicion'}, ...
               'Orientation', 'horizontal', 'FontSize', fs, 'Location', 'northoutside');
 lgd2.Layout.Tile = 'north';
 
-title(tl2, sprintf('[%s] IO Control - Seguimiento Cartesiano', mode_label), ...
+title(tl2, sprintf('[%s] IO Control - Seguimiento de Velocidades Cartesianas', mode_label), ...
       'FontSize', fs_ttl, 'FontWeight', 'bold');
 
 %% ── Figura 3 — Torques de control ────────────────────────────────────────────
@@ -145,40 +162,23 @@ end
 title(tl3, sprintf('[%s] IO Control - Torques de Control', mode_label), ...
       'FontSize', fs_ttl, 'FontWeight', 'bold');
 
-%% ── Figura 4 — Velocidades cartesianas ──────────────────────────────────────
-ylabels_vel = {'$\dot{x}$ [m/s]', '$\dot{y}$ [m/s]', ...
-               '$\dot{z}$ [m/s]', '$\dot{\phi}$ [rad/s]'};
-titles_vel  = {'Velocidad $\dot{x}$', 'Velocidad $\dot{y}$', ...
-               'Velocidad $\dot{z}$', 'Velocidad $\dot{\phi}$'};
-
+%% ── Figura 4 — Posiciones articulares ────────────────────────────────────────
 figure(4); clf;
-set(gcf, 'Color', 'w', 'Position', [190 -920 1100 540]);
-tl4  = tiledlayout(2, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
-axs4 = gobjects(1, 4);
-h_ref_v = [];
-h_mea_v = [];
+set(gcf, 'Color', 'w', 'Position', [190 -920 1100 520]);
+tl4 = tiledlayout(2, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
 
 for i = 1:4
-    axs4(i) = nexttile(tl4);
-    h1 = plot(t, ydot_des(:,i), '--', 'Color', c_ref,  'LineWidth', lw); hold on;
-    h2 = plot(t, ydot(:,i),     '-',  'Color', c_meas, 'LineWidth', lw);
-    if i == 1
-        h_ref_v = h1;
-        h_mea_v = h2;
-    end
+    nexttile(tl4);
+    plot(t, q(:,i), '-', 'Color', c_meas, 'LineWidth', lw);
     xlabel('Tiempo [s]', 'FontSize', fs);
-    ylabel(ylabels_vel{i}, 'Interpreter', 'latex', 'FontSize', fs);
-    title(titles_vel{i}, 'FontSize', fs, 'Interpreter', 'latex');
+    ylabel(sprintf('$q_%d$ [rad]', i), 'Interpreter', 'latex', 'FontSize', fs);
+    title(jointNames{i}, 'FontSize', fs);
     grid on; box on;
     set(gca, 'FontSize', fs);
     xlim(xlims);
 end
 
-lgd4 = legend(axs4(1), [h_ref_v, h_mea_v], {'Referencia', 'Medicion'}, ...
-              'Orientation', 'horizontal', 'FontSize', fs, 'Location', 'northoutside');
-lgd4.Layout.Tile = 'north';
-
-title(tl4, sprintf('[%s] IO Control - Seguimiento de Velocidades Cartesianas', mode_label), ...
+title(tl4, sprintf('[%s] IO Control - Posiciones Articulares', mode_label), ...
       'FontSize', fs_ttl, 'FontWeight', 'bold');
 
 %% ── Exportacion ──────────────────────────────────────────────────────────────
@@ -188,16 +188,16 @@ if EXPORT_FIGS
     end
 
     % PNG (raster, 300 dpi)
-    exportgraphics(figure(1), fullfile(output_dir, 'plot_q.png'),                   'Resolution', 300);
-    exportgraphics(figure(2), fullfile(output_dir, 'plot_tracking_cartesian.png'),  'Resolution', 300);
+    exportgraphics(figure(1), fullfile(output_dir, 'plot_tracking_cartesian.png'),  'Resolution', 300);
+    exportgraphics(figure(2), fullfile(output_dir, 'plot_tracking_velocity.png'),   'Resolution', 300);
     exportgraphics(figure(3), fullfile(output_dir, 'torques_plot.png'),             'Resolution', 300);
-    exportgraphics(figure(4), fullfile(output_dir, 'plot_tracking_velocity.png'),   'Resolution', 300);
+    exportgraphics(figure(4), fullfile(output_dir, 'plot_q.png'),                   'Resolution', 300);
 
     % EPS (vectorial, 600 dpi)
-    exportgraphics(figure(1), fullfile(output_dir, 'plot_q.eps'),                   'ContentType', 'vector', 'Resolution', 600);
-    exportgraphics(figure(2), fullfile(output_dir, 'plot_tracking_cartesian.eps'),  'ContentType', 'vector', 'Resolution', 600);
+    exportgraphics(figure(1), fullfile(output_dir, 'plot_tracking_cartesian.eps'),  'ContentType', 'vector', 'Resolution', 600);
+    exportgraphics(figure(2), fullfile(output_dir, 'plot_tracking_velocity.eps'),   'ContentType', 'vector', 'Resolution', 600);
     exportgraphics(figure(3), fullfile(output_dir, 'torques_plot.eps'),             'ContentType', 'vector', 'Resolution', 600);
-    exportgraphics(figure(4), fullfile(output_dir, 'plot_tracking_velocity.eps'),   'ContentType', 'vector', 'Resolution', 600);
+    exportgraphics(figure(4), fullfile(output_dir, 'plot_q.eps'),                   'ContentType', 'vector', 'Resolution', 600);
 
     fprintf('Graficas guardadas en: %s\n', output_dir);
 end
