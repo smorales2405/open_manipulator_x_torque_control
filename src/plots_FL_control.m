@@ -3,8 +3,9 @@
 % OpenMANIPULATOR-X, Laboratorio 4
 %
 %   Figura 1 — Seguimiento de posiciones articulares  q1..q4
-%   Figura 2 — Seguimiento de velocidades articulares dq1..dq4
-%   Figura 3 — Torques de control tau1..tau4
+%   Figura 2 — Errores de seguimiento articular e_q1..e_q4
+%   Figura 3 — Seguimiento de velocidades articulares dq1..dq4
+%   Figura 4 — Torques de control tau1..tau4
 %
 % Configurar las dos variables de la seccion "Configuracion" y ejecutar.
 
@@ -13,8 +14,10 @@ clear; clc; close all;
 %% ── Configuracion ────────────────────────────────────────────────────────────
 mode        = 'sim';   % 'sim'  = simulacion Gazebo
                        % 'real' = implementacion hardware real
-test_num    = 1;       % Numero de log (coincide con log_id del nodo C++)
-EXPORT_FIGS = true;    % true  = guardar PNG (300 dpi) y EPS vectorial (600 dpi)
+
+test_num    = 1;       % Numero de log
+
+EXPORT_FIGS = false;    % true  = guardar PNG (300 dpi) y EPS vectorial (600 dpi)
                        % false = solo visualizar
 
 % Directorio raiz del paquete ROS 2
@@ -87,9 +90,31 @@ end
 sgtitle(sprintf('[%s] Seguimiento de posiciones articulares', mode_label), ...
         'FontSize', 14, 'FontWeight', 'bold');
 
-%% ── Figura 2 — Velocidades articulares ───────────────────────────────────────
+%% ── Figura 2 — Errores de seguimiento articular ──────────────────────────────
+e_q = q - q_des;
+
 figure(2); clf;
-set(gcf, 'Color', 'w', 'Position', [120 120 1100 700]);
+set(gcf, 'Color', 'w', 'Position', [120 120 1100 560]);
+tl2  = tiledlayout(2, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
+axs2 = gobjects(1, 4);
+
+for i = 1:4
+    axs2(i) = nexttile(tl2);
+    plot(t, e_q(:,i), '-', 'Color', color_meas, 'LineWidth', lw);
+    yline(0, ':', 'LineWidth', 0.8);
+    xlabel('Tiempo [s]', 'FontSize', fs);
+    ylabel(sprintf('$e_{q_%d}$ [rad]', i), 'Interpreter', 'latex', 'FontSize', fs);
+    grid on; box on;
+    set(gca, 'FontSize', fs);
+    xlim(xlims);
+end
+
+title(tl2, sprintf('[%s] FL Control - Errores de Seguimiento Articular', mode_label), ...
+      'FontSize', 14, 'FontWeight', 'bold');
+
+%% ── Figura 3 — Velocidades articulares ───────────────────────────────────────
+figure(3); clf;
+set(gcf, 'Color', 'w', 'Position', [130 130 1100 700]);
 
 for i = 1:4
     subplot(2,2,i);
@@ -109,8 +134,8 @@ end
 sgtitle(sprintf('[%s] Seguimiento de velocidades articulares', mode_label), ...
         'FontSize', 14, 'FontWeight', 'bold');
 
-%% ── Figura 3 — Torques de control ────────────────────────────────────────────
-figure(3); clf;
+%% ── Figura 4 — Torques de control ────────────────────────────────────────────
+figure(4); clf;
 set(gcf, 'Color', 'w', 'Position', [140 140 1100 700]);
 
 for i = 1:4
@@ -127,7 +152,7 @@ for i = 1:4
     xlim(xlims);
 end
 
-sgtitle(sprintf('[%s] Torques de control calculados', mode_label), ...
+sgtitle(sprintf('[%s] FL Control - Torques de control calculados', mode_label), ...
         'FontSize', 14, 'FontWeight', 'bold');
 
 %% ── Exportacion ──────────────────────────────────────────────────────────────
@@ -137,14 +162,16 @@ if EXPORT_FIGS
     end
 
     % PNG (raster, 300 dpi)
-    exportgraphics(figure(1), fullfile(output_dir, 'tracking_plot_q.png'),  'Resolution', 300);
-    exportgraphics(figure(2), fullfile(output_dir, 'tracking_plot_dq.png'), 'Resolution', 300);
-    exportgraphics(figure(3), fullfile(output_dir, 'torques_plot.png'),     'Resolution', 300);
+    exportgraphics(figure(1), fullfile(output_dir, 'tracking_plot_q.png'),     'Resolution', 300);
+    exportgraphics(figure(2), fullfile(output_dir, 'tracking_plot_error.png'), 'Resolution', 300);
+    exportgraphics(figure(3), fullfile(output_dir, 'tracking_plot_dq.png'),    'Resolution', 300);
+    exportgraphics(figure(4), fullfile(output_dir, 'torques_plot.png'),        'Resolution', 300);
 
     % EPS (vectorial, 600 dpi)
-    exportgraphics(figure(1), fullfile(output_dir, 'tracking_plot_q.eps'),  'ContentType', 'vector', 'Resolution', 600);
-    exportgraphics(figure(2), fullfile(output_dir, 'tracking_plot_dq.eps'), 'ContentType', 'vector', 'Resolution', 600);
-    exportgraphics(figure(3), fullfile(output_dir, 'torques_plot.eps'),     'ContentType', 'vector', 'Resolution', 600);
+    exportgraphics(figure(1), fullfile(output_dir, 'tracking_plot_q.eps'),     'ContentType', 'vector', 'Resolution', 600);
+    exportgraphics(figure(2), fullfile(output_dir, 'tracking_plot_error.eps'), 'ContentType', 'vector', 'Resolution', 600);
+    exportgraphics(figure(3), fullfile(output_dir, 'tracking_plot_dq.eps'),    'ContentType', 'vector', 'Resolution', 600);
+    exportgraphics(figure(4), fullfile(output_dir, 'torques_plot.eps'),        'ContentType', 'vector', 'Resolution', 600);
 
     fprintf('Graficas guardadas en: %s\n', output_dir);
 end
