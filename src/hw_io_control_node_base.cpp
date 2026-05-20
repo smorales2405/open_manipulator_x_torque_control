@@ -154,7 +154,7 @@ static constexpr double T_TRANS = 3.0;   // duracion de la transicion inicial [s
 
 // Punto de inicio de la trayectoria cartesiana [x, y, z, phi] en t'=0
 // Debe coincidir con cartesianTrajectory(0).
-static const Eigen::Vector4d Y_START{0.17, 0.05, 0.27, 0.22};
+static const Eigen::Vector4d Y_START{0.0, 0.0, 0.0, 0.0};
 
 static constexpr char EFF_FRAME_NAME[] = "end_effector_link";
 
@@ -218,8 +218,7 @@ static const Eigen::Vector4d KP_Y = {/* kpx */, /* kpy */, /* kpz */, /* kpphi *
 static const Eigen::Vector4d KD_Y = {/* kdx */, /* kdy */, /* kdz */, /* kdphi */};
 // ═══════════════════════════════════════════════════════════════════════════
 
-static constexpr double TAU_MAX   = 1.5;     // limite de torque por articulacion [N·m]
-static constexpr double LAMBDA    = 0.01;    // amortiguamiento DLS (rango tipico: 0.01-0.05)
+static constexpr double TAU_MAX   = 0.0;     // limite de torque por articulacion [N·m]
 
 // ============================================================
 // Utilidades de conversion
@@ -598,6 +597,8 @@ private:
     //    tau   = M4 * qddot + nle4            (torque de control)
     //    tau_sat = clamp(tau, -TAU_MAX, TAU_MAX)
     // ═══════════════════════════════════════════════════════════════════════
+
+    static constexpr double LAMBDA    = 0.01;    // amortiguamiento DLS (rango tipico: 0.01-0.05)
 
     // -- COMPLETAR --
     (void)M4; (void)nle4; (void)jdqd;

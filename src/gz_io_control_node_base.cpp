@@ -168,7 +168,6 @@ static const Eigen::Vector4d KP_Y = {0.0, 0.0, 0.0, 0.0};   // COMPLETAR [x, y, 
 static const Eigen::Vector4d KD_Y = {0.0, 0.0, 0.0, 0.0};   // COMPLETAR [x, y, z, phi]
 
 static constexpr double TAU_MAX   = 0.0;   // COMPLETAR limite de torque por articulacion [N·m]
-static constexpr double LAMBDA    = 0.01;   // factor DLS
 // ═══════════════════════════════════════════════════════════════════════════
 
 // ── Nodo de control ──────────────────────────────────────────────────────────
@@ -380,6 +379,8 @@ private:
     //    tau    = M(q) * qddot + b(q,dq)
     //    tau_sat = clamp(tau, -TAU_MAX, TAU_MAX)
     // ══════════════════════════════════════════════════════════════════════
+
+    static constexpr double LAMBDA    = 0.01;   // factor DLS
 
     Eigen::Vector4d tau_sat = Eigen::Vector4d::Zero();   // <-- reemplazar con implementacion
 
