@@ -33,7 +33,7 @@
  *   gain_scale      [double]  1.0
  *   deadzone_ticks  [double]  30.0
  *   viscous_comp    [double]  5.0
- *   duration_s      [double]  20.0  (0 = sin limite)
+ *   t_imp      [double]  20.0  (0 = sin limite)
  *   log_id          [int]     1
  *
  */
@@ -275,19 +275,19 @@ public:
     this->declare_parameter<double>     ("gain_scale",     1.0);
     this->declare_parameter<double>     ("deadzone_ticks", 30.0);
     this->declare_parameter<double>     ("viscous_comp",   5.0);
-    this->declare_parameter<double>     ("duration_s",     20.0);
+    this->declare_parameter<double>     ("t_imp",     20.0);
     this->declare_parameter<int>        ("log_id",         1);
 
     port_name_      = this->get_parameter("port_name").as_string();
     gain_scale_     = this->get_parameter("gain_scale").as_double();
     deadzone_ticks_ = this->get_parameter("deadzone_ticks").as_double();
     viscous_comp_   = this->get_parameter("viscous_comp").as_double();
-    duration_s_     = this->get_parameter("duration_s").as_double();
+    t_imp_     = this->get_parameter("t_imp").as_double();
     const int log_id = this->get_parameter("log_id").as_int();
 
     RCLCPP_INFO(get_logger(),
       "puerto=%s  gain=%.2f  dz=%.1f  visc=%.2f  dur=%.1fs  id=%d",
-      port_name_.c_str(), gain_scale_, deadzone_ticks_, viscous_comp_, duration_s_, log_id);
+      port_name_.c_str(), gain_scale_, deadzone_ticks_, viscous_comp_, t_imp_, log_id);
     RCLCPP_INFO(get_logger(),
       "Kp_y=[%.1f %.1f %.1f %.1f]  Kd_y=[%.1f %.1f %.1f %.1f]  lambda=%.3f  tau_max=%.2f",
       KP_Y[0], KP_Y[1], KP_Y[2], KP_Y[3],
@@ -637,8 +637,8 @@ private:
     const auto   tp = std::chrono::high_resolution_clock::now();
     const double t  = std::chrono::duration<double>(tp - start_time_).count();
 
-    if (duration_s_ > 0.0 && t >= duration_s_) {
-      RCLCPP_INFO(get_logger(), "Duracion completada (%.1f s).", duration_s_);
+    if (t_imp_ > 0.0 && t >= t_imp_) {
+      RCLCPP_INFO(get_logger(), "Duracion completada (%.1f s).", t_imp_);
       timer_->cancel();
       shutdown_hardware();
       if (csv_.is_open()) { csv_.flush(); csv_.close(); }
@@ -767,7 +767,7 @@ private:
   pinocchio::FrameIndex frame_id_;
 
   std::string port_name_;
-  double gain_scale_, deadzone_ticks_, viscous_comp_, duration_s_;
+  double gain_scale_, deadzone_ticks_, viscous_comp_, t_imp_;
 
   dynamixel::PortHandler*   port_handler_{nullptr};
   dynamixel::PacketHandler* packet_handler_{nullptr};
