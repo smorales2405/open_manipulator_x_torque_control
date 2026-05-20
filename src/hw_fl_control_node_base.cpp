@@ -9,7 +9,7 @@
  *
  * Completar las tres secciones marcadas:
  *   SECCION 1 — Trayectoria deseada articular  (desiredTrajectory)
- *   SECCION 2 — Ganancias del controlador      (kp, kd en compute_torque)
+ *   SECCION 2 — Ganancias del controlador      (KP, KD globales)
  *   SECCION 3 — Ley de control FL              (v, tau en compute_torque)
  *
  * Infraestructura proporcionada (NO modificar):
@@ -221,6 +221,20 @@ static Reference quinticTransition(double t, double T, const Vec4& q0)
   ref.ddq = 2.0*c2 + 6.0*c3*t + 12.0*c4*t2 + 20.0*c5*t3;
   return ref;
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  SECCION 2 — GANANCIAS DEL CONTROLADOR
+//
+//  Definir KP y KD para cada articulacion: [j1, j2, j3, j4]
+//    KP — ganancias proporcionales  [adim]
+//    KD — ganancias derivativas     [adim]
+//
+//  gain_scale_ escala KP linealmente y KD con su raiz cuadrada
+// ═══════════════════════════════════════════════════════════════════════════
+static const Eigen::Vector4d KP = {/* kp1 */, /* kp2 */, /* kp3 */, /* kp4 */};   // COMPLETAR
+static const Eigen::Vector4d KD = {/* kd1 */, /* kd2 */, /* kd3 */, /* kd4 */};   // COMPLETAR
+static constexpr double TAU_MAX = 0.0;                                               // COMPLETAR  [N·m]
+// ═══════════════════════════════════════════════════════════════════════════
 
 // ============================================================
 // Nodo ROS 2
@@ -456,21 +470,9 @@ private:
 
   Vec4 compute_torque(const Vec4& q, const Vec4& dq, const Reference& ref)
   {
-    // ═══════════════════════════════════════════════════════════════════════
-    //  SECCION 2 — GANANCIAS DEL CONTROLADOR
-    //
-    //  Definir kp y kd para cada articulacion: [j1, j2, j3, j4]
-    //    kp — ganancias proporcionales  [adim]
-    //    kd — ganancias derivativas     [adim]
-    //
-    //  gain_scale_ escala kp linealmente y kd con su raiz cuadrada
-    // ═══════════════════════════════════════════════════════════════════════
-    Vec4 kp, kd;
-    kp << /* kp1 */, /* kp2 */, /* kp3 */, /* kp4 */;
-    kd << /* kd1 */, /* kd2 */, /* kd3 */, /* kd4 */;
-    kp *= gain_scale_;
-    kd *= std::sqrt(std::max(gain_scale_, 0.0));
-    // ═══════════════════════════════════════════════════════════════════════
+    // Aplicar escala de ganancia (gain_scale_)
+    const Vec4 kp = KP * gain_scale_;
+    const Vec4 kd = KD * std::sqrt(std::max(gain_scale_, 0.0));
 
     // Dinamica M(q) y nle(q, dq) via Pinocchio
     Eigen::VectorXd q_pin   = Eigen::VectorXd::Zero(model_.nv);

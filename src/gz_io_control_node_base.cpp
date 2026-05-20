@@ -164,8 +164,8 @@ static CartRef transitionTrajectory(double t,
 //    LAMBDA  — factor de amortiguamiento DLS (rango tipico: 0.01 – 0.05)
 // ═══════════════════════════════════════════════════════════════════════════
 
-static const Eigen::Vector4d KP_Y = {0.0, 0.0, 0.0, 0.0};   // COMPLETAR 1a  [x, y, z, phi]
-static const Eigen::Vector4d KD_Y = {0.0, 0.0, 0.0, 0.0};   // COMPLETAR 1a  [x, y, z, phi]
+static const Eigen::Vector4d KP_Y = {0.0, 0.0, 0.0, 0.0};   // COMPLETAR [x, y, z, phi]
+static const Eigen::Vector4d KD_Y = {0.0, 0.0, 0.0, 0.0};   // COMPLETAR [x, y, z, phi]
 
 static constexpr double TAU_MAX   = 0.0;   // COMPLETAR limite de torque por articulacion [N·m]
 static constexpr double LAMBDA    = 0.01;   // factor DLS

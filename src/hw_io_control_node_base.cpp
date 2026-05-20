@@ -13,8 +13,8 @@
  *   tau   = M(q)*qddot + nle(q, dq)
  *
  * Completar las tres secciones marcadas:
- *   SECCION 1 — Ganancias del controlador      (KP_Y, KD_Y globales)
- *   SECCION 2 — Trayectoria deseada cartesiana (cartesianTrajectory)
+ *   SECCION 1 — Trayectoria deseada cartesiana (cartesianTrajectory)
+ *   SECCION 2 — Ganancias del controlador      (KP_Y, KD_Y globales)
  *   SECCION 3 — Ley de control IO              (en compute_io_control)
  *
  * Infraestructura proporcionada (NO modificar):
@@ -129,45 +129,7 @@ using Vec4 = Eigen::Matrix<double, NUM_JOINTS, 1>;
 // ============================================================
 
 // ═══════════════════════════════════════════════════════════════════════════
-//  SECCION 1 — GANANCIAS DEL CONTROLADOR
-//
-//  Definir KP_Y y KD_Y para cada componente de la salida: [x, y, z, phi]
-//    KP_Y — ganancias proporcionales cartesianas  [adim]
-//    KD_Y — ganancias derivativas cartesianas     [adim]
-//
-//  Referencia de disenio (sistema de 2do orden desacoplado):
-//    wn   = sqrt(KP_Y)         — frecuencia natural
-//    zeta = KD_Y / (2 * wn)   — coeficiente de amortiguamiento
-//    Para amortiguamiento critico: KD_Y = 2 * sqrt(KP_Y)
-//    La frecuencia natural debe ser >> frecuencia de la trayectoria
-// ═══════════════════════════════════════════════════════════════════════════
-static const Eigen::Vector4d KP_Y = {/* kpx */, /* kpy */, /* kpz */, /* kpphi */};
-static const Eigen::Vector4d KD_Y = {/* kdx */, /* kdy */, /* kdz */, /* kdphi */};
-// ═══════════════════════════════════════════════════════════════════════════
-
-static constexpr double TAU_MAX   = 1.5;     // limite de torque por articulacion [N·m]
-static constexpr double LAMBDA    = 0.01;    // amortiguamiento DLS (rango tipico: 0.01-0.05)
-
-// Punto de inicio de la trayectoria cartesiana [x, y, z, phi] en t'=0
-// Debe coincidir con cartesianTrajectory(0).
-static const Eigen::Vector4d Y_START{0.17, 0.05, 0.27, 0.22};
-
-static constexpr double T_TRANS = 3.0;   // duracion de la transicion inicial [s]
-
-static constexpr char EFF_FRAME_NAME[] = "end_effector_link";
-
-// ============================================================
-// Estructura de referencia cartesiana
-// ============================================================
-
-struct CartRef {
-  Eigen::Vector4d y;      // posicion deseada    [x, y, z, phi]
-  Eigen::Vector4d ydot;   // velocidad deseada   (1ra derivada analitica)
-  Eigen::Vector4d yddot;  // aceleracion deseada (2da derivada analitica)
-};
-
-// ═══════════════════════════════════════════════════════════════════════════
-//  SECCION 2 — TRAYECTORIA DESEADA CARTESIANA
+//  SECCION 1 — TRAYECTORIA DESEADA CARTESIANA
 //
 //  Definir ref.y, ref.ydot y ref.yddot como funciones del tiempo t
 //  (tiempo relativo al inicio de la fase de trayectoria: t' = t - T_TRANS).
@@ -183,8 +145,26 @@ struct CartRef {
 //  Nota: ref.y en t=0 debe coincidir con Y_START (punto de inicio de la
 //        transicion quintica) para garantizar continuidad.
 //        Verificar: cartesianTrajectory(0).y == Y_START
+//
+//  Parametros configurables:
+//    T_TRANS — duracion de la fase de transicion inicial [s]
 // ═══════════════════════════════════════════════════════════════════════════
 
+static constexpr double T_TRANS = 3.0;   // duracion de la transicion inicial [s]
+
+// Punto de inicio de la trayectoria cartesiana [x, y, z, phi] en t'=0
+// Debe coincidir con cartesianTrajectory(0).
+static const Eigen::Vector4d Y_START{0.17, 0.05, 0.27, 0.22};
+
+static constexpr char EFF_FRAME_NAME[] = "end_effector_link";
+
+// ── Estructura de referencia cartesiana ─────────────────────────────────────
+struct CartRef {
+  Eigen::Vector4d y;      // posicion deseada    [x, y, z, phi]
+  Eigen::Vector4d ydot;   // velocidad deseada   (1ra derivada analitica)
+  Eigen::Vector4d yddot;  // aceleracion deseada (2da derivada analitica)
+};
+// ═══════════════════════════════════════════════════════════════════════════
 static CartRef cartesianTrajectory(double t)
 {
   CartRef ref;
@@ -198,7 +178,6 @@ static CartRef cartesianTrajectory(double t)
 
   return ref;
 }
-
 // ═══════════════════════════════════════════════════════════════════════════
 
 // ── Transicion quintica (NO modificar) ──────────────────────────────────────
@@ -221,6 +200,26 @@ static CartRef cartesianTransition(double t,
   ref.yddot =      sdd * delta;
   return ref;
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  SECCION 2 — GANANCIAS DEL CONTROLADOR
+//
+//  Definir KP_Y y KD_Y para cada componente de la salida: [x, y, z, phi]
+//    KP_Y — ganancias proporcionales cartesianas  [adim]
+//    KD_Y — ganancias derivativas cartesianas     [adim]
+//
+//  Referencia de disenio (sistema de 2do orden desacoplado):
+//    wn   = sqrt(KP_Y)         — frecuencia natural
+//    zeta = KD_Y / (2 * wn)   — coeficiente de amortiguamiento
+//    Para amortiguamiento critico: KD_Y = 2 * sqrt(KP_Y)
+//    La frecuencia natural debe ser >> frecuencia de la trayectoria
+// ═══════════════════════════════════════════════════════════════════════════
+static const Eigen::Vector4d KP_Y = {/* kpx */, /* kpy */, /* kpz */, /* kpphi */};
+static const Eigen::Vector4d KD_Y = {/* kdx */, /* kdy */, /* kdz */, /* kdphi */};
+// ═══════════════════════════════════════════════════════════════════════════
+
+static constexpr double TAU_MAX   = 1.5;     // limite de torque por articulacion [N·m]
+static constexpr double LAMBDA    = 0.01;    // amortiguamiento DLS (rango tipico: 0.01-0.05)
 
 // ============================================================
 // Utilidades de conversion
@@ -586,7 +585,7 @@ private:
     //    jdqd (4×1)              — termino Jdot*dq (bias de aceleracion)
     //    M4   (4×4)              — matriz de masa inercial  M(q)
     //    nle4 (4×1)              — efectos no lineales      nle(q, dq)
-    //    KP_Y, KD_Y              — ganancias (definidas en Seccion 1)
+    //    KP_Y, KD_Y              — ganancias (definidas en Seccion 2)
     //    gain_scale_             — factor de escala de ganancias
     //    TAU_MAX                 — saturacion de torque
     //
