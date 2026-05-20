@@ -99,7 +99,7 @@ struct CartRef {
   Eigen::Vector4d yddot;  // aceleracion deseada (2da derivada analitica)
 };
 // ═══════════════════════════════════════════════════════════════════════════
-static CartRef circularTrajectory(double tp)
+static CartRef circularTrajectory(double t)
 {
 
   CartRef ref;
@@ -108,9 +108,10 @@ static CartRef circularTrajectory(double tp)
   // COMPLETAR: implementar aqui
   // -------------------------------------------------------------------
 
-  (void)tp;  
+  (void)t;
   const double w = 1.0;
-    
+  (void)w;
+
   ref.y.setZero();
   ref.ydot.setZero();
   ref.yddot.setZero();
@@ -171,6 +172,7 @@ static const Eigen::Vector4d KP_Y = {0.0, 0.0, 0.0, 0.0};   // COMPLETAR [x, y, 
 static const Eigen::Vector4d KD_Y = {0.0, 0.0, 0.0, 0.0};   // COMPLETAR [x, y, z, phi]
 
 static constexpr double TAU_MAX   = 0.0;   // COMPLETAR limite de torque por articulacion [N·m]
+static constexpr double LAMBDA    = 0.01;  // factor de amortiguamiento DLS (rango tipico: 0.01-0.05)
 // ═══════════════════════════════════════════════════════════════════════════
 
 // ── Nodo de control ──────────────────────────────────────────────────────────
@@ -382,8 +384,6 @@ private:
     //    tau    = M(q) * qddot + b(q,dq)
     //    tau_sat = clamp(tau, -TAU_MAX, TAU_MAX)
     // ══════════════════════════════════════════════════════════════════════
-
-    static constexpr double LAMBDA    = 0.01;   // factor DLS
 
     Eigen::Vector4d tau_sat = Eigen::Vector4d::Zero();   // <-- reemplazar con implementacion
 

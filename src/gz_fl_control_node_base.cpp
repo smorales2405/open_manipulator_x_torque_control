@@ -89,8 +89,9 @@ static Reference desiredTrajectory(double t)
   // -------------------------------------------------------------------
 
   (void)t;
-  const double w = 1.0;  
-  
+  const double w = 1.0;
+  (void)w;
+
   ref.q.setZero();
   ref.dq.setZero();
   ref.ddq.setZero();

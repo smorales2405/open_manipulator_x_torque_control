@@ -172,6 +172,7 @@ static CartRef cartesianTrajectory(double t)
   // -- COMPLETAR --
   (void)t;
   const double w = 1.0;
+  (void)w;
 
   ref.y.setZero();
   ref.ydot.setZero();
@@ -216,11 +217,12 @@ static CartRef cartesianTransition(double t,
 //    Para amortiguamiento critico: KD_Y = 2 * sqrt(KP_Y)
 //    La frecuencia natural debe ser >> frecuencia de la trayectoria
 // ═══════════════════════════════════════════════════════════════════════════
-static const Eigen::Vector4d KP_Y = {/* kpx */, /* kpy */, /* kpz */, /* kpphi */};
-static const Eigen::Vector4d KD_Y = {/* kdx */, /* kdy */, /* kdz */, /* kdphi */};
+static const Eigen::Vector4d KP_Y = {0.0 /* kpx */, 0.0 /* kpy */, 0.0 /* kpz */, 0.0 /* kpphi */};
+static const Eigen::Vector4d KD_Y = {0.0 /* kdx */, 0.0 /* kdy */, 0.0 /* kdz */, 0.0 /* kdphi */};
 // ═══════════════════════════════════════════════════════════════════════════
 
 static constexpr double TAU_MAX   = 0.0;     // limite de torque por articulacion [N·m]
+static constexpr double LAMBDA    = 0.01;    // amortiguamiento DLS (rango tipico: 0.01-0.05)
 
 // ============================================================
 // Utilidades de conversion
@@ -599,8 +601,6 @@ private:
     //    tau   = M4 * qddot + nle4            (torque de control)
     //    tau_sat = clamp(tau, -TAU_MAX, TAU_MAX)
     // ═══════════════════════════════════════════════════════════════════════
-
-    static constexpr double LAMBDA    = 0.01;    // amortiguamiento DLS (rango tipico: 0.01-0.05)
 
     // -- COMPLETAR --
     (void)M4; (void)nle4; (void)jdqd;

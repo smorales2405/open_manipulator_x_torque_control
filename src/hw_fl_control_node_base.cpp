@@ -183,9 +183,10 @@ static Reference desiredTrajectory(double t)
   Reference ref;
 
   // -- completar --
-  (void)t; 
+  (void)t;
   const double w = 1.0;
-  
+  (void)w;
+
   ref.q.setZero();
   ref.dq.setZero();
   ref.ddq.setZero();
@@ -201,7 +202,7 @@ static Reference desiredTrajectory(double t)
 // con velocidad y aceleracion nulas en los extremos (condiciones de frontera).
 static Reference quinticTransition(double t, double T, const Vec4& q0)
 {
-  const Reference target = desiredTrajectory(T, q0);
+  const Reference target = desiredTrajectory(T);
   if (T <= 0.0) return target;
 
   const Vec4 v0 = Vec4::Zero();
@@ -233,8 +234,8 @@ static Reference quinticTransition(double t, double T, const Vec4& q0)
 //
 //  gain_scale_ escala KP linealmente y KD con su raiz cuadrada
 // ═══════════════════════════════════════════════════════════════════════════
-static const Eigen::Vector4d KP = {/* kp1 */, /* kp2 */, /* kp3 */, /* kp4 */};   // COMPLETAR
-static const Eigen::Vector4d KD = {/* kd1 */, /* kd2 */, /* kd3 */, /* kd4 */};   // COMPLETAR
+static const Eigen::Vector4d KP = {0.0 /* kp1 */, 0.0 /* kp2 */, 0.0 /* kp3 */, 0.0 /* kp4 */};   // COMPLETAR
+static const Eigen::Vector4d KD = {0.0 /* kd1 */, 0.0 /* kd2 */, 0.0 /* kd3 */, 0.0 /* kd4 */};   // COMPLETAR
 static constexpr double TAU_MAX = 0.0;                                               // COMPLETAR  [N·m]
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -588,7 +589,7 @@ private:
     // 3. Referencia (transicion quintica + trayectoria deseada centrada en q_initial_)
     const Reference ref = (t < RAMP_TIME_S)
       ? quinticTransition(t, RAMP_TIME_S, q_initial_)
-      : desiredTrajectory(t, q_initial_);
+      : desiredTrajectory(t);
 
     // 4. Verificar limites de la referencia
     for (int i = 0; i < NUM_JOINTS; ++i) {
