@@ -1,7 +1,7 @@
 /*
  * hw_io_control_node_base.cpp
  * Plantilla: Controlador Input-Output Linearization cartesiana
- * OpenMANIPULATOR-X hardware real via Dynamixel SDK directo, sin ros2_control.
+ * OpenMANIPULATOR-X hardware real via Dynamixel SDK directo.
  *
  * Salida de tarea:  y = [x, y, z, phi]^T
  *   (x,y,z) posicion cartesiana del efector final (frame end_effector_link).
@@ -36,8 +36,6 @@
  *   duration_s      [double]  20.0  (0 = sin limite)
  *   log_id          [int]     1
  *
- * ADVERTENCIA: No ejecutar junto a hardware.launch.py ni ningun proceso
- * que acceda a /dev/ttyUSB0 (ros2_control_node, dynamixel_hardware_interface).
  */
 
 #include <array>
@@ -149,7 +147,6 @@ static const Eigen::Vector4d KD_Y = {/* kdx */, /* kdy */, /* kdz */, /* kdphi *
 
 static constexpr double TAU_MAX   = 1.5;     // limite de torque por articulacion [N·m]
 static constexpr double LAMBDA    = 0.01;    // amortiguamiento DLS (rango tipico: 0.01-0.05)
-static constexpr double LAMBDA_SQ = LAMBDA * LAMBDA;
 
 // Punto de inicio de la trayectoria cartesiana [x, y, z, phi] en t'=0
 // Debe coincidir con cartesianTrajectory(0).
@@ -192,7 +189,7 @@ static CartRef cartesianTrajectory(double t)
 {
   CartRef ref;
 
-  // -- completar --
+  // -- COMPLETAR --
   (void)t;
   ref.y.setZero();
   ref.ydot.setZero();
@@ -591,7 +588,6 @@ private:
     //    nle4 (4×1)              — efectos no lineales      nle(q, dq)
     //    KP_Y, KD_Y              — ganancias (definidas en Seccion 1)
     //    gain_scale_             — factor de escala de ganancias
-    //    LAMBDA_SQ               — lambda^2 para la pseudo-inversa DLS
     //    TAU_MAX                 — saturacion de torque
     //
     //  Ley de control:
@@ -604,7 +600,7 @@ private:
     //    tau_sat = clamp(tau, -TAU_MAX, TAU_MAX)
     // ═══════════════════════════════════════════════════════════════════════
 
-    // -- completar --
+    // -- COMPLETAR --
     (void)M4; (void)nle4; (void)jdqd;
     const Eigen::Vector4d tau_sat = Vec4::Zero();  // reemplazar con tau calculado
     // ════════════════

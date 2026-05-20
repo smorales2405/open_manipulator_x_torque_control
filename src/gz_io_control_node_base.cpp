@@ -12,7 +12,7 @@
 //    qddot = J4_dls^+ * (v - Jdot*qdot)     (pseudo-inversa DLS)
 //    tau   = M(q) * qddot + b(q,dq)
 //
-//  El alumno debe completar las secciones marcadas con COMPLETAR:
+//  Se debe completar las secciones marcadas con COMPLETAR:
 //    SECCION 1 — Ganancias y parametros del controlador
 //    SECCION 2 — Trayectoria de referencia cartesiana
 //    SECCION 3 — Ley de control
@@ -26,7 +26,7 @@
 //    - Captura automatica de la pose inicial del robot
 //    - Suscriptor /joint_states  →  q, dq
 //    - Publicador /arm_effort_controller/commands  →  tau
-//    - Escritura de CSV:  fl_xyz_data.csv
+//    - Escritura de CSV:  gz_io_data_<test_num>.csv
 //    - Timer de control a 100 Hz
 //    - Parametros ROS:  test_num, t_sim
 //

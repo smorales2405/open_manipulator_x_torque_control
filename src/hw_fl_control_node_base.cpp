@@ -1,7 +1,7 @@
 /*
  * hw_fl_control_node_base.cpp
  * Plantilla: Controlador Feedback Linearization — OpenMANIPULATOR-X hardware real
- * via Dynamixel SDK directo, sin ros2_control.
+ * via Dynamixel SDK directo.
  *
  * Ley de control a implementar:
  *   tau = M(q) * v + nle(q, dq)
@@ -29,8 +29,6 @@
  *   duration_s      [double]  20.0  (0 = sin limite)
  *   log_id          [int]     1
  *
- * ADVERTENCIA: No ejecutar junto a hardware.launch.py ni ningun proceso
- * que acceda a /dev/ttyUSB0 (ros2_control_node, dynamixel_hardware_interface).
  */
 
 #include <array>
@@ -468,7 +466,6 @@ private:
     //    kd — ganancias derivativas     [adim]
     //
     //  gain_scale_ escala kp linealmente y kd con su raiz cuadrada
-    //  (preserva el amortiguamiento relativo al variar la ganancia).
     // ═══════════════════════════════════════════════════════════════════════
     Vec4 kp, kd;
     kp << /* kp1 */, /* kp2 */, /* kp3 */, /* kp4 */;
@@ -507,7 +504,7 @@ private:
     //    v   = ref.ddq + kp.*e + kd.*de  (entrada auxiliar)
     //    tau = M4 * v + nle4           (torque de control)
     //
-    //  Resultado esperado: retornar tau (Vec4)
+    //  Resultado: retornar tau (Vec4)
     // ═══════════════════════════════════════════════════════════════════════
 
     // -- completar --
@@ -538,7 +535,7 @@ private:
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  //  Parada de emergencia centralizada
+  //  Parada de emergencia
   // ─────────────────────────────────────────────────────────────────────────
 
   void emergency_stop(const std::string& reason)

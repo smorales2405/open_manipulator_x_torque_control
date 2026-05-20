@@ -6,7 +6,7 @@
 //
 //    tau = M(q) * [ ddq_des + Kp*(q_des - q) + Kd*(dq_des - dq) ] + NLE(q,dq)
 //
-//  El alumno debe completar las secciones marcadas con COMPLETAR:
+//  Se debe completar las secciones marcadas con COMPLETAR:
 //    SECCION 1 — Trayectoria de referencia articular
 //    SECCION 2 — Ganancias del controlador
 //    SECCION 3 — Ley de control
@@ -88,7 +88,7 @@ static Reference desiredTrajectory(double t)
   // COMPLETAR: implementar aqui
   // -------------------------------------------------------------------
 
-  (void)t;  // suprimir advertencia de compilador hasta que t sea usado
+  (void)t;  
   ref.q.setZero();
   ref.dq.setZero();
   ref.ddq.setZero();
@@ -192,7 +192,7 @@ private:
     RCLCPP_INFO(this->get_logger(), "CSV: %s", csv_path_.c_str());
   }
 
-  // ── Lectura de estados articulares (por nombre, independiente del orden) ──
+  // ── Lectura de estados articulares ──
   void read_js(Eigen::Vector4d & q, Eigen::Vector4d & dq)
   {
     static const std::array<std::string, NARM> names = {
