@@ -8,7 +8,7 @@
  *   phi = q2 + q3 + q4  angulo de inclinacion analitico.
  *
  * Ley de control a implementar:
- *   v     = yddot_des + Kp*(y_des - y) + Kd*(ydot_des - ydot)
+ *   v     = yddot_des + Kp_y*(y_des - y) + Kd_y*(ydot_des - ydot)
  *   qddot = J4^T * (J4*J4^T + lambda^2*I)^-1 * (v - Jdot*dq)  [DLS]
  *   tau   = M(q)*qddot + nle(q, dq)
  *

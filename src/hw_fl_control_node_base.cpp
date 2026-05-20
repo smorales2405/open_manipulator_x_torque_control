@@ -164,14 +164,12 @@ struct Reference { Vec4 q, dq, ddq; };
 //  SECCION 1 — TRAYECTORIA DESEADA ARTICULAR
 //
 //  Definir ref.q, ref.dq y ref.ddq como funciones del tiempo t
-//  centradas en la posicion inicial q0 (capturada en el primer tick).
 //
 //  Parametros de entrada:
 //    t   — tiempo transcurrido desde el inicio de la trayectoria [s]
-//    q0  — posicion articular inicial medida del robot [rad]
 //
 //  Salida esperada:
-//    ref.q   << q1_des(t, q0), q2_des(t, q0), q3_des(t, q0), q4_des(t, q0);
+//    ref.q   << q1_des(t), q2_des(t), q3_des(t), q4_des(t);
 //    ref.dq  << dq1_des(t),    dq2_des(t),    dq3_des(t),    dq4_des(t);
 //    ref.ddq << ddq1_des(t),   ddq2_des(t),   ddq3_des(t),   ddq4_des(t);
 //
@@ -180,12 +178,12 @@ struct Reference { Vec4 q, dq, ddq; };
 //        automaticamente (ver quinticTransition — no modificar).
 // ═══════════════════════════════════════════════════════════════════════════
 
-static Reference desiredTrajectory(double t, const Vec4& q0)
+static Reference desiredTrajectory(double t)
 {
   Reference ref;
 
   // -- completar --
-  (void)t; (void)q0;
+  (void)t; 
   ref.q.setZero();
   ref.dq.setZero();
   ref.ddq.setZero();

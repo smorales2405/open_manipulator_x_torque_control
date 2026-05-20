@@ -8,7 +8,7 @@
 //    phi = q2 + q3 + q4  es el angulo de inclinacion analitico del efector final.
 //
 //  Ley de control (a implementar):
-//    v     = yddot_des + Kp*(y_des - y) + Kd*(ydot_des - ydot)
+//    v     = yddot_des + Kp_y*(y_des - y) + Kd_y*(ydot_des - ydot)
 //    qddot = J4_dls^+ * (v - Jdot*qdot)     (pseudo-inversa DLS)
 //    tau   = M(q) * qddot + b(q,dq)
 //
@@ -148,11 +148,11 @@ static CartRef transitionTrajectory(double t,
 // ═══════════════════════════════════════════════════════════════════════════
 //  SECCION 2 — GANANCIAS Y PARAMETROS DEL CONTROLADOR
 //
-//  COMPLETAR 1a: Asignar las ganancias cartesianas Kp y Kd.
+//  COMPLETAR 1a: Asignar las ganancias cartesianas Kp_y y Kd_y.
 //    Indice:  [x, y, z, phi]
 //    Referencia de disenio:
-//      - Sistema de 2do orden desacoplado: wn = sqrt(Kp),  zeta = Kd/(2*wn)
-//      - Para amortiguamiento critico:     Kd = 2*sqrt(Kp)
+//      - Sistema de 2do orden desacoplado: wn = sqrt(Kp_y),  zeta = Kd_y/(2*wn)
+//      - Para amortiguamiento critico:     Kd_y = 2*sqrt(Kp_y)
 //      - La frecuencia natural debe ser >> frecuencia de la trayectoria
 //
 //  COMPLETAR 1b: Definir Y_START — punto inicial de la trayectoria circular.
@@ -164,8 +164,8 @@ static CartRef transitionTrajectory(double t,
 //    LAMBDA  — factor de amortiguamiento DLS (rango tipico: 0.01 – 0.05)
 // ═══════════════════════════════════════════════════════════════════════════
 
-static const Eigen::Vector4d KP = {0.0, 0.0, 0.0, 0.0};   // COMPLETAR 1a  [x, y, z, phi]
-static const Eigen::Vector4d KD = {0.0, 0.0, 0.0, 0.0};   // COMPLETAR 1a  [x, y, z, phi]
+static const Eigen::Vector4d KP_Y = {0.0, 0.0, 0.0, 0.0};   // COMPLETAR 1a  [x, y, z, phi]
+static const Eigen::Vector4d KD_Y = {0.0, 0.0, 0.0, 0.0};   // COMPLETAR 1a  [x, y, z, phi]
 
 static constexpr double TAU_MAX   = 0.0;   // COMPLETAR limite de torque por articulacion [N·m]
 static constexpr double LAMBDA    = 0.01;   // factor DLS
@@ -203,9 +203,9 @@ public:
       "Modelo cargado: nv=%d  frame='%s' (id=%lu)",
       model_.nv, EFF_FRAME, frame_id_);
     RCLCPP_INFO(this->get_logger(),
-      "Kp=[%.1f %.1f %.1f %.1f]  Kd=[%.1f %.1f %.1f %.1f]  tau_max=%.2f N·m",
-      KP[0], KP[1], KP[2], KP[3],
-      KD[0], KD[1], KD[2], KD[3], TAU_MAX);
+      "Kp_y=[%.1f %.1f %.1f %.1f]  Kd_y=[%.1f %.1f %.1f %.1f]  tau_max=%.2f N·m",
+      KP_Y[0], KP_Y[1], KP_Y[2], KP_Y[3],
+      KD_Y[0], KD_Y[1], KD_Y[2], KD_Y[3], TAU_MAX);
     RCLCPP_INFO(this->get_logger(),
       "lambda=%.3f  T_trans=%.1f s", LAMBDA, T_TRANS);
     if (t_sim_ > 0.0) {
@@ -367,14 +367,14 @@ private:
     //    jdqd   (4×1)  — termino Jdot(q,dq)*dq  (bias de aceleracion)
     //    M4     (4×4)  — matriz de masa inercial  M(q)
     //    nle4   (4×1)  — efectos no lineales      b(q,dq)
-    //    KP, KD        — ganancias (definidas en Seccion 1)
+    //    KP_Y, KD_Y        — ganancias (definidas en Seccion 1)
     //    LAMBDA        — lambda para la pseudo-inversa DLS
     //    TAU_MAX       — saturacion de torque
     //
     //  Ley de control IO Linearization:
     //    ey     = ref.y - y
     //    eydot  = ref.ydot - ydot
-    //    v      = ref.yddot + Kp*ey + Kd*eydot
+    //    v      = ref.yddot + Kp_y*ey + Kd_y*eydot
     //    A      = J4*J4^T + lambda^2 * I          (matriz auxiliar DLS)
     //    qddot  = J4^T * A^-1 * (v - Jdot*dq)    (pseudo-inversa DLS)
     //    tau    = M(q) * qddot + b(q,dq)
