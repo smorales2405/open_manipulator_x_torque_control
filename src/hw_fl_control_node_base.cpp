@@ -184,6 +184,8 @@ static Reference desiredTrajectory(double t)
 
   // -- completar --
   (void)t; 
+  const double w = 1.0;
+  
   ref.q.setZero();
   ref.dq.setZero();
   ref.ddq.setZero();

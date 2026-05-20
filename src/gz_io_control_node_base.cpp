@@ -101,13 +101,16 @@ struct CartRef {
 // ═══════════════════════════════════════════════════════════════════════════
 static CartRef circularTrajectory(double tp)
 {
+
   CartRef ref;
 
   // -------------------------------------------------------------------
   // COMPLETAR: implementar aqui
   // -------------------------------------------------------------------
 
-  (void)tp;  // suprimir advertencia de compilador hasta que tp sea usado
+  (void)tp;  
+  const double w = 1.0;
+    
   ref.y.setZero();
   ref.ydot.setZero();
   ref.yddot.setZero();

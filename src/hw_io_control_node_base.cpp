@@ -171,6 +171,8 @@ static CartRef cartesianTrajectory(double t)
 
   // -- COMPLETAR --
   (void)t;
+  const double w = 1.0;
+
   ref.y.setZero();
   ref.ydot.setZero();
   ref.yddot.setZero();
