@@ -75,12 +75,12 @@ set(gcf, 'Color', 'w', 'Position', [100 100 1100 700]);
 
 for i = 1:4
     subplot(2,2,i);
-    plot(t, q_des(:,i), '--', 'Color', color_ref,  'LineWidth', lw); hold on;
-    plot(t, q(:,i),     '-',  'Color', color_meas, 'LineWidth', lw);
+    plot(t, q(:,i),     '-',  'Color', color_meas, 'LineWidth', lw); hold on;
+    plot(t, q_des(:,i), '--', 'Color', color_ref,  'LineWidth', lw);
     xlabel('Tiempo [s]', 'FontSize', fs);
     ylabel(sprintf('$q_%d$ [rad]', i), 'Interpreter', 'latex', 'FontSize', fs);
-    title(['Seguimiento de posicion - ' jointNames{i}], 'FontSize', fs_title);
-    legend({sprintf('$q_{%d,des}$', i), sprintf('$q_{%d,med}$', i)}, ...
+    title([jointNames{i}], 'FontSize', fs_title);
+    legend({sprintf('$q_{%d,med}$', i), sprintf('$q_{%d,des}$', i)}, ...
            'Interpreter', 'latex', 'Location', 'best');
     grid on; box on;
     set(gca, 'FontSize', fs);
@@ -104,6 +104,7 @@ for i = 1:4
     yline(0, ':', 'LineWidth', 0.8);
     xlabel('Tiempo [s]', 'FontSize', fs);
     ylabel(sprintf('$e_{q_%d}$ [rad]', i), 'Interpreter', 'latex', 'FontSize', fs);
+    title([jointNames{i}], 'FontSize', fs_title);
     grid on; box on;
     set(gca, 'FontSize', fs);
     xlim(xlims);
@@ -118,13 +119,13 @@ set(gcf, 'Color', 'w', 'Position', [130 130 1100 700]);
 
 for i = 1:4
     subplot(2,2,i);
-    plot(t, dq_des(:,i), '--', 'Color', color_ref,  'LineWidth', lw); hold on;
-    plot(t, dq(:,i),     '-',  'Color', color_meas, 'LineWidth', lw);
+    plot(t, dq(:,i),     '-',  'Color', color_meas, 'LineWidth', lw); hold on;
+    plot(t, dq_des(:,i), '--', 'Color', color_ref,  'LineWidth', lw);
     xlabel('Tiempo [s]', 'FontSize', fs);
     ylabel(sprintf('$\\dot{q}_%d$ [rad/s]', i), ...
            'Interpreter', 'latex', 'FontSize', fs);
-    title(['Seguimiento de velocidad - ' jointNames{i}], 'FontSize', fs_title);
-    legend({sprintf('$\\dot{q}_{%d,des}$', i), sprintf('$\\dot{q}_{%d,med}$', i)}, ...
+    title([jointNames{i}], 'FontSize', fs_title);
+    legend({sprintf('$\\dot{q}_{%d,med}$', i), sprintf('$\\dot{q}_{%d,des}$', i)}, ...
            'Interpreter', 'latex', 'Location', 'best');
     grid on; box on;
     set(gca, 'FontSize', fs);
@@ -146,7 +147,6 @@ for i = 1:4
     ylabel(sprintf('$\\tau_%d\\;[\\mathrm{N\\cdot m}]$', i), ...
            'Interpreter', 'latex', 'FontSize', fs);
     title(['Torque de control - ' jointNames{i}], 'FontSize', fs_title);
-    legend({sprintf('$\\tau_%d$', i)}, 'Interpreter', 'latex', 'Location', 'best');
     grid on; box on;
     set(gca, 'FontSize', fs);
     xlim(xlims);

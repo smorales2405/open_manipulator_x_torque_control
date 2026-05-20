@@ -85,8 +85,8 @@ h_mea_h = [];
 
 for i = 1:4
     axs1(i) = nexttile(tl1);
-    h1 = plot(t, y_des(:,i), '--', 'Color', c_ref,  'LineWidth', lw); hold on;
-    h2 = plot(t, y(:,i),     '-',  'Color', c_meas, 'LineWidth', lw);
+    h2 = plot(t, y(:,i),     '-',  'Color', c_meas, 'LineWidth', lw); hold on;
+    h1 = plot(t, y_des(:,i), '--', 'Color', c_ref,  'LineWidth', lw);
     if i == 1
         h_ref_h = h1;
         h_mea_h = h2;
@@ -120,6 +120,7 @@ for i = 1:4
     yline(0, ':', 'LineWidth', 0.8);
     xlabel('Tiempo [s]', 'FontSize', fs);
     ylabel(e_labels{i}, 'Interpreter', 'latex', 'FontSize', fs);
+    title(titles_cart{i}, 'FontSize', fs);
     grid on; box on;
     set(gca, 'FontSize', fs);
     xlim(xlims);
@@ -143,8 +144,8 @@ h_mea_v = [];
 
 for i = 1:4
     axs3(i) = nexttile(tl3);
-    h1 = plot(t, ydot_des(:,i), '--', 'Color', c_ref,  'LineWidth', lw); hold on;
-    h2 = plot(t, ydot(:,i),     '-',  'Color', c_meas, 'LineWidth', lw);
+    h2 = plot(t, ydot(:,i),     '-',  'Color', c_meas, 'LineWidth', lw); hold on;
+    h1 = plot(t, ydot_des(:,i), '--', 'Color', c_ref,  'LineWidth', lw);
     if i == 1
         h_ref_v = h1;
         h_mea_v = h2;
