@@ -316,8 +316,8 @@ public:
       model_.nv, EFF_FRAME_NAME, frame_id_);
 
     // ── CSV ──────────────────────────────────────────────────────────────────
-    std::filesystem::create_directories(std::string(PACKAGE_DATA_DIR) + "/real/act2");
-    csv_path_ = std::string(PACKAGE_DATA_DIR) + "/real/act2/hw_io_data_"
+    std::filesystem::create_directories(std::string(PACKAGE_DATA_DIR) + "/lab4/real/act2");
+    csv_path_ = std::string(PACKAGE_DATA_DIR) + "/lab4/real/act2/hw_io_data_"
                 + std::to_string(log_id) + ".csv";
     csv_.open(csv_path_);
     if (csv_.is_open()) {

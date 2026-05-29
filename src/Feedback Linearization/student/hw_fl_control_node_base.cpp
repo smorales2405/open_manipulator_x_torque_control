@@ -1,33 +1,34 @@
 /*
- * hw_io_control_node.cpp
- * Input-Output Linearization cartesiana — OpenMANIPULATOR-X hardware real
- * vía Dynamixel SDK directo, sin ros2_control.
+ * hw_fl_control_node_base.cpp
+ * Plantilla: Controlador Feedback Linearization — OpenMANIPULATOR-X hardware real
+ * via Dynamixel SDK directo.
  *
- * Salida de tarea:  y = [x, y, z, phi]^T
- *   (x,y,z) posición cartesiana del efector final (frame end_effector_link).
- *   phi = q2 + q3 + q4  ángulo de inclinación analítico.
+ * Ley de control a implementar:
+ *   tau = M(q) * v + nle(q, dq)
+ *   v   = ddq_des + Kd*(dq_des - dq) + Kp*(q_des - q)
  *
- * Ley de control:
- *   v     = yddot_des + Kp*(y_des - y) + Kd*(ydot_des - ydot)
- *   qddot = J4^T (J4 J4^T + lambda^2 I)^-1 (v - Jdot*qdot)   [DLS]
- *   tau   = M(q)*qddot + b(q,qdot)
+ * Completar las tres secciones marcadas:
+ *   SECCION 1 — Trayectoria deseada articular  (desiredTrajectory)
+ *   SECCION 2 — Ganancias del controlador      (KP, KD globales)
+ *   SECCION 3 — Ley de control FL              (v, tau en compute_torque)
  *
- * Trayectoria:
- *   Fase [0, T_TRANS):  transición quintica cartesiana y0_capturada → Y_START
- *   Fase [T_TRANS, ∞):  x=0.17+0.05*sin(t'), y=0.05*cos(t'), z=0.27, phi=0.22 rad
+ * Infraestructura proporcionada (NO modificar):
+ *   - Inicializacion Dynamixel SDK: apertura del puerto, modos, SyncRead/SyncWrite
+ *   - Lectura de estado (q, dq, corriente medida) a 100 Hz
+ *   - Calculo de M(q) y nle(q,dq) mediante Pinocchio (en compute_torque)
+ *   - Conversion torque -> corriente (deadzone + compensacion viscosa)
+ *   - Transicion quintica de 5 s desde la posicion inicial hasta el inicio de la trayectoria
+ *   - Verificacion de limites articulares y de corriente medida (parada de emergencia)
+ *   - Publicador /hw/joint_states y escritura de CSV
  *
- * Parámetros ROS 2 (--ros-args -p nombre:=valor):
+ * Parametros ROS 2 (--ros-args -p nombre:=valor):
  *   port_name       [string]  "/dev/ttyUSB0"
- *   gain_scale      [double]  10.0
+ *   gain_scale      [double]  1.0   (escala lineal de Kp; Kd escala con sqrt)
  *   deadzone_ticks  [double]  30.0
- *   viscous_comp    [double]  50.0
- *   t_imp      [double]  20.0  (0 = sin límite)
- *   log_id          [int]     1     (CSV: hw_io_data_<log_id>.csv)
+ *   viscous_comp    [double]  5.0
+ *   t_imp      [double]  20.0  (0 = sin limite)
+ *   log_id          [int]     1
  *
- * Publisher: /hw/joint_states (sensor_msgs/JointState) — monitoreo
- *
- * ADVERTENCIA: No ejecutar junto a hardware.launch.py ni ningún proceso
- * que acceda a /dev/ttyUSB0 (ros2_control_node, dynamixel_hardware_interface).
  */
 
 #include <array>
@@ -44,13 +45,10 @@
 #include "sensor_msgs/msg/joint_state.hpp"
 
 #include <Eigen/Dense>
-#include <Eigen/LU>
 
 #include <pinocchio/fwd.hpp>
 #include <pinocchio/algorithm/crba.hpp>
 #include <pinocchio/algorithm/rnea.hpp>
-#include <pinocchio/algorithm/kinematics.hpp>
-#include <pinocchio/algorithm/frames.hpp>
 #include <pinocchio/parsers/urdf.hpp>
 
 #include "dynamixel_sdk/dynamixel_sdk.h"
@@ -65,10 +63,10 @@
 using namespace std::chrono_literals;
 
 // ============================================================
-// Constantes Dynamixel / conversión de unidades
+// Constantes Dynamixel / conversion de unidades
 // ============================================================
 
-static constexpr double PI = 3.14159265358979323846;
+static constexpr double PI         = 3.14159265358979323846;
 static constexpr int    NUM_JOINTS = 4;
 
 static const std::array<uint8_t, NUM_JOINTS> DXL_ID = {11, 12, 13, 14};
@@ -92,10 +90,10 @@ static constexpr uint8_t CURRENT_CONTROL_MODE = 0;
 static constexpr uint8_t TORQUE_ENABLE_VAL    = 1;
 static constexpr uint8_t TORQUE_DISABLE_VAL   = 0;
 
-static constexpr double POS_UNIT_RAD           = 2.0 * PI / 4096.0;
-static constexpr double VEL_UNIT_RAD_S         = 0.229 * 2.0 * PI / 60.0;
-static constexpr double CURRENT_UNIT_A         = 0.00269;
-static constexpr double TORQUE_CONSTANT_NM_A   = 1.666;
+static constexpr double POS_UNIT_RAD            = 2.0 * PI / 4096.0;
+static constexpr double VEL_UNIT_RAD_S          = 0.229 * 2.0 * PI / 60.0;
+static constexpr double CURRENT_UNIT_A          = 0.00269;
+static constexpr double TORQUE_CONSTANT_NM_A    = 1.666;
 static constexpr double TORQUE_PER_CURRENT_TICK = TORQUE_CONSTANT_NM_A * CURRENT_UNIT_A;
 
 static const std::array<int32_t, NUM_JOINTS> JOINT_ZERO_TICK = {2048, 2048, 2048, 2048};
@@ -114,23 +112,12 @@ static constexpr int16_t  CURRENT_CMD_LIMIT_J123 = 190;
 static constexpr int16_t  CURRENT_CMD_LIMIT_J4   = 152;
 static constexpr int16_t  CURRENT_MEASURED_PEAK  = 220;
 
-// ── Parámetros del controlador IO (idénticos a act_2) ─────────────────────
-static const Eigen::Vector4d KP_Y = {200.0, 80.0, 250.0, 250.0};
-static const Eigen::Vector4d KD_Y = {0.0, 0.0, 0.0, 0.0};
-static constexpr double TAU_MAX   = 1.5;
-static constexpr double LAMBDA    = 0.01;
-static constexpr double LAMBDA_SQ = LAMBDA * LAMBDA;
-
-// Punto de inicio de la trayectoria cartesiana [x, y, z, phi] en t'=0
-static const Eigen::Vector4d Y_START{0.17, 0.05, 0.27, 0.22};
-static constexpr double T_TRANS = 3.0;
-
-static constexpr char EFF_FRAME_NAME[] = "end_effector_link";
+static constexpr double RAMP_TIME_S = 5.0;   // duracion de la transicion inicial [s]
 
 using Vec4 = Eigen::Matrix<double, NUM_JOINTS, 1>;
 
 // ============================================================
-// Utilidades de conversión (idénticas a act_2)
+// Utilidades de conversion
 // ============================================================
 
 static int32_t toSigned32(uint32_t v)
@@ -168,55 +155,104 @@ static int16_t clampCurrent(double x, int16_t lim)
 }
 
 // ============================================================
-// Trayectoria cartesiana (idéntica a act_2)
+// Estructura de referencia articular
 // ============================================================
 
-struct CartRef {
-  Eigen::Vector4d y, ydot, yddot;
-};
+struct Reference { Vec4 q, dq, ddq; };
 
-static CartRef cartesianTrajectory(double t)
+// ═══════════════════════════════════════════════════════════════════════════
+//  SECCION 1 — TRAYECTORIA DESEADA ARTICULAR
+//
+//  Definir ref.q, ref.dq y ref.ddq como funciones del tiempo t
+//
+//  Parametros de entrada:
+//    t   — tiempo transcurrido desde el inicio de la trayectoria [s]
+//
+//  Salida esperada:
+//    ref.q   << q1_des(t), q2_des(t), q3_des(t), q4_des(t);
+//    ref.dq  << dq1_des(t),    dq2_des(t),    dq3_des(t),    dq4_des(t);
+//    ref.ddq << ddq1_des(t),   ddq2_des(t),   ddq3_des(t),   ddq4_des(t);
+//
+//  Nota: esta funcion se llama para t >= RAMP_TIME_S.
+//        Para t < RAMP_TIME_S se aplica la transicion quintica
+//        automaticamente (ver quinticTransition — no modificar).
+// ═══════════════════════════════════════════════════════════════════════════
+
+static Reference desiredTrajectory(double t)
 {
+  Reference ref;
+
+  // -- completar --
+  (void)t;
   const double w = 1.0;
-  CartRef r;
-  r.y    << 0.17 + 0.05*std::sin(w*t),   0.05*std::cos(w*t),  0.27,  0.22;
-  r.ydot <<  0.05*w*std::cos(w*t),       -0.05*w*std::sin(w*t), 0.0,  0.0;
-  r.yddot<< -0.05*w*w*std::sin(w*t),     -0.05*w*w*std::cos(w*t), 0.0, 0.0;
-  return r;
+  (void)w;
+
+  ref.q.setZero();
+  ref.dq.setZero();
+  ref.ddq.setZero();
+  // ────────────────
+
+  return ref;
 }
 
-static CartRef cartesianTransition(double t,
-                                    const Eigen::Vector4d& y0,
-                                    const Eigen::Vector4d& yf,
-                                    double T)
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ── Transicion quintica (NO modificar) ──────────────────────────────────────
+// Genera una trayectoria suave desde q0 hasta el inicio de desiredTrajectory
+// con velocidad y aceleracion nulas en los extremos (condiciones de frontera).
+static Reference quinticTransition(double t, double T, const Vec4& q0)
 {
-  const double tau  = std::min(1.0, t / T);
-  const double tau2 = tau*tau, tau3=tau2*tau, tau4=tau3*tau, tau5=tau4*tau;
-  const double s    =  10*tau3 - 15*tau4 +  6*tau5;
-  const double sd   = (30*tau2 - 60*tau3 + 30*tau4) / T;
-  const double sdd  = (60*tau  - 180*tau2 + 120*tau3) / (T*T);
-  const Eigen::Vector4d delta = yf - y0;
-  CartRef r;
-  r.y     = y0 + s   * delta;
-  r.ydot  =      sd  * delta;
-  r.yddot =      sdd * delta;
-  return r;
+  const Reference target = desiredTrajectory(T);
+  if (T <= 0.0) return target;
+
+  const Vec4 v0 = Vec4::Zero();
+  const Vec4 a0 = Vec4::Zero();
+  const Vec4 qf = target.q, vf = target.dq, af = target.ddq;
+
+  const double T2=T*T, T3=T2*T, T4=T3*T, T5=T4*T;
+  const Vec4 c0 = q0;
+  const Vec4 c1 = v0;
+  const Vec4 c2 = 0.5 * a0;
+  const Vec4 c3 = (20.0*(qf-q0) - (8.0*vf+12.0*v0)*T - (3.0*a0-af)*T2) / (2.0*T3);
+  const Vec4 c4 = (30.0*(q0-qf) + (14.0*vf+16.0*v0)*T + (3.0*a0-2.0*af)*T2) / (2.0*T4);
+  const Vec4 c5 = (12.0*(qf-q0) - (6.0*vf+6.0*v0)*T - (a0-af)*T2) / (2.0*T5);
+
+  const double t2=t*t, t3=t2*t, t4=t3*t, t5=t4*t;
+  Reference ref;
+  ref.q   = c0 + c1*t   + c2*t2   + c3*t3   + c4*t4   + c5*t5;
+  ref.dq  = c1 + 2.0*c2*t + 3.0*c3*t2 + 4.0*c4*t3 + 5.0*c5*t4;
+  ref.ddq = 2.0*c2 + 6.0*c3*t + 12.0*c4*t2 + 20.0*c5*t3;
+  return ref;
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  SECCION 2 — GANANCIAS DEL CONTROLADOR
+//
+//  Definir KP y KD para cada articulacion: [j1, j2, j3, j4]
+//    KP — ganancias proporcionales  [adim]
+//    KD — ganancias derivativas     [adim]
+//
+//  gain_scale_ escala KP linealmente y KD con su raiz cuadrada
+// ═══════════════════════════════════════════════════════════════════════════
+static const Eigen::Vector4d KP = {0.0 /* kp1 */, 0.0 /* kp2 */, 0.0 /* kp3 */, 0.0 /* kp4 */};   // COMPLETAR
+static const Eigen::Vector4d KD = {0.0 /* kd1 */, 0.0 /* kd2 */, 0.0 /* kd3 */, 0.0 /* kd4 */};   // COMPLETAR
+static constexpr double TAU_MAX = 0.0;                                               // COMPLETAR  [N·m]
+// ═══════════════════════════════════════════════════════════════════════════
 
 // ============================================================
 // Nodo ROS 2
 // ============================================================
 
-class HWIOControlNode : public rclcpp::Node
+class HWFLControlNode : public rclcpp::Node
 {
 public:
-  HWIOControlNode()
-  : Node("hw_io_control_node"),
-    hw_active_(false), y0_initialized_(false)
+  HWFLControlNode()
+  : Node("hw_fl_control_node"),
+    hw_active_(false), q_initial_captured_(false)
   {
-    // ── Parámetros ──────────────────────────────────────────────────────────
+    // ── Parametros ──────────────────────────────────────────────────────────
     this->declare_parameter<std::string>("port_name",     "/dev/ttyUSB0");
-    this->declare_parameter<double>     ("gain_scale",     10.0);
+    this->declare_parameter<double>     ("gain_scale",     1.0);
     this->declare_parameter<double>     ("deadzone_ticks", 30.0);
     this->declare_parameter<double>     ("viscous_comp",   5.0);
     this->declare_parameter<double>     ("t_imp",     20.0);
@@ -232,11 +268,6 @@ public:
     RCLCPP_INFO(get_logger(),
       "puerto=%s  gain=%.2f  dz=%.1f  visc=%.2f  dur=%.1fs  id=%d",
       port_name_.c_str(), gain_scale_, deadzone_ticks_, viscous_comp_, t_imp_, log_id);
-    RCLCPP_INFO(get_logger(),
-      "Kp_y=[%.1f %.1f %.1f %.1f]  Kd_y=[%.1f %.1f %.1f %.1f]  lambda=%.3f  tau_max=%.2f",
-      KP_Y[0], KP_Y[1], KP_Y[2], KP_Y[3],
-      KD_Y[0], KD_Y[1], KD_Y[2], KD_Y[3],
-      LAMBDA, TAU_MAX);
 
     // ── Pinocchio ────────────────────────────────────────────────────────────
     const std::string urdf = std::string(PACKAGE_URDF_DIR) + "/openmani.urdf";
@@ -247,28 +278,19 @@ public:
       throw;
     }
     data_ = pinocchio::Data(model_);
-
-    if (!model_.existFrame(EFF_FRAME_NAME)) {
-      RCLCPP_FATAL(get_logger(), "Frame '%s' no encontrado en URDF", EFF_FRAME_NAME);
-      throw std::runtime_error("Frame not found");
-    }
-    frame_id_ = model_.getFrameId(EFF_FRAME_NAME);
-    RCLCPP_INFO(get_logger(), "Pinocchio: nv=%d  frame='%s' (id=%lu)",
-      model_.nv, EFF_FRAME_NAME, frame_id_);
+    RCLCPP_INFO(get_logger(), "Pinocchio: nv=%d", model_.nv);
 
     // ── CSV ──────────────────────────────────────────────────────────────────
-    std::filesystem::create_directories(std::string(PACKAGE_DATA_DIR) + "/real/act2");
-    csv_path_ = std::string(PACKAGE_DATA_DIR) + "/real/act2/hw_io_data_"
+    std::filesystem::create_directories(std::string(PACKAGE_DATA_DIR) + "/lab4/real/act1");
+    csv_path_ = std::string(PACKAGE_DATA_DIR) + "/lab4/real/act1/hw_fl_data_"
                 + std::to_string(log_id) + ".csv";
     csv_.open(csv_path_);
     if (csv_.is_open()) {
-      csv_ << "t,q1,q2,q3,q4,"
-              "x,y,z,phi,x_des,y_des,z_des,phi_des,"
-              "xdot,ydot,zdot,phidot,xdot_des,ydot_des,zdot_des,phidot_des,"
+      csv_ << "t,q1,q2,q3,q4,dq1,dq2,dq3,dq4,"
+              "q1_des,q2_des,q3_des,q4_des,dq1_des,dq2_des,dq3_des,dq4_des,"
               "tau1,tau2,tau3,tau4,"
               "curr_cmd1,curr_cmd2,curr_cmd3,curr_cmd4,"
-              "curr_meas1,curr_meas2,curr_meas3,curr_meas4,"
-              "det_J4\n";
+              "curr_meas1,curr_meas2,curr_meas3,curr_meas4\n";
       RCLCPP_INFO(get_logger(), "CSV: %s", csv_path_.c_str());
     } else {
       RCLCPP_WARN(get_logger(), "No se pudo crear CSV: %s", csv_path_.c_str());
@@ -286,10 +308,10 @@ public:
     // ── Timer 100 Hz ─────────────────────────────────────────────────────────
     start_time_ = std::chrono::high_resolution_clock::now();
     timer_ = this->create_wall_timer(10ms, [this]() { tick(); });
-    RCLCPP_INFO(get_logger(), "Control IO activo a 100 Hz. Ctrl+C para detener.");
+    RCLCPP_INFO(get_logger(), "Control activo a 100 Hz. Ctrl+C para detener.");
   }
 
-  ~HWIOControlNode()
+  ~HWFLControlNode()
   {
     if (timer_) timer_->cancel();
     shutdown_hardware();
@@ -392,7 +414,7 @@ private:
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  //  Lectura / escritura SDK
+  //  Lectura de estado
   // ─────────────────────────────────────────────────────────────────────────
 
   bool read_state(Vec4& q, Vec4& dq, std::array<int16_t, NUM_JOINTS>& cur)
@@ -425,6 +447,10 @@ private:
     return true;
   }
 
+  // ─────────────────────────────────────────────────────────────────────────
+  //  Escritura de corriente
+  // ─────────────────────────────────────────────────────────────────────────
+
   bool send_currents(const std::array<int16_t, NUM_JOINTS>& cmd)
   {
     uint8_t p[NUM_JOINTS][2];
@@ -442,13 +468,62 @@ private:
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  //  Conversión torque → corriente (idéntica a act_2)
+  //  Ley de control FL
+  // ─────────────────────────────────────────────────────────────────────────
+
+  Vec4 compute_torque(const Vec4& q, const Vec4& dq, const Reference& ref)
+  {
+    // Aplicar escala de ganancia (gain_scale_)
+    const Vec4 kp = KP * gain_scale_;
+    const Vec4 kd = KD * std::sqrt(std::max(gain_scale_, 0.0));
+
+    // Dinamica M(q) y nle(q, dq) via Pinocchio
+    Eigen::VectorXd q_pin   = Eigen::VectorXd::Zero(model_.nv);
+    Eigen::VectorXd dq_pin  = Eigen::VectorXd::Zero(model_.nv);
+    q_pin.head(NUM_JOINTS)  = q;
+    dq_pin.head(NUM_JOINTS) = dq;
+
+    pinocchio::crba(model_, data_, q_pin);
+    data_.M.triangularView<Eigen::StrictlyLower>() =
+      data_.M.triangularView<Eigen::StrictlyUpper>().transpose();
+    pinocchio::nonLinearEffects(model_, data_, q_pin, dq_pin);
+
+    const Eigen::Matrix4d M4   = data_.M.topLeftCorner<NUM_JOINTS, NUM_JOINTS>();
+    const Eigen::Vector4d nle4 = data_.nle.head<NUM_JOINTS>();
+
+    // ═══════════════════════════════════════════════════════════════════════
+    //  SECCION 3 — LEY DE CONTROL (Feedback Linearization)
+    //
+    //  Disponible:
+    //    q, dq                  — posicion y velocidad articular medidas
+    //    ref.q, ref.dq, ref.ddq — referencia y sus derivadas analiticas
+    //    M4   (4×4)             — matriz de masa inercial  M(q)
+    //    nle4 (4×1)             — efectos no lineales      nle(q, dq)
+    //    kp, kd                 — ganancias escaladas
+    //
+    //  Ley de control:
+    //    e   = ref.q  - q              (error de posicion)
+    //    de  = ref.dq - dq             (error de velocidad)
+    //    v   = ref.ddq + kp.*e + kd.*de  (entrada auxiliar)
+    //    tau = M4 * v + nle4           (torque de control)
+    //
+    //  Resultado: retornar tau (Vec4)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    // -- completar --
+    (void)M4; (void)nle4; (void)kp; (void)kd;
+    return Vec4::Zero();  // reemplazar con tau calculado
+    // ════════════════
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  //  Conversion torque -> corriente (deadzone + compensacion viscosa)
   // ─────────────────────────────────────────────────────────────────────────
 
   std::array<int16_t, NUM_JOINTS> torque_to_current(const Vec4& tau, const Vec4& dq)
   {
-    static const std::array<double,  NUM_JOINTS> dz_gain  = {0.8, 0.9, 0.9, 1.0};
-    static const std::array<int16_t, NUM_JOINTS> cur_lim  = {
+    static const std::array<double,  NUM_JOINTS> dz_gain = {0.8, 0.9, 0.9, 1.0};
+    static const std::array<int16_t, NUM_JOINTS> cur_lim = {
       CURRENT_CMD_LIMIT_J123, CURRENT_CMD_LIMIT_J123, CURRENT_CMD_LIMIT_J123, CURRENT_CMD_LIMIT_J4
     };
     std::array<int16_t, NUM_JOINTS> cmd{};
@@ -460,86 +535,6 @@ private:
       cmd[i] = clampCurrent(c, cur_lim[i]);
     }
     return cmd;
-  }
-
-  // ─────────────────────────────────────────────────────────────────────────
-  //  Ley de control IO (idéntica a act_2)
-  // ─────────────────────────────────────────────────────────────────────────
-
-  struct IOOut {
-    Vec4            tau;
-    Eigen::Vector4d y_actual, ydot_actual, ydot_des;
-    double          det_J4;
-  };
-
-  IOOut compute_io_control(const Vec4& q, const Vec4& dq, const CartRef& ref)
-  {
-    Eigen::VectorXd q_pin  = Eigen::VectorXd::Zero(model_.nv);
-    Eigen::VectorXd dq_pin = Eigen::VectorXd::Zero(model_.nv);
-    q_pin.head(NUM_JOINTS)  = q;
-    dq_pin.head(NUM_JOINTS) = dq;
-
-    // FK + Jacobiano 6×nv
-    Eigen::MatrixXd J6 = Eigen::MatrixXd::Zero(6, model_.nv);
-    pinocchio::computeFrameJacobian(model_, data_, q_pin, frame_id_,
-                                     pinocchio::LOCAL_WORLD_ALIGNED, J6);
-
-    const Eigen::Vector3d p   = data_.oMf[frame_id_].translation();
-    const double phi          = q[1] + q[2] + q[3];
-
-    // Jacobiano de tarea 4×4
-    Eigen::Matrix4d J4;
-    J4.row(0) = J6.row(0).head<NUM_JOINTS>();
-    J4.row(1) = J6.row(1).head<NUM_JOINTS>();
-    J4.row(2) = J6.row(2).head<NUM_JOINTS>();
-    J4.row(3) << 0.0, 1.0, 1.0, 1.0;
-
-    const Eigen::Vector4d ydot = J4 * dq;
-
-    // Término de bias  Jdot*qdot  (FK con qddot=0)
-    pinocchio::forwardKinematics(model_, data_, q_pin, dq_pin,
-                                  Eigen::VectorXd::Zero(model_.nv));
-    const pinocchio::Motion bias =
-      pinocchio::getFrameClassicalAcceleration(model_, data_, frame_id_,
-                                                pinocchio::LOCAL_WORLD_ALIGNED);
-    Eigen::Vector4d jdqd;
-    jdqd << bias.linear()[0], bias.linear()[1], bias.linear()[2], 0.0;
-
-    // Dinámica M(q) y b(q,qdot)
-    pinocchio::crba(model_, data_, q_pin);
-    data_.M.triangularView<Eigen::StrictlyLower>() =
-      data_.M.triangularView<Eigen::StrictlyUpper>().transpose();
-    pinocchio::nonLinearEffects(model_, data_, q_pin, dq_pin);
-
-    const Eigen::Matrix4d M4   = data_.M.topLeftCorner<NUM_JOINTS, NUM_JOINTS>();
-    const Eigen::Vector4d nle4 = data_.nle.head<NUM_JOINTS>();
-
-    // Errores
-    const Eigen::Vector4d y_actual{p[0], p[1], p[2], phi};
-    const Eigen::Vector4d ey    = ref.y    - y_actual;
-    const Eigen::Vector4d eydot = ref.ydot - ydot;
-
-    const Eigen::Vector4d kp_y = KP_Y * gain_scale_;
-    const Eigen::Vector4d kd_y = KD_Y * std::sqrt(std::max(gain_scale_, 0.0));
-
-    // Entrada auxiliar
-    const Eigen::Vector4d v = ref.yddot + kp_y.asDiagonal()*ey + kd_y.asDiagonal()*eydot;
-
-    // Pseudo-inversa DLS
-    const Eigen::Matrix4d A = J4*J4.transpose() + LAMBDA_SQ*Eigen::Matrix4d::Identity();
-    const Eigen::Vector4d qddot = J4.transpose() * A.ldlt().solve(v - jdqd);
-
-    // Torque con saturación
-    const Eigen::Vector4d tau_unsat = M4*qddot + nle4;
-    const Eigen::Vector4d tau_sat   = tau_unsat.cwiseMin(TAU_MAX).cwiseMax(-TAU_MAX);
-
-    IOOut out;
-    out.tau        = tau_sat;
-    out.y_actual   = y_actual;
-    out.ydot_actual = ydot;
-    out.ydot_des   = ref.ydot;
-    out.det_J4     = J4.determinant();
-    return out;
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -563,11 +558,11 @@ private:
   {
     if (!hw_active_) return;
 
-    const auto tp  = std::chrono::high_resolution_clock::now();
-    const double t = std::chrono::duration<double>(tp - start_time_).count();
+    const auto   tp = std::chrono::high_resolution_clock::now();
+    const double t  = std::chrono::duration<double>(tp - start_time_).count();
 
     if (t_imp_ > 0.0 && t >= t_imp_) {
-      RCLCPP_INFO(get_logger(), "Duración completada (%.1f s).", t_imp_);
+      RCLCPP_INFO(get_logger(), "Duracion completada (%.1f s).", t_imp_);
       timer_->cancel();
       shutdown_hardware();
       if (csv_.is_open()) { csv_.flush(); csv_.close(); }
@@ -583,61 +578,47 @@ private:
       return;
     }
 
-    Eigen::VectorXd q_pin  = Eigen::VectorXd::Zero(model_.nv);
-    Eigen::VectorXd dq_pin = Eigen::VectorXd::Zero(model_.nv);
-    q_pin.head(NUM_JOINTS)  = q;
-    dq_pin.head(NUM_JOINTS) = dq;
-
-    // 2. Capturar pose cartesiana inicial (primer tick)
-    if (!y0_initialized_) {
-      pinocchio::forwardKinematics(model_, data_, q_pin);
-      pinocchio::updateFramePlacement(model_, data_, frame_id_);
-      const Eigen::Vector3d p0 = data_.oMf[frame_id_].translation();
-      const double phi0        = q[1] + q[2] + q[3];
-      y0_ = Eigen::Vector4d{p0[0], p0[1], p0[2], phi0};
-      y0_initialized_ = true;
-      RCLCPP_INFO(get_logger(),
-        "y_inicial=[%.3f %.3f %.3f %.3f]  Y_START=[%.3f %.3f %.3f %.3f]",
-        y0_[0], y0_[1], y0_[2], y0_[3],
-        Y_START[0], Y_START[1], Y_START[2], Y_START[3]);
+    // 2. Captura posicion inicial (primer tick)
+    if (!q_initial_captured_) {
+      q_initial_         = q;
+      q_initial_captured_ = true;
+      RCLCPP_INFO(get_logger(), "q_inicial=[%.3f %.3f %.3f %.3f] rad",
+        q(0), q(1), q(2), q(3));
     }
 
-    // 3. Verificar límites articulares del estado real
+    // 3. Referencia (transicion quintica + trayectoria deseada centrada en q_initial_)
+    const Reference ref = (t < RAMP_TIME_S)
+      ? quinticTransition(t, RAMP_TIME_S, q_initial_)
+      : desiredTrajectory(t);
+
+    // 4. Verificar limites de la referencia
     for (int i = 0; i < NUM_JOINTS; ++i) {
-      if (q(i) < JOINT_LOWER[i] || q(i) > JOINT_UPPER[i]) {
-        emergency_stop("Articulacion " + std::to_string(i+1) + " fuera de limites: "
-                       + std::to_string(q(i)) + " rad");
+      if (ref.q(i) < JOINT_LOWER[i] + 0.02 || ref.q(i) > JOINT_UPPER[i] - 0.02) {
+        emergency_stop("Referencia fuera de limites articulares");
         return;
       }
     }
 
-    // 4. Referencia cartesiana
-    const CartRef ref = (t < T_TRANS)
-      ? cartesianTransition(t, y0_, Y_START, T_TRANS)
-      : cartesianTrajectory(t - T_TRANS);
+    // 5. Ley de control
+    const Vec4 tau     = compute_torque(q, dq, ref);
+    const auto cur_cmd = torque_to_current(tau, dq);
 
-    // 5. Ley de control IO
-    const IOOut ctrl = compute_io_control(q, dq, ref);
-
-    // 6. Conversión torque → corriente
-    const auto cur_cmd = torque_to_current(ctrl.tau, dq);
-
-    // 7. Escribir corriente
+    // 6. Escribir corriente
     if (!send_currents(cur_cmd)) {
       emergency_stop("SyncWrite fallido");
       return;
     }
 
-    // 8. Verificar corriente medida
+    // 7. Verificar corriente medida (seguridad)
     for (int i = 0; i < NUM_JOINTS; ++i) {
       if (std::abs(cur_meas[i]) > CURRENT_MEASURED_PEAK) {
-        emergency_stop("Corriente insegura J" + std::to_string(i+1)
+        emergency_stop("Corriente medida insegura en J" + std::to_string(i + 1)
                        + ": " + std::to_string(cur_meas[i]) + " ticks");
         return;
       }
     }
 
-    // 9. Publicar JointState de monitoreo
+    // 8. Publicar JointState de monitoreo
     {
       sensor_msgs::msg::JointState js;
       js.header.stamp = this->now();
@@ -653,39 +634,26 @@ private:
       js_pub_->publish(js);
     }
 
-    // 10. CSV
+    // 9. CSV
     if (csv_.is_open()) {
-      const char* phase = (t < T_TRANS) ? "TRANS" : "TRAJ";
-      (void)phase;
-      csv_ << std::fixed << std::setprecision(6)
-           << t
-           << ',' << q(0) << ',' << q(1) << ',' << q(2) << ',' << q(3)
-           << ',' << ctrl.y_actual[0] << ',' << ctrl.y_actual[1]
-           << ',' << ctrl.y_actual[2] << ',' << ctrl.y_actual[3]
-           << ',' << ref.y[0] << ',' << ref.y[1] << ',' << ref.y[2] << ',' << ref.y[3]
-           << ',' << ctrl.ydot_actual[0] << ',' << ctrl.ydot_actual[1]
-           << ',' << ctrl.ydot_actual[2] << ',' << ctrl.ydot_actual[3]
-           << ',' << ctrl.ydot_des[0] << ',' << ctrl.ydot_des[1]
-           << ',' << ctrl.ydot_des[2] << ',' << ctrl.ydot_des[3]
-           << ',' << ctrl.tau[0] << ',' << ctrl.tau[1]
-           << ',' << ctrl.tau[2] << ',' << ctrl.tau[3]
-           << ',' << cur_cmd[0] << ',' << cur_cmd[1]
-           << ',' << cur_cmd[2] << ',' << cur_cmd[3]
-           << ',' << cur_meas[0] << ',' << cur_meas[1]
-           << ',' << cur_meas[2] << ',' << cur_meas[3]
-           << ',' << ctrl.det_J4
+      csv_ << std::fixed << std::setprecision(6) << t
+           << ',' << q(0)        << ',' << q(1)        << ',' << q(2)        << ',' << q(3)
+           << ',' << dq(0)       << ',' << dq(1)       << ',' << dq(2)       << ',' << dq(3)
+           << ',' << ref.q(0)    << ',' << ref.q(1)    << ',' << ref.q(2)    << ',' << ref.q(3)
+           << ',' << ref.dq(0)   << ',' << ref.dq(1)   << ',' << ref.dq(2)   << ',' << ref.dq(3)
+           << ',' << tau(0)      << ',' << tau(1)       << ',' << tau(2)      << ',' << tau(3)
+           << ',' << cur_cmd[0]  << ',' << cur_cmd[1]   << ',' << cur_cmd[2]  << ',' << cur_cmd[3]
+           << ',' << cur_meas[0] << ',' << cur_meas[1]  << ',' << cur_meas[2] << ',' << cur_meas[3]
            << '\n';
     }
 
-    // 11. Log periódico
+    // 10. Log periodico por consola
     if (++log_cnt_ % 100 == 0) {
       if (csv_.is_open()) csv_.flush();
-      const char* phase = (t < T_TRANS) ? "TRANS" : "TRAJ ";
       RCLCPP_INFO(get_logger(),
-        "[%s] t=%.2fs  y=[%.3f %.3f %.3f %.3f]  |ey|=%.4f  detJ=%.4f",
-        phase, t,
-        ctrl.y_actual[0], ctrl.y_actual[1], ctrl.y_actual[2], ctrl.y_actual[3],
-        (ref.y - ctrl.y_actual).norm(), ctrl.det_J4);
+        "t=%.2fs  q=[%.3f %.3f %.3f %.3f]  |e|=%.4f  i=[%d %d %d %d]",
+        t, q(0), q(1), q(2), q(3), (q - ref.q).norm(),
+        cur_cmd[0], cur_cmd[1], cur_cmd[2], cur_cmd[3]);
     }
   }
 
@@ -693,9 +661,8 @@ private:
   //  Miembros
   // ─────────────────────────────────────────────────────────────────────────
 
-  pinocchio::Model      model_;
-  pinocchio::Data       data_;
-  pinocchio::FrameIndex frame_id_;
+  pinocchio::Model model_;
+  pinocchio::Data  data_;
 
   std::string port_name_;
   double gain_scale_, deadzone_ticks_, viscous_comp_, t_imp_;
@@ -706,9 +673,8 @@ private:
   std::unique_ptr<dynamixel::GroupSyncWrite> grp_wcur_;
 
   bool hw_active_;
-  bool y0_initialized_;
-  Eigen::Vector4d y0_;
-
+  bool q_initial_captured_;
+  Vec4 q_initial_;
   std::chrono::high_resolution_clock::time_point start_time_;
   int log_cnt_{0};
 
@@ -727,9 +693,9 @@ int main(int argc, char* argv[])
 {
   rclcpp::init(argc, argv);
   try {
-    rclcpp::spin(std::make_shared<HWIOControlNode>());
+    rclcpp::spin(std::make_shared<HWFLControlNode>());
   } catch (const std::exception& e) {
-    RCLCPP_FATAL(rclcpp::get_logger("hw_io_control_node"), "Excepcion: %s", e.what());
+    RCLCPP_FATAL(rclcpp::get_logger("hw_fl_control_node"), "Excepcion: %s", e.what());
     rclcpp::shutdown();
     return 1;
   }

@@ -16,8 +16,12 @@ find_package(Eigen3 REQUIRED NO_MODULE)
 find_package(pinocchio REQUIRED)
 find_package(dynamixel_sdk REQUIRED)
 
+set(FL_INSTR "src/Feedback Linearization/instructor")
+set(FL_STUD  "src/Feedback Linearization/student")
+set(TO_INSTR "src/Trajectory Optimization TV-LQR/instructor")
+
 # ── gz_fl_control_node ───────────────────────────────────────────────────────
-add_executable(gz_fl_control_node src/gz_fl_control_node.cpp)
+add_executable(gz_fl_control_node "${FL_INSTR}/gz_fl_control_node.cpp")
 ament_target_dependencies(gz_fl_control_node rclcpp std_msgs sensor_msgs)
 target_link_libraries(gz_fl_control_node
   pinocchio::pinocchio_default
@@ -30,7 +34,7 @@ target_compile_definitions(gz_fl_control_node PRIVATE
   COAL_DISABLE_HPP_FCL_WARNINGS)
 
 # ── gz_io_control_node ───────────────────────────────────────────────────────
-add_executable(gz_io_control_node src/gz_io_control_node.cpp)
+add_executable(gz_io_control_node "${FL_INSTR}/gz_io_control_node.cpp")
 ament_target_dependencies(gz_io_control_node rclcpp std_msgs sensor_msgs)
 target_link_libraries(gz_io_control_node
   pinocchio::pinocchio_default
@@ -43,7 +47,7 @@ target_compile_definitions(gz_io_control_node PRIVATE
   COAL_DISABLE_HPP_FCL_WARNINGS)
 
 # ── hw_fl_control_node ───────────────────────────────────────────────────────
-add_executable(hw_fl_control_node src/hw_fl_control_node.cpp)
+add_executable(hw_fl_control_node "${FL_INSTR}/hw_fl_control_node.cpp")
 ament_target_dependencies(hw_fl_control_node rclcpp sensor_msgs)
 target_include_directories(hw_fl_control_node PRIVATE ${dynamixel_sdk_INCLUDE_DIRS})
 target_link_libraries(hw_fl_control_node
@@ -58,7 +62,7 @@ target_compile_definitions(hw_fl_control_node PRIVATE
   COAL_DISABLE_HPP_FCL_WARNINGS)
 
 # ── hw_io_control_node ───────────────────────────────────────────────────────
-add_executable(hw_io_control_node src/hw_io_control_node.cpp)
+add_executable(hw_io_control_node "${FL_INSTR}/hw_io_control_node.cpp")
 ament_target_dependencies(hw_io_control_node rclcpp sensor_msgs)
 target_include_directories(hw_io_control_node PRIVATE ${dynamixel_sdk_INCLUDE_DIRS})
 target_link_libraries(hw_io_control_node
@@ -73,7 +77,7 @@ target_compile_definitions(hw_io_control_node PRIVATE
   COAL_DISABLE_HPP_FCL_WARNINGS)
 
 # ── gz_fl_control_node_base ──────────────────────────────────────────────────
-add_executable(gz_fl_control_node_base src/gz_fl_control_node_base.cpp)
+add_executable(gz_fl_control_node_base "${FL_STUD}/gz_fl_control_node_base.cpp")
 ament_target_dependencies(gz_fl_control_node_base rclcpp std_msgs sensor_msgs)
 target_link_libraries(gz_fl_control_node_base
   pinocchio::pinocchio_default
@@ -86,7 +90,7 @@ target_compile_definitions(gz_fl_control_node_base PRIVATE
   COAL_DISABLE_HPP_FCL_WARNINGS)
 
 # ── gz_io_control_node_base ──────────────────────────────────────────────────
-add_executable(gz_io_control_node_base src/gz_io_control_node_base.cpp)
+add_executable(gz_io_control_node_base "${FL_STUD}/gz_io_control_node_base.cpp")
 ament_target_dependencies(gz_io_control_node_base rclcpp std_msgs sensor_msgs)
 target_link_libraries(gz_io_control_node_base
   pinocchio::pinocchio_default
@@ -99,7 +103,7 @@ target_compile_definitions(gz_io_control_node_base PRIVATE
   COAL_DISABLE_HPP_FCL_WARNINGS)
 
 # ── hw_fl_control_node_base ──────────────────────────────────────────────────
-add_executable(hw_fl_control_node_base src/hw_fl_control_node_base.cpp)
+add_executable(hw_fl_control_node_base "${FL_STUD}/hw_fl_control_node_base.cpp")
 ament_target_dependencies(hw_fl_control_node_base rclcpp sensor_msgs)
 target_include_directories(hw_fl_control_node_base PRIVATE ${dynamixel_sdk_INCLUDE_DIRS})
 target_link_libraries(hw_fl_control_node_base
@@ -114,7 +118,7 @@ target_compile_definitions(hw_fl_control_node_base PRIVATE
   COAL_DISABLE_HPP_FCL_WARNINGS)
 
 # ── hw_io_control_node_base ──────────────────────────────────────────────────
-add_executable(hw_io_control_node_base src/hw_io_control_node_base.cpp)
+add_executable(hw_io_control_node_base "${FL_STUD}/hw_io_control_node_base.cpp")
 ament_target_dependencies(hw_io_control_node_base rclcpp sensor_msgs)
 target_include_directories(hw_io_control_node_base PRIVATE ${dynamixel_sdk_INCLUDE_DIRS})
 target_link_libraries(hw_io_control_node_base
@@ -128,12 +132,35 @@ target_compile_definitions(hw_io_control_node_base PRIVATE
   "PACKAGE_URDF_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/urdf\""
   COAL_DISABLE_HPP_FCL_WARNINGS)
 
+# ── gz_tvlqr_node ────────────────────────────────────────────────────────────
+add_executable(gz_tvlqr_node "${TO_INSTR}/gz_tvlqr_node.cpp")
+ament_target_dependencies(gz_tvlqr_node rclcpp std_msgs sensor_msgs)
+target_link_libraries(gz_tvlqr_node Eigen3::Eigen)
+target_compile_features(gz_tvlqr_node PUBLIC cxx_std_17)
+target_compile_definitions(gz_tvlqr_node PRIVATE
+  "PACKAGE_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\""
+  "PACKAGE_SHARE_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}\"")
+
+# ── hw_tvlqr_node ────────────────────────────────────────────────────────────
+add_executable(hw_tvlqr_node "${TO_INSTR}/hw_tvlqr_node.cpp")
+ament_target_dependencies(hw_tvlqr_node rclcpp sensor_msgs)
+target_include_directories(hw_tvlqr_node PRIVATE ${dynamixel_sdk_INCLUDE_DIRS})
+target_link_libraries(hw_tvlqr_node
+  ${dynamixel_sdk_LIBRARIES}
+  Eigen3::Eigen)
+target_compile_features(hw_tvlqr_node PUBLIC cxx_std_17)
+target_compile_definitions(hw_tvlqr_node PRIVATE
+  "PACKAGE_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\""
+  "PACKAGE_SHARE_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}\"")
+
 # ── Install ──────────────────────────────────────────────────────────────────
 install(TARGETS
     gz_fl_control_node gz_io_control_node
     hw_fl_control_node hw_io_control_node
     gz_fl_control_node_base gz_io_control_node_base
     hw_fl_control_node_base hw_io_control_node_base
+    gz_tvlqr_node
+    hw_tvlqr_node
   DESTINATION lib/${PROJECT_NAME})
 
 install(DIRECTORY xacro config launch scripts data urdf meshes worlds
