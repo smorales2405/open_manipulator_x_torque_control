@@ -7,8 +7,15 @@
 -->
 <robot name="open_manipulator_x" xmlns:xacro="http://ros.org/wiki/xacro">
 
-  <xacro:arg name="prefix"  default="" />
-  <xacro:arg name="use_sim" default="true" />
+  <xacro:arg name="prefix"         default="" />
+  <xacro:arg name="use_sim"        default="true" />
+
+  <!-- Posicion inicial: leida desde config/sim_init_config.yaml via launch file -->
+  <xacro:arg name="use_fixed_init" default="false" />
+  <xacro:arg name="q1_init"        default="0.0" />
+  <xacro:arg name="q2_init"        default="0.0" />
+  <xacro:arg name="q3_init"        default="0.0" />
+  <xacro:arg name="q4_init"        default="0.0" />
 
   <!-- Recursos graficos: colores Rviz y materiales Gazebo del paquete original -->
   <xacro:include filename="$(find open_manipulator_x_description)/gazebo/materials.xacro" />
@@ -31,7 +38,12 @@
   <!-- Instanciar hardware interface de esfuerzo -->
   <xacro:open_manipulator_x_effort_system
     name="OpenManipulatorXEffort"
-    prefix="$(arg prefix)" />
+    prefix="$(arg prefix)"
+    use_fixed_init="$(arg use_fixed_init)"
+    q1_init="$(arg q1_init)"
+    q2_init="$(arg q2_init)"
+    q3_init="$(arg q3_init)"
+    q4_init="$(arg q4_init)" />
 
   <!-- Plugin gz_ros2_control para Gazebo Fortress apunta al YAML de controladores -->
   <gazebo>

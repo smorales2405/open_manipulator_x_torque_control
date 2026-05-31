@@ -25,10 +25,10 @@ Ts = 0.05;
 nx = 8;
 nu = 4;
 
-x0 = [pi/2; 0; pi/6; pi/3; 0; 0; 0; 0];
+x0 = [0.0; 0; pi/6; pi/3; 0; 0; 0; 0];
 yf = [0.16; 0.08; 0.10; pi/2];
 
-zmin_file = 'zmin.mat';
+zmin_file = 'zmin2.mat';
 ref_dir   = '../references';
 
 %% ========================================================================
@@ -59,8 +59,12 @@ assert(numel(zmin) == nx*N + nu*N, ...
 
 exitflag = NaN;
 if isfield(data, 'exitflag'), exitflag = data.exitflag; end
-assert(~isnan(exitflag) && exitflag >= 1, ...
-    'exitflag = %g: solucion no factible. Revisar PreLab5_Sol_Final.m.', exitflag);
+if isnan(exitflag) || exitflag < 0
+    error('exitflag = %g: solucion completamente fallida (infactible). Revisar PreLab5_Sol_Final.m.', exitflag);
+elseif exitflag == 0
+    warning(['exitflag = 0: el solver agoto las iteraciones. La solucion puede ser suboptima.\n' ...
+             'Se procedera con la ultima iteracion guardada en zmin.mat.']);
+end
 fprintf('zmin.mat cargado. exitflag = %g\n', exitflag);
 
 %% ========================================================================
@@ -127,36 +131,33 @@ for k = 1:N
 end
 
 %% ========================================================================
-%  6. Calculo de ganancias TV-LQR
+%  6. Calculo de ganancias TV-LQR (Riccati discreto ZOH)
 %  ========================================================================
-fprintf('Calculando K_TV (Riccati hacia atras)...\n');
+fprintf('Calculando K_TV (Riccati discreto ZOH)...\n');
 Qk = diag([100; 100; 100; 100; 1; 1; 1; 1]);
-Rk = 40*eye(nu);
+Rk = 100*eye(nu);
 Qf = Qk;
 
-Pk   = zeros(nx, nx, N);
 K_TV = zeros(nu, nx, N);
 
-Pk(:,:,N) = sqrtm(0.05*Qf);
-Sk_N = Pk(:,:,N)*Pk(:,:,N)';
-K_TV(:,:,N) = Rk \ (Bk(:,:,N)'*Sk_N);
+% Recursion de Riccati discreta hacia atras con discretizacion ZOH exacta.
+% Garantiza S > 0 algebraicamente, sin integrar el ODE continuo.
+S_next = Qf;   % condicion terminal S_{N+1} = Qf
 
-for k = N:-1:2
-    P   = Pk(:,:,k);
-    A   = Ak(:,:,k);
-    B   = Bk(:,:,k);
-    jj  = 100;
-    TsR = Ts/jj;
-    for JJ = 1:jj
-        k1 = Ricc_sqrt_local(P,           A, B, Qk, Rk);
-        k2 = Ricc_sqrt_local(P+k1*TsR/2,  A, B, Qk, Rk);
-        k3 = Ricc_sqrt_local(P+k2*TsR/2,  A, B, Qk, Rk);
-        k4 = Ricc_sqrt_local(P+k3*TsR,    A, B, Qk, Rk);
-        P  = P + TsR*(k1 + 2*k2 + 2*k3 + k4)/6;
-    end
-    Pk(:,:,k-1) = P;
-    Sk_km1      = P*P';
-    K_TV(:,:,k-1) = Rk \ (B'*Sk_km1);
+for k = N:-1:1
+    A = Ak(:,:,k);
+    B = Bk(:,:,k);
+
+    % Discretizacion ZOH exacta: [Ad, Bd] = expm([A,B;0,0]*Ts)
+    Z  = expm([[A, B]; [zeros(nu, nx+nu)]] * Ts);
+    Ad = Z(1:nx,       1:nx);
+    Bd = Z(1:nx, nx+1 : nx+nu);
+
+    % Paso de Riccati discreto hacia atras
+    Mterm       = Rk + Bd'*S_next*Bd;
+    K_TV(:,:,k) = Mterm \ (Bd'*S_next*Ad);
+    S_cur       = Qk + Ad'*S_next*(Ad - Bd*K_TV(:,:,k));
+    S_next      = 0.5*(S_cur + S_cur');   % simetrizacion numerica
 end
 
 assert(all(isfinite(K_TV(:))), 'K_TV contiene NaN/Inf.');
@@ -229,6 +230,3 @@ function dx = OM4dof_local(x, u)
     dx   = [dq; ddq];
 end
 
-function dP = Ricc_sqrt_local(P, A, B, Q, R)
-    dP = A'*P - 0.5*P*P'*B*(R\(B'*P)) + 0.5*(Q/P');
-end

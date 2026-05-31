@@ -1,0 +1,549 @@
+%% lab5_act1_sol.m
+% Trajectory Optimization y TV-LQR — Laboratorio 5, Actividad 1
+% Control de Sistemas No Lineales — OpenMANIPULATOR-X de 4 GDL
+%
+% Trayectoria: x0 = [pi/2; 0; pi/6; pi/3; 0; 0; 0; 0]
+%              yf = [0.2; -0.13; 0.2; 0]  (sin obstaculo)
+% N = 30, Ts = 0.05 s  (tf = 1.5 s)
+%
+% Figuras generadas:
+%   Figura 1 — Trayectorias articulares optimizadas q_ref
+%   Figura 2 — Entradas optimizadas u_ref
+%   Figura 3 — Seguimiento articular con TV-LQR (simulacion vs referencia)
+%   Figura 4 — Trayectoria cartesiana del efector final (Monte Carlo)
+%   Figura 5 — Senal de control TV-LQR vs referencia
+
+clear; close all; clc;
+rng(1);
+
+%% ========================================================================
+%  Configuracion
+%  ========================================================================
+
+EXPORT_FIGS = true;   % true  = guardar PNG (300 dpi) y EPS vectorial (600 dpi)
+                       % false = solo visualizar
+
+% Directorio raiz del paquete ROS 2
+pkg_dir = '/home/utec/open_manx_ws/src/open_manipulator_x_torque_control';
+
+%% ========================================================================
+%  1. Parametros generales
+%  ========================================================================
+
+N  = 30;
+Ts = 0.05;
+nx = 8;
+nu = 4;
+
+x0 = [0.0; 0; pi/6; pi/3; 0; 0; 0; 0];
+yf = [0.2; -0.13; 0.2; 0];
+
+ukmax =  1;
+ukmin = -1;
+
+% Limites articulares del OpenManipulator-X [rad]
+q_lower = [-pi/2; -pi/2; -pi/2; -1.7907];
+q_upper = [ pi/2;  pi/2;  pi/2;  2.0420];
+dq_max  = 10;  % [rad/s]
+
+%% ========================================================================
+%  2. Inicializacion de la optimizacion
+%  ========================================================================
+
+[~, u0g] = OMDyn(x0(1:4), x0(5:8));
+u0g = u0g(:);
+u0g = max(min(u0g, ukmax), ukmin);
+
+% Bounds: limites articulares + velocidad + torque
+lb_x = repmat([q_lower; -dq_max*ones(4,1)], N, 1);
+ub_x = repmat([q_upper;  dq_max*ones(4,1)], N, 1);
+lb = [lb_x; ukmin*ones(nu*N, 1)];
+ub = [ub_x; ukmax*ones(nu*N, 1)];
+
+% Punto inicial proyectado al interior estricto de lb/ub (evita advertencia fmincon)
+x0_bnd = [q_lower; -dq_max*ones(4,1)];
+x0_bub = [q_upper;  dq_max*ones(4,1)];
+x0_guess = max(x0_bnd + 1e-6, min(x0_bub - 1e-6, x0));
+z0 = [kron(ones(N,1), x0_guess); ...
+      kron(ones(N,1), u0g)];
+
+options = optimoptions('fmincon', ...
+    'Display', 'iter', ...
+    'MaxFunctionEvaluations', 100000, ...
+    'MaxIterations', 2000, ...
+    'OptimalityTolerance', 1e-4, ...
+    'ConstraintTolerance', 1e-4);
+
+%% ========================================================================
+%  3. Trajectory optimization
+%  ========================================================================
+
+use_saved_solution = false;  % false = regenerar con limites articulares
+zmin_file = 'zmin2.mat';
+exitflag = NaN;
+output = struct();
+
+if use_saved_solution && exist(zmin_file, 'file') == 2
+    data = load(zmin_file);
+    zmin = data.zmin;
+    if isfield(data, 'exitflag'), exitflag = data.exitflag; end
+    if isfield(data, 'output'),   output   = data.output;   end
+    fprintf('Se cargo %s correctamente.\n', zmin_file);
+else
+    [zmin, ~, exitflag, output] = fmincon( ...
+        @(z) Jcosto(z, Ts, N, nx, nu, x0, yf), ...
+        z0, [], [], [], [], lb, ub, ...
+        @(z) restr(z, Ts, N, nx, nu, x0), ...
+        options);
+
+    save(zmin_file, 'zmin', 'exitflag', 'output');
+    fprintf('Se guardo la trayectoria optimizada en %s.\n', zmin_file);
+end
+
+fprintf('\nExitflag fmincon: %g\n', exitflag);
+if isfield(output, 'message')
+    fprintf('Mensaje fmincon: %s\n', output.message);
+end
+
+%%  4. Recuperar trayectorias optimizadas
+
+X = zmin(1:nx*N);
+U = zmin(nx*N + (1:nu*N));
+
+Xref = reshape(X, [nx N]);
+Uref = reshape(U, [nu N]);
+
+%% Graficas: qref y uref
+
+tX = Ts:Ts:N*Ts;
+tU = 0:Ts:(N-1)*Ts;
+
+fs     = 11;
+fs_ttl = 13;
+lw     = 1.3;
+c_ref  = [0.8500 0.3250 0.0980];
+qLabels = {'$q_1$ [rad]', '$q_2$ [rad]', '$q_3$ [rad]', '$q_4$ [rad]'};
+
+% Figura 1 — Trayectorias articulares optimizadas
+figure(1); clf;
+set(gcf, 'Name', 'Trayectorias articulares optimizadas', ...
+         'Color', 'w', 'Position', [120 80 1100 650]);
+
+tlB1 = tiledlayout(4, 1, 'TileSpacing', 'compact', 'Padding', 'compact');
+for iq = 1:4
+    nexttile(tlB1);
+    plot(tX, Xref(iq,:), '-', 'Color', c_ref, 'LineWidth', lw);
+    ylabel(qLabels{iq}, 'Interpreter', 'latex', 'FontSize', fs);
+    grid on; box on; set(gca, 'FontSize', fs); xlim([tX(1), tX(end)]);
+    if iq < 4
+        set(gca, 'XTickLabel', []);
+    else
+        xlabel('Tiempo [s]', 'FontSize', fs);
+    end
+end
+title(tlB1, 'Trayectorias articulares optimizadas $q_{ref}$', ...
+      'Interpreter', 'latex', 'FontSize', fs_ttl, 'FontWeight', 'bold');
+
+% Figura 2 — Entradas optimizadas
+figure(2); clf;
+set(gcf, 'Name', 'Entradas optimizadas', ...
+         'Color', 'w', 'Position', [160 100 1100 560]);
+
+tlB2 = tiledlayout(nu, 1, 'TileSpacing', 'compact', 'Padding', 'compact');
+for iu = 1:nu
+    nexttile(tlB2);
+    plot(tU, Uref(iu,:), '-', 'Color', c_ref, 'LineWidth', lw);
+    ylabel(sprintf('$u_%d$ [N.m]', iu), 'Interpreter', 'latex', 'FontSize', fs);
+    grid on; box on; set(gca, 'FontSize', fs); xlim([tU(1), tU(end)]);
+    if iu < nu
+        set(gca, 'XTickLabel', []);
+    else
+        xlabel('Tiempo [s]', 'FontSize', fs);
+    end
+end
+title(tlB2, 'Entradas optimizadas $u_{ref}$', ...
+      'Interpreter', 'latex', 'FontSize', fs_ttl, 'FontWeight', 'bold');
+
+%% 4.1 Metricas - Parte B
+
+yref = zeros(4, N+1);
+yref(:,1) = open_manx_fkin(x0(1:4));
+for i = 1:N
+    yref(:,i+1) = open_manx_fkin(Xref(1:4,i));
+end
+
+metricsB = struct();
+metricsB.exitflag     = exitflag;
+metricsB.max_abs_uref = max(abs(Uref), [], 2);
+
+printMetricsParteB(metricsB, 'Lab 5 Actividad 1 - Parte B');
+
+%% ========================================================================
+%  5. Linealizacion numerica variante en el tiempo
+%  ========================================================================
+
+Ak = zeros(nx, nx, N);
+Bk = zeros(nx, nu, N);
+eps_jac = 1e-6;
+
+for k = 1:N
+    xrefk = Xref(:,k);
+    urefk = Uref(:,k);
+
+    for i = 1:nx
+        incx = zeros(nx,1); incx(i) = eps_jac;
+        Ak(:,i,k) = (OM4dof(0, xrefk + incx, urefk) - ...
+                     OM4dof(0, xrefk - incx, urefk)) / (2*eps_jac);
+    end
+
+    for i = 1:nu
+        incu = zeros(nu,1); incu(i) = eps_jac;
+        Bk(:,i,k) = (OM4dof(0, xrefk, urefk + incu) - ...
+                     OM4dof(0, xrefk, urefk - incu)) / (2*eps_jac);
+    end
+end
+
+fprintf('\nDimension de A1: %d x %d\n', size(Ak(:,:,1),1), size(Ak(:,:,1),2));
+fprintf('Dimension de B1: %d x %d\n', size(Bk(:,:,1),1), size(Bk(:,:,1),2));
+disp('A1 = '); disp(Ak(:,:,1));
+disp('B1 = '); disp(Bk(:,:,1));
+
+%% ========================================================================
+%  6. TV-LQR: calculo de ganancias variantes en el tiempo
+%  ========================================================================
+
+Qk = diag([100; 100; 100; 100; 1; 1; 1; 1]);
+Rk = 100*eye(nu);
+Qf = Qk;
+
+K_TV = zeros(nu, nx, N);
+
+% Riccati discreto hacia atras con discretizacion ZOH exacta (expm).
+% La recursion discreta garantiza S > 0 en cada paso sin integrar el ODE
+% continuo (que pierde definitividad positiva con Ts=0.05).
+fprintf('Calculando K_TV (Riccati discreto ZOH)...\n');
+S_next = Qf;   % condicion terminal S_{N+1} = Qf
+
+for k = N:-1:1
+    A = Ak(:,:,k);
+    B = Bk(:,:,k);
+
+    % Discretizacion ZOH exacta: [Ad, Bd] = expm([A,B;0,0]*Ts)
+    Z  = expm([[A, B]; [zeros(nu, nx+nu)]] * Ts);
+    Ad = Z(1:nx,       1:nx);
+    Bd = Z(1:nx, nx+1 : nx+nu);
+
+    % Paso de Riccati discreto hacia atras
+    Mterm       = Rk + Bd'*S_next*Bd;
+    K_TV(:,:,k) = Mterm \ (Bd'*S_next*Ad);
+    S_cur       = Qk + Ad'*S_next*(Ad - Bd*K_TV(:,:,k));
+    S_next      = 0.5*(S_cur + S_cur');   % simetrizacion numerica
+end
+
+if ~all(isfinite(K_TV(:)))
+    error('K_TV contiene NaN/Inf — revisar linealizacion y parametros.');
+end
+fprintf('K_TV calculado. max||K_TV(:,:,k)|| = %.4f\n', ...
+    max(arrayfun(@(k) norm(K_TV(:,:,k)), 1:N)));
+
+%% ========================================================================
+%  7. Simulacion del sistema no lineal con TV-LQR
+%  ========================================================================
+
+x0sim = x0 + 0.05*randn(nx,1);
+
+[T, Xsim] = ode45( ...
+    @(t,x) OM4dof(t, x, controlTVLQR(t, x, Uref, Xref, Ts, N, K_TV)), ...
+    0:Ts:(N*Ts), x0sim);
+Xsim = Xsim';
+
+%% 8. Calculo de salidas y metricas - Parte D
+
+qRefPlot = [x0(1:4), Xref(1:4,:)];
+
+ysim = zeros(4, numel(T));
+for i = 1:numel(T)
+    ysim(:,i) = open_manx_fkin(Xsim(1:4,i));
+end
+
+U_tvlqr_raw = zeros(nu, numel(T));
+U_tvlqr_sat = zeros(nu, numel(T));
+for i = 1:numel(T)
+    U_tvlqr_raw(:,i) = controlTVLQR(T(i), Xsim(:,i), Uref, Xref, Ts, N, K_TV);
+    U_tvlqr_sat(:,i) = max(min(U_tvlqr_raw(:,i), ukmax), ukmin);
+end
+
+joint_error = Xsim(1:4,:) - qRefPlot;
+
+metricsD = struct();
+metricsD.final_error_cart    = norm(ysim(:,end) - yf);
+metricsD.max_abs_utvlqr      = max(abs(U_tvlqr_sat), [], 2);
+metricsD.sat_percent         = 100*mean(abs(U_tvlqr_raw) >= (ukmax - 1e-8), 2);
+metricsD.max_abs_joint_error = max(abs(joint_error), [], 2);
+metricsD.rms_joint_error     = sqrt(mean(joint_error.^2, 2));
+
+printMetricsParteD(metricsD, 'Lab 5 Actividad 1 - Parte D');
+
+%% 9. Graficas
+
+c_sim  = [0.0000 0.4470 0.7410];
+
+% Figura 3 — Seguimiento articular con TV-LQR
+figure(3); clf;
+set(gcf, 'Name', 'Seguimiento articular con TV-LQR', ...
+         'Color', 'w', 'Position', [120 80 1100 650]);
+
+tl1  = tiledlayout(4, 1, 'TileSpacing', 'compact', 'Padding', 'compact');
+axs1 = gobjects(1, 4);
+h_sim_q = []; h_ref_q = [];
+
+for iq = 1:4
+    axs1(iq) = nexttile(tl1);
+    h1 = plot(T, Xsim(iq,:),    '-',  'Color', c_sim, 'LineWidth', lw); hold on;
+    h2 = plot(T, qRefPlot(iq,:), '--', 'Color', c_ref, 'LineWidth', lw);
+    if iq == 1, h_sim_q = h1; h_ref_q = h2; end
+    ylabel(qLabels{iq}, 'Interpreter', 'latex', 'FontSize', fs);
+    grid on; box on; set(gca, 'FontSize', fs); xlim([T(1), T(end)]);
+    if iq < 4
+        set(gca, 'XTickLabel', []);
+    else
+        xlabel('Tiempo [s]', 'FontSize', fs);
+    end
+end
+
+lgd1 = legend(axs1(1), [h_sim_q, h_ref_q], ...
+              {'Simulacion', 'Referencia'}, ...
+              'Orientation', 'horizontal', 'FontSize', fs, 'Location', 'northoutside');
+lgd1.Box = 'on';
+try, lgd1.Layout.Tile = 'north'; catch, end
+
+title(tl1, 'Seguimiento articular con TV-LQR: simulacion vs referencia', ...
+      'FontSize', fs_ttl, 'FontWeight', 'bold');
+
+% Figura 4 — Trayectoria cartesiana (sin obstaculo)
+figure(4); clf;
+set(gcf, 'Name', 'Trayectoria cartesiana con TV-LQR', ...
+         'Color', 'w', 'Position', [150 80 1050 720]);
+hold on; grid on; box on;
+
+h_mc = gobjects(1,1);
+for rrsim = 1:20
+    x0sim_mc = x0 + 0.1*randn(nx,1);
+    [~, Xsim_mc] = ode45( ...
+        @(t,x) OM4dof(t, x, controlTVLQR(t, x, Uref, Xref, Ts, N, K_TV)), ...
+        0:Ts:(N*Ts), x0sim_mc);
+    Xsim_mc = Xsim_mc';
+    ysim_mc = zeros(4, size(Xsim_mc,2));
+    for i = 1:size(Xsim_mc,2)
+        ysim_mc(:,i) = open_manx_fkin(Xsim_mc(1:4,i));
+    end
+    if rrsim == 1
+        h_mc = plot3(ysim_mc(1,:), ysim_mc(2,:), ysim_mc(3,:), ...
+                     '-', 'Color', [0.55 0.70 1.00], 'LineWidth', 0.8);
+    else
+        plot3(ysim_mc(1,:), ysim_mc(2,:), ysim_mc(3,:), ...
+              '-', 'Color', [0.55 0.70 1.00], 'LineWidth', 0.8);
+    end
+end
+
+h_sim  = plot3(ysim(1,:),  ysim(2,:),  ysim(3,:), ...
+               '-',  'Color', [0.0000 0.2000 0.8000], 'LineWidth', 2.0);
+h_ref  = plot3(yref(1,:),  yref(2,:),  yref(3,:), ...
+               '--o','Color', [0.8500 0.3250 0.0980], ...
+               'LineWidth', 1.4, 'MarkerSize', 4);
+h_goal = plot3(yf(1), yf(2), yf(3), ...
+               'kx', 'MarkerSize', 12, 'LineWidth', 2.2);
+
+view(45, 70);
+xlabel('x [m]', 'FontSize', fs);
+ylabel('y [m]', 'FontSize', fs);
+zlabel('z [m]', 'FontSize', fs);
+title('Trayectoria cartesiana del efector final', ...
+      'FontSize', fs_ttl, 'FontWeight', 'bold');
+legend([h_mc, h_sim, h_ref, h_goal], ...
+       {'Trayectorias simuladas', 'Simulacion evaluada', ...
+        'Referencia optimizada',  'Punto final $y_f$'}, ...
+       'Interpreter', 'latex', 'Location', 'northeastoutside');
+set(gca, 'FontSize', fs);
+
+% Figura 5 — Senal de control TV-LQR vs referencia
+figure(5); clf;
+set(gcf, 'Name', 'Senal de control TV-LQR', ...
+         'Color', 'w', 'Position', [170 110 1100 560]);
+
+tl4  = tiledlayout(nu, 1, 'TileSpacing', 'compact', 'Padding', 'compact');
+axs4 = gobjects(1, nu);
+h_uact = []; h_uref2 = [];
+
+Uref_plot = zeros(nu, numel(T));
+for i = 1:numel(T)
+    k = floor(T(i)/Ts) + 1;
+    k = min(max(k,1), N);
+    Uref_plot(:,i) = Uref(:,k);
+end
+
+for iu = 1:nu
+    axs4(iu) = nexttile(tl4);
+    h1 = plot(T, U_tvlqr_sat(iu,:), '-',  'Color', c_sim, 'LineWidth', lw); hold on;
+    h2 = plot(T, Uref_plot(iu,:),   '--', 'Color', c_ref, 'LineWidth', lw);
+    if iu == 1, h_uact = h1; h_uref2 = h2; end
+    ylabel(sprintf('$u_%d$ [N.m]', iu), 'Interpreter', 'latex', 'FontSize', fs);
+    grid on; box on; set(gca, 'FontSize', fs); xlim([T(1), T(end)]);
+    ydata  = [U_tvlqr_sat(iu,:), Uref_plot(iu,:)];
+    yrange = max(max(ydata) - min(ydata), 0.05);
+    ylim([min(ydata) - 0.15*yrange, max(ydata) + 0.15*yrange]);
+    if iu < nu
+        set(gca, 'XTickLabel', []);
+    else
+        xlabel('Tiempo [s]', 'FontSize', fs);
+    end
+end
+
+lgd4 = legend(axs4(1), [h_uact, h_uref2], ...
+              {'TV-LQR saturado', 'Referencia'}, ...
+              'Orientation', 'horizontal', 'FontSize', fs, 'Location', 'northoutside');
+lgd4.Box = 'on';
+try, lgd4.Layout.Tile = 'north'; catch, end
+
+title(tl4, 'Senal de control aplicada: TV-LQR vs referencia', ...
+      'FontSize', fs_ttl, 'FontWeight', 'bold');
+
+%% ========================================================================
+%  10. Exportacion de figuras
+%  ========================================================================
+if EXPORT_FIGS
+    output_dir = fullfile(pkg_dir, 'plots', 'lab5', 'matlab');
+    if ~exist(output_dir, 'dir'), mkdir(output_dir); end
+
+    fig_names = {'qref_optimo', 'uref_optimo', ...
+                 'tvlqr_seguimiento_q', 'tvlqr_trayectoria_cart', 'tvlqr_control'};
+
+    % PNG (300 dpi)
+    for fi = 1:5
+        exportgraphics(figure(fi), fullfile(output_dir, [fig_names{fi} '.png']), ...
+                       'Resolution', 300);
+    end
+
+    % EPS vectorial (600 dpi)
+    for fi = 1:5
+        exportgraphics(figure(fi), fullfile(output_dir, [fig_names{fi} '.eps']), ...
+                       'ContentType', 'vector', 'Resolution', 600);
+    end
+
+    fprintf('\nGraficas guardadas en: %s\n', output_dir);
+end
+
+%% ========================================================================
+%  Funciones locales
+%  ========================================================================
+
+function J = Jcosto(z, Ts, N, nx, nu, x0, yf) %#ok<INUSD>
+
+    Qv = 0.1 * eye(4);                      % Penalizacion sobre velocidades
+    Qy = diag([1000; 1000; 1000; 10]);       % Penalizacion sobre trayectoria cartesiana
+    Qf_cost = diag([1000; 1000; 1000; 10]);  % Penalizacion sobre error terminal
+    R  = 0.01*eye(nu);                       % Penalizacion sobre entradas
+
+    J  = 0;
+    xN = z(nx*(N-1) + (1:nx));
+    y0 = open_manx_fkin(x0(1:4));
+    yN = open_manx_fkin(xN(1:4));
+
+    % Error terminal en espacio cartesiano
+    J = J + (yN - yf)'*Qf_cost*(yN - yf);
+
+    % Error cartesiano intermedio + penalizacion de velocidades
+    for k = 1:N
+        xk    = z(nx*(k-1) + (1:nx));
+        yk    = open_manx_fkin(xk(1:4));
+        yrefk = y0 + (yf - y0)*(k/N);
+        dqk   = xk(5:8);
+        J = J + dqk'*Qv*dqk + (yk - yrefk)'*Qy*(yk - yrefk);
+    end
+
+    % Magnitud y suavidad de las entradas
+    for k = 0:N-2
+        uk   = z(nx*N + nu*k     + (1:nu));
+        ukp1 = z(nx*N + nu*(k+1) + (1:nu));
+        J = J + uk'*R*uk + (uk - ukp1)'*R*(uk - ukp1);
+    end
+
+    uk = z(nx*N + nu*(N-1) + (1:nu));
+    J  = J + uk'*R*uk;
+end
+
+function [c_des, c_eq] = restr(z, Ts, N, nx, nu, x0)
+% Restricciones de igualdad: dinamica discreta (RK4).
+% Limites articulares y saturacion de torque manejados via lb/ub en fmincon.
+
+    c_eq  = zeros(nx*N, 1);
+    c_des = [];
+
+    for k = 0:N-1
+        if k == 0
+            xk = x0;
+        else
+            xk = z(nx*(k-1) + (1:nx));
+        end
+        uk   = z(nx*N + nu*k + (1:nu));
+        xkp1 = z(nx*k + (1:nx));
+
+        k1 = OM4dof(k*Ts,        xk,            uk);
+        k2 = OM4dof(k*Ts + Ts/2, xk + Ts*k1/2, uk);
+        k3 = OM4dof(k*Ts + Ts/2, xk + Ts*k2/2, uk);
+        k4 = OM4dof(k*Ts + Ts,   xk + Ts*k3,   uk);
+
+        x_next_RK4 = xk + Ts*(k1 + 2*k2 + 2*k3 + k4)/6;
+        c_eq(nx*k + (1:nx)) = xkp1 - x_next_RK4;
+    end
+end
+
+function dx = OM4dof(t, x, u) %#ok<INUSD>
+
+    q  = x(1:4);
+    dq = x(5:8);
+    u  = max(min(u(:), 1), -1);
+
+    [M, phib] = OMDyn(q, dq);
+    phib = phib(:);
+
+    Bdyn     = eye(4);
+    bf       = 0.001;
+    tau_fric = bf*dq;
+
+    ddq = M \ (Bdyn*u - phib - tau_fric);
+    dx  = [dq; ddq];
+end
+
+function u = controlTVLQR(t, x, Uref, Xref, Ts, N, K_TV)
+
+    k = floor(t/Ts) + 1;
+    k = min(max(k, 1), N);
+    u = Uref(:,k) - K_TV(:,:,k)*(x - Xref(:,k));
+end
+
+function printMetricsParteB(metricsB, label)
+
+    fprintf('\n============================================================\n');
+    fprintf('Metricas - %s\n', label);
+    fprintf('============================================================\n');
+    fprintf('Exitflag fmincon                 : %g\n',   metricsB.exitflag);
+    fprintf('Max |u_ref| por articulacion      : [%s] N.m\n', ...
+            num2str(metricsB.max_abs_uref', ' %.4f'));
+end
+
+function printMetricsParteD(metricsD, label)
+
+    fprintf('\n============================================================\n');
+    fprintf('Metricas - %s\n', label);
+    fprintf('============================================================\n');
+    fprintf('Error cartesiano final ||y(tf)-yf||: %.6f\n',    metricsD.final_error_cart);
+    fprintf('Max |u_TVLQR| por articulacion    : [%s] N.m\n', ...
+            num2str(metricsD.max_abs_utvlqr', ' %.4f'));
+    fprintf('Saturacion TV-LQR por articulacion: [%s] %%\n',  ...
+            num2str(metricsD.sat_percent', ' %.2f'));
+    fprintf('Error maximo articular            : [%s] rad\n', ...
+            num2str(metricsD.max_abs_joint_error', ' %.5f'));
+    fprintf('Error RMS articular               : [%s] rad\n', ...
+            num2str(metricsD.rms_joint_error', ' %.5f'));
+end

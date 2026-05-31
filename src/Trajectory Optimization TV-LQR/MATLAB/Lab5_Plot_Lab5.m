@@ -17,7 +17,7 @@ clear; clc; close all;
 mode        = 'sim';   % 'sim'  = simulacion Gazebo
                        % 'real' = implementacion hardware real
 
-test_num    = 1;       % Numero de log
+test_num    = 4;       % Numero de log
 
 EXPORT_FIGS = false;   % true  = guardar PNG (300 dpi) y EPS vectorial (600 dpi)
                        % false = solo visualizar

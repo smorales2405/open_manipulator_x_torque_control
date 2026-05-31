@@ -1,5 +1,5 @@
 /*
- * hw_lab5_tvlqr_node_base.cpp
+ * hw_tvlqr_node.cpp
  * Seguimiento TV-LQR — OpenMANIPULATOR-X hardware real
  * via Dynamixel SDK directo, sin ros2_control.
  *
@@ -24,7 +24,7 @@
  *   torque_scale    [double]  0.5   (escala de seguridad, rango 0..1)
  *   t_run           [double]  1.5   (duracion en segundos, 0 = sin limite)
  *   test_num        [int]     1     (identificador del CSV)
- *   reference_dir   [string]  "src/Trajectory Optimization/lab5_references"
+ *   reference_dir   [string]  "src/Trajectory Optimization TV-LQR/references"
  *
  * Publisher: /hw/joint_states (sensor_msgs/JointState) — monitoreo
  *
@@ -176,7 +176,7 @@ class HWTVLQRNode : public rclcpp::Node
 {
 public:
   HWTVLQRNode()
-  : Node("hw_lab5_tvlqr_node"),
+  : Node("hw_tvlqr_node"),
     hw_active_(false), refs_loaded_(false), N_(0), Ts_(0.05)
   {
     // ── Parametros ──────────────────────────────────────────────────────────
@@ -615,7 +615,7 @@ int main(int argc, char * argv[])
   try {
     rclcpp::spin(std::make_shared<HWTVLQRNode>());
   } catch (const std::exception & e) {
-    RCLCPP_FATAL(rclcpp::get_logger("hw_lab5_tvlqr_node"), "Excepcion: %s", e.what());
+    RCLCPP_FATAL(rclcpp::get_logger("hw_tvlqr_node"), "Excepcion: %s", e.what());
     rclcpp::shutdown();
     return 1;
   }

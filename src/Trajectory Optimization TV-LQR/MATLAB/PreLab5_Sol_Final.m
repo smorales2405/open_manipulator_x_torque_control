@@ -18,7 +18,7 @@ rng(1);
 %  1. Parametros generales definidos en la guia
 %  ========================================================================
 
-N  = 30;      % Numero de nodos/intervalos de control
+N  = 200;      % Numero de nodos/intervalos de control
 Ts = 0.05;    % Tiempo de muestreo [s]
 nx = 8;       % Estados: x = [q1 q2 q3 q4 dq1 dq2 dq3 dq4]^T
 nu = 4;       % Entradas: u = [tau1 tau2 tau3 tau4]^T
@@ -54,7 +54,7 @@ options = optimoptions('fmincon', ...
 %  3. Trajectory optimization
 %  ========================================================================
 
-use_saved_solution = false;      % Cambiar a true para reutilizar zmin.mat
+use_saved_solution = true;      % Cambiar a true para reutilizar zmin.mat
 zmin_file = 'zmin.mat';
 exitflag = NaN;
 output = struct();

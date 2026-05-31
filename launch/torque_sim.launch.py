@@ -9,6 +9,11 @@
 #   3. [OnProcessExit spawn]  → joint_state_broadcaster spawner
 #   4. [OnProcessExit jsb]    → arm_effort_controller + gripper_controller
 #
+# Posicion inicial del robot:
+#   Controlada por  config/sim_init_config.yaml
+#     use_fixed_init: false → equilibrio bajo gravedad sin torques (por defecto)
+#     use_fixed_init: true  → posicion articular fija dada por q_init
+#
 # Notas de migracion Gazebo Classic → Fortress:
 #   - gazebo_ros             → ros_gz_sim
 #   - gazebo.launch.py       → gz_sim.launch.py
@@ -16,12 +21,18 @@
 #   - GAZEBO_PLUGIN_PATH     → no se necesita (gz_ros2_control usa ament index)
 #   - /clock bridge          → ros_gz_bridge obligatorio con use_sim_time:=true
 
+import os
+import yaml
+
+from ament_index_python.packages import get_package_share_directory
+
 from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
     ExecuteProcess,
     IncludeLaunchDescription,
     RegisterEventHandler,
+    TimerAction,
 )
 from launch.conditions import IfCondition
 from launch.event_handlers import OnProcessExit
@@ -37,10 +48,24 @@ from launch_ros.descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
 
+def _load_init_config():
+    """Lee config/sim_init_config.yaml y devuelve (use_fixed_init_str, q_init)."""
+    pkg_share = get_package_share_directory('open_manipulator_x_torque_control')
+    cfg_path  = os.path.join(pkg_share, 'config', 'sim_init_config.yaml')
+    with open(cfg_path, 'r') as f:
+        cfg = yaml.safe_load(f)
+    use_fixed = 'true' if cfg.get('use_fixed_init', False) else 'false'
+    q_init    = cfg.get('q_init', [0.0, 0.0, 0.0, 0.0])
+    return use_fixed, q_init
+
+
 def generate_launch_description():
 
     prefix     = LaunchConfiguration('prefix')
     start_rviz = LaunchConfiguration('start_rviz')
+
+    # Leer configuracion de posicion inicial desde YAML
+    use_fixed_init, q_init = _load_init_config()
 
     world = PathJoinSubstitution([
         FindPackageShare('open_manipulator_x_torque_control'),
@@ -65,9 +90,13 @@ def generate_launch_description():
                 'xacro',
                 'open_manipulator_x_effort_robot.urdf.xacro',
             ]),
-            ' prefix:=',
-            prefix,
+            ' prefix:=',       prefix,
             ' use_sim:=true',
+            ' use_fixed_init:=', use_fixed_init,
+            ' q1_init:=',      str(q_init[0]),
+            ' q2_init:=',      str(q_init[1]),
+            ' q3_init:=',      str(q_init[2]),
+            ' q4_init:=',      str(q_init[3]),
         ]),
         value_type=str,
     )
@@ -77,8 +106,8 @@ def generate_launch_description():
     cleanup_gz = ExecuteProcess(
         cmd=[
             'bash', '-c',
-            'pkill -9 -f "[g]z sim" 2>/dev/null; '
-            'pkill -9 -f "ruby.*gz" 2>/dev/null; '
+            'pkill -9 gz 2>/dev/null || true; '
+            'pkill -9 ign 2>/dev/null || true; '
             'sleep 1; '
             'echo "[cleanup] gz processes cleared"',
         ],
@@ -189,11 +218,11 @@ def generate_launch_description():
         )
     )
 
-    # spawn termina → jsb_spawner
+    # spawn termina → espera 3 s (hardware interface se activa en el 1er paso de sim) → jsb_spawner
     jsb_after_spawn = RegisterEventHandler(
         event_handler=OnProcessExit(
             target_action=spawn_robot,
-            on_exit=[jsb_spawner],
+            on_exit=[TimerAction(period=3.0, actions=[jsb_spawner])],
         )
     )
 

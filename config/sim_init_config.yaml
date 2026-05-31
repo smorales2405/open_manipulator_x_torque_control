@@ -1,0 +1,17 @@
+# ─── Configuracion de posicion inicial del robot en simulacion Gazebo ────────
+#
+# use_fixed_init: false → el robot inicia en equilibrio bajo gravedad sin torques
+#                          (comportamiento por defecto)
+#                 true  → el robot inicia en la posicion articular q_init
+#
+# q_init [rad]: [q1, q2, q3, q4]
+#   Solo se aplica si use_fixed_init: true.
+#   El controlador de esfuerzo debe compensar la gravedad en esa posicion.
+#
+# ─── Configuraciones de referencia ───────────────────────────────────────────
+#   Equilibrio gravedad : use_fixed_init: false   (q_init ignorado)
+#   x0 Lab 5 Act. 1    : use_fixed_init: true    q_init: [1.5708, 0.0, 0.5236, 1.0472]
+#   Home (todos cero)  : use_fixed_init: true    q_init: [0.0, 0.0, 0.0, 0.0]
+
+use_fixed_init: true
+q_init: [0.0, 0.0, 0.5236, 1.0472]   # x0 = [pi/2, 0, pi/6, pi/3]

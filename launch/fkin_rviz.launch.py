@@ -83,7 +83,7 @@ def generate_launch_description():
         parameters=[{
             'robot_description': robot_description,
             'zeros': {
-                'joint1':             1.5708,   # pi/2  (x0 lab5)
+                'joint1':             0.0,   # pi/2  (x0 lab5)
                 'joint2':             0.0,
                 'joint3':             0.5236,   # pi/6
                 'joint4':             1.0472,   # pi/3

@@ -1,5 +1,5 @@
 // ============================================================================
-//  gz_lab5_tvlqr_node_base.cpp
+//  gz_tvlqr_node.cpp
 //  Seguimiento TV-LQR — OpenMANIPULATOR-X (simulacion Gazebo)
 //
 //  Ley de control TV-LQR:
@@ -18,12 +18,12 @@
 //  Parametros ROS 2 (--ros-args -p nombre:=valor):
 //    test_num      [int]    1       — identificador del CSV generado
 //    t_sim         [double] 0.0     — duracion en segundos (0 = sin limite)
-//    reference_dir [string] "src/Trajectory Optimization/lab5_references"
+//    reference_dir [string] "src/Trajectory Optimization TV-LQR/references"
 //
 //  Suscriptor : /joint_states                   (sensor_msgs/JointState)
 //  Publicador : /arm_effort_controller/commands  (std_msgs/Float64MultiArray)
 //
-//  CSV generado: data/sim/lab5/data_log_sim_lab5_<test_num>.csv
+//  CSV generado: data/lab5/sim/data_log_sim_lab5_<test_num>.csv
 // ============================================================================
 
 #include <chrono>
@@ -103,11 +103,14 @@ class TVLQRSimNode : public rclcpp::Node
 {
 public:
   TVLQRSimNode()
-  : Node("gz_lab5_tvlqr_node"), t_(0.0), refs_loaded_(false), N_(0), Ts_(0.05)
+  : Node("gz_tvlqr_node"),
+    t_(0.0), refs_loaded_(false), N_(0), Ts_(0.05),
+    warmup_ticks_(0), tau_gravity_(Eigen::Vector4d::Zero())
   {
     // ── Parametros ──────────────────────────────────────────────────────────
     this->declare_parameter<int>        ("test_num",      1);
     this->declare_parameter<double>     ("t_sim",         0.0);
+    this->declare_parameter<double>     ("t_warmup",      2.0);
     this->declare_parameter<std::string>("reference_dir",
       "src/Trajectory Optimization TV-LQR/references");
 
@@ -184,6 +187,14 @@ public:
     refs_loaded_ = true;
     RCLCPP_INFO(get_logger(), "Referencias cargadas: N=%d  Ts=%.3f s", N_, Ts_);
 
+    // Compensacion gravitatoria: torque de referencia en k=0 sostiene x0
+    tau_gravity_ = u_ref_[0];
+    const double t_warmup = this->get_parameter("t_warmup").as_double();
+    warmup_ticks_ = static_cast<int>(std::round(t_warmup / 0.01));
+    RCLCPP_INFO(get_logger(),
+      "Compensacion gravitatoria: [%.3f %.3f %.3f %.3f] Nm  (t_warmup=%.1f s)",
+      tau_gravity_[0], tau_gravity_[1], tau_gravity_[2], tau_gravity_[3], t_warmup);
+
     open_csv(test_num);
 
     torque_pub_ = this->create_publisher<std_msgs::msg::Float64MultiArray>(
@@ -254,6 +265,18 @@ private:
   void tick()
   {
     if (!last_js_ || !refs_loaded_) { return; }
+
+    // ── Fase de inicializacion: compensacion gravitatoria ─────────────────
+    if (warmup_ticks_ > 0) {
+      std_msgs::msg::Float64MultiArray cmd;
+      cmd.data.assign(tau_gravity_.data(), tau_gravity_.data() + NARM);
+      torque_pub_->publish(cmd);
+      --warmup_ticks_;
+      if (warmup_ticks_ == 0) {
+        RCLCPP_INFO(get_logger(), "Compensacion gravitatoria completada. Iniciando TV-LQR.");
+      }
+      return;
+    }
 
     // ── Leer estado articular ─────────────────────────────────────────────
     Eigen::Vector4d q, dq;
@@ -327,6 +350,9 @@ private:
   std::vector<Eigen::Vector4d>                           u_ref_;
   std::vector<Eigen::Matrix<double,4,8,Eigen::ColMajor>> K_TV_;
 
+  int             warmup_ticks_;
+  Eigen::Vector4d tau_gravity_;
+
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr torque_pub_;
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr  joint_sub_;
   rclcpp::TimerBase::SharedPtr timer_;
@@ -342,7 +368,7 @@ int main(int argc, char * argv[])
   try {
     rclcpp::spin(std::make_shared<TVLQRSimNode>());
   } catch (const std::exception & e) {
-    RCLCPP_FATAL(rclcpp::get_logger("gz_lab5_tvlqr_node"), "Excepcion: %s", e.what());
+    RCLCPP_FATAL(rclcpp::get_logger("gz_tvlqr_node"), "Excepcion: %s", e.what());
     rclcpp::shutdown();
     return 1;
   }
