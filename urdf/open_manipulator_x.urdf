@@ -8,7 +8,8 @@
 <!-- (platform-openmanipulator-x-specification.pdf, Section 2.3 Inertia).               -->
 <!-- For each updated link: mass/CoG/"Inertia Tensor at CENTER OF GRAVITY" from PDF,    -->
 <!-- then transformed from Ci frame to URDF link frame via r_urdf=R*r_C, I_urdf=R*I*Rᵀ -->
-<!-- Rotations used: link2→R=I; link3→Rz(180°); link4,link5→Ry(90°).                   -->
+<!-- Rotations used: link2→R=I; link3→Rz(180°); link4,link5→R_alt=[[0,0,1],[0,-1,0],[1,0,0]] -->
+<!-- R_alt maps: Cz→+URDF_x (arm), Cy→-URDF_y, Cx→+URDF_z; I=[Izz,-Iyz,Ixz;-Iyz,Iyy,-Ixy;Ixz,-Ixy,Ixx] -->
 <robot name="open_manipulator">
   <material name="black">
     <color rgba="0.0 0.0 0.0 1.0"/>
@@ -193,6 +194,7 @@
     <origin rpy="0 0 0" xyz="0.012 0.0 0.017"/>
     <axis xyz="0 0 1"/>
     <limit effort="1" lower="-2.827433388230814" upper="2.827433388230814" velocity="4.8"/>
+    <dynamics damping="0.1"/>
   </joint>
   <!--  Link 2 -->
   <link name="link2">
@@ -223,6 +225,7 @@
     <origin rpy="0 0 0" xyz="0.0 0.0 0.0595"/>
     <axis xyz="0 1 0"/>
     <limit effort="1" lower="-1.790707812546182" upper="1.5707963267948966" velocity="4.8"/>
+    <dynamics damping="0.1"/>
   </joint>
   <!--  Link 3 -->
   <link name="link3">
@@ -253,6 +256,7 @@
     <origin rpy="0 0 0" xyz="0.024 0 0.128"/>
     <axis xyz="0 1 0"/>
     <limit effort="1" lower="-0.9424777960769379" upper="1.382300767579509" velocity="4.8"/>
+    <dynamics damping="0.1"/>
   </joint>
   <!--  Link 4 -->
   <link name="link4">
@@ -269,11 +273,11 @@
         <mesh filename="package://open_manipulator_description/meshes/chain_link4.stl" scale="0.001 0.001 0.001"/>
       </geometry>
     </collision>
-    <!-- Updated from ROBOTIS e-Manual inertial data, using mass/CoG/Inertia Tensor at CENTER OF GRAVITY, transformed from C3 frame to URDF link frame. R = Ry(90deg): C3_z->URDF_x; I_urdf=[Izz,Iyz,-Ixz; Iyz,Iyy,-Ixy; -Ixz,-Ixy,Ixx]. -->
+    <!-- Updated from ROBOTIS e-Manual inertial data, using mass/CoG/Inertia Tensor at CENTER OF GRAVITY, transformed from C3 frame to URDF link frame. R = R_alt: C3_z->URDF_x, C3_y->-URDF_y, C3_x->+URDF_z; I_urdf=[Izz,-Iyz,Ixz; -Iyz,Iyy,-Ixy; Ixz,-Ixy,Ixx]. -->
     <inertial>
-      <origin xyz="9.3290225e-02 -4.4304274e-04 3.6312773e-07" rpy="0 0 0"/>
+      <origin xyz="9.3290225e-02 4.4304274e-04 3.6312773e-07" rpy="0 0 0"/>
       <mass value="1.3467049e-01"/>
-      <inertia ixx="2.4809204e-05" ixy="1.2221090e-06" ixz="-1.8290300e-09" iyy="1.7818139e-04" iyz="0.0" izz="1.8688812e-04"/>
+      <inertia ixx="2.4809204e-05" ixy="-1.2221090e-06" ixz="1.8290300e-09" iyy="1.7818139e-04" iyz="0.0" izz="1.8688812e-04"/>
     </inertial>
   </link>
   <!--  Joint 4 -->
@@ -283,6 +287,7 @@
     <origin rpy="0 0 0" xyz="0.124 0.0 0.0"/>
     <axis xyz="0 1 0"/>
     <limit effort="1" lower="-1.790707812546182" upper="2.0420352248333655" velocity="4.8"/>
+    <dynamics damping="0.1"/>
   </joint>
   <!--  Link 5 -->
   <link name="link5">
@@ -299,11 +304,11 @@
         <mesh filename="package://open_manipulator_description/meshes/chain_link5.stl" scale="0.001 0.001 0.001"/>
       </geometry>
     </collision>
-    <!-- Updated from ROBOTIS e-Manual inertial data, using mass/CoG/Inertia Tensor at CENTER OF GRAVITY, transformed from C4 frame to URDF link frame. R = Ry(90deg): C4_z->URDF_x; I_urdf=[Izz,Iyz,-Ixz; Iyz,Iyy,-Ixy; -Ixz,-Ixy,Ixx]. -->
+    <!-- Updated from ROBOTIS e-Manual inertial data, using mass/CoG/Inertia Tensor at CENTER OF GRAVITY, transformed from C4 frame to URDF link frame. R = R_alt: C4_z->URDF_x, C4_y->-URDF_y, C4_x->+URDF_z; I_urdf=[Izz,-Iyz,Ixz; -Iyz,Iyy,-Ixy; Ixz,-Ixy,Ixx]. -->
     <inertial>
-      <origin xyz="6.0472935e-02 7.9503949e-07 -6.1273313e-03" rpy="0 0 0"/>
+      <origin xyz="6.0472935e-02 7.9503949e-07 6.1273313e-03" rpy="0 0 0"/>
       <mass value="2.3650927e-01"/>
-      <inertia ixx="1.7393236e-04" ixy="1.5305492e-08" ixz="-2.2615865e-05" iyy="2.0769766e-04" iyz="-2.2288943e-07" izz="2.6708326e-04"/>
+      <inertia ixx="1.7393236e-04" ixy="-1.5305492e-08" ixz="2.2615865e-05" iyy="2.0769766e-04" iyz="-2.2288943e-07" izz="2.6708326e-04"/>
     </inertial>
   </link>
   <!--  Gripper joint -->
@@ -313,6 +318,7 @@
     <origin rpy="0 0 0" xyz="0.0817 0.021 0.0"/>
     <axis xyz="0 1 0"/>
     <limit effort="1" lower="-0.010" upper="0.019" velocity="4.8"/>
+    <dynamics damping="0.1"/>
   </joint>
   <!--  Gripper link -->
   <link name="gripper_link">
@@ -342,6 +348,7 @@
     <origin rpy="0 0 0" xyz="0.0817 -0.021 0"/>
     <axis xyz="0 -1 0"/>
     <limit effort="1" lower="-0.010" upper="0.019" velocity="4.8"/>
+    <dynamics damping="0.7"/>
     <mimic joint="gripper" multiplier="1"/>
   </joint>
   <!--  Gripper link sub -->
