@@ -19,6 +19,7 @@ find_package(dynamixel_sdk REQUIRED)
 set(FL_INSTR "src/Feedback Linearization/instructor")
 set(FL_STUD  "src/Feedback Linearization/student")
 set(TO_INSTR "src/Trajectory Optimization TV-LQR/instructor")
+set(GC_SRC   "src/Gravity Compensation")
 
 # ── gz_fl_control_node ───────────────────────────────────────────────────────
 add_executable(gz_fl_control_node "${FL_INSTR}/gz_fl_control_node.cpp")
@@ -132,6 +133,34 @@ target_compile_definitions(hw_io_control_node_base PRIVATE
   "PACKAGE_URDF_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/urdf\""
   COAL_DISABLE_HPP_FCL_WARNINGS)
 
+# ── gz_gravity_comp_node ─────────────────────────────────────────────────────
+add_executable(gz_gravity_comp_node "${GC_SRC}/gz_gravity_comp_node.cpp")
+ament_target_dependencies(gz_gravity_comp_node rclcpp std_msgs sensor_msgs)
+target_link_libraries(gz_gravity_comp_node
+  pinocchio::pinocchio_default
+  pinocchio::pinocchio_parsers
+  Eigen3::Eigen)
+target_compile_features(gz_gravity_comp_node PUBLIC cxx_std_17)
+target_compile_definitions(gz_gravity_comp_node PRIVATE
+  "PACKAGE_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\""
+  "PACKAGE_URDF_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/urdf\""
+  COAL_DISABLE_HPP_FCL_WARNINGS)
+
+# ── hw_gravity_comp_node ─────────────────────────────────────────────────────
+add_executable(hw_gravity_comp_node "${GC_SRC}/hw_gravity_comp_node.cpp")
+ament_target_dependencies(hw_gravity_comp_node rclcpp sensor_msgs)
+target_include_directories(hw_gravity_comp_node PRIVATE ${dynamixel_sdk_INCLUDE_DIRS})
+target_link_libraries(hw_gravity_comp_node
+  ${dynamixel_sdk_LIBRARIES}
+  pinocchio::pinocchio_default
+  pinocchio::pinocchio_parsers
+  Eigen3::Eigen)
+target_compile_features(hw_gravity_comp_node PUBLIC cxx_std_17)
+target_compile_definitions(hw_gravity_comp_node PRIVATE
+  "PACKAGE_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\""
+  "PACKAGE_URDF_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/urdf\""
+  COAL_DISABLE_HPP_FCL_WARNINGS)
+
 # ── gz_tvlqr_node ────────────────────────────────────────────────────────────
 add_executable(gz_tvlqr_node "${TO_INSTR}/gz_tvlqr_node.cpp")
 ament_target_dependencies(gz_tvlqr_node rclcpp std_msgs sensor_msgs)
@@ -161,6 +190,8 @@ install(TARGETS
     hw_fl_control_node_base hw_io_control_node_base
     gz_tvlqr_node
     hw_tvlqr_node
+    gz_gravity_comp_node
+    hw_gravity_comp_node
   DESTINATION lib/${PROJECT_NAME})
 
 install(DIRECTORY xacro config launch scripts data urdf meshes worlds

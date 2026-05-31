@@ -1,0 +1,28 @@
+hw_gravity_comp_node:
+  ros__parameters:
+
+    # Puerto serial del adaptador U2D2
+    port_name: "/dev/ttyUSB0"
+
+    # Factor de escala de la compensacion gravitacional.
+    # 1.0 = modelo exacto. Reducir a 0.90-0.95 si el robot cae lentamente
+    # al soltarlo (modelo sobreestima la gravedad).
+    # Aumentar a 1.05-1.10 si el robot sube al soltarlo.
+    gravity_scale: 1.0
+
+    # Compensacion de zona muerta estatica del motor [ticks de corriente].
+    # Valor recomendado: 5-15 ticks para compensar friccion estatica.
+    # 0 = sin compensacion de deadzone.
+    deadzone_ticks: 5.0
+
+    # Compensacion viscosa [ticks / (rad/s)].
+    # 0.0 = robot totalmente backdrivable (recomendado para gravity comp).
+    # Valores > 0 agregan amortiguamiento (resistencia al movimiento manual).
+    viscous_comp: 0.0
+
+    # Duracion del nodo en segundos. 0 = sin limite (ejecutar indefinidamente).
+    duration_s: 0.0
+
+    # Identificador para el archivo CSV de salida.
+    # Genera: data/gravity_comp/hw_gc_data_<log_id>.csv
+    log_id: 1
