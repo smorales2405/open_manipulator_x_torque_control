@@ -182,6 +182,13 @@ target_compile_definitions(hw_tvlqr_node PRIVATE
   "PACKAGE_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\""
   "PACKAGE_SHARE_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}\"")
 
+# ── fkin_display_node (Python) ───────────────────────────────────────────────
+set(FK_SRC "src/Forward Kinematics")
+install(PROGRAMS
+  "${FK_SRC}/fkin_display_node.py"
+  DESTINATION lib/${PROJECT_NAME}
+)
+
 # ── Install ──────────────────────────────────────────────────────────────────
 install(TARGETS
     gz_fl_control_node gz_io_control_node

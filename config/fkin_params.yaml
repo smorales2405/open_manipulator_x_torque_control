@@ -1,0 +1,22 @@
+# config/fkin_params.yaml
+# Parametros del nodo fkin_display_node
+# ──────────────────────────────────────────────────────────────────────────────
+# Modifica yf.x / yf.y / yf.z / yf.phi para cambiar la posicion objetivo
+# que se visualiza en RViz.
+# Recuerda reconstruir (colcon build) o relanzar el launch tras cada cambio.
+
+fkin_display:
+  ros__parameters:
+
+    # ── Posicion objetivo del efector final ─────────────────────────────────
+    yf:
+      x:    0.200     # [m]
+      y:   -0.130     # [m]
+      z:    0.200     # [m]
+      phi:  0.000     # [rad]  angulo de pitch objetivo (solo informativo)
+
+    # ── Frecuencia de impresion en terminal ──────────────────────────────────
+    print_rate_hz: 2.0   # [Hz]
+
+    # ── Longitud de las flechas de los ejes en RViz ──────────────────────────
+    axis_length: 0.08    # [m]
