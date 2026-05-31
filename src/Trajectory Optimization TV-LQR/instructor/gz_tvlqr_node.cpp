@@ -105,7 +105,8 @@ public:
   TVLQRSimNode()
   : Node("gz_tvlqr_node"),
     t_(0.0), refs_loaded_(false), N_(0), Ts_(0.05),
-    warmup_ticks_(0), tau_gravity_(Eigen::Vector4d::Zero())
+    warmup_ticks_(0), tau_gravity_(Eigen::Vector4d::Zero()),
+    js_updated_(false)
   {
     // ── Parametros ──────────────────────────────────────────────────────────
     this->declare_parameter<int>        ("test_num",      1);
@@ -187,13 +188,28 @@ public:
     refs_loaded_ = true;
     RCLCPP_INFO(get_logger(), "Referencias cargadas: N=%d  Ts=%.3f s", N_, Ts_);
 
-    // Compensacion gravitatoria: torque de referencia en k=0 sostiene x0
-    tau_gravity_ = u_ref_[0];
+    // Compensacion gravitatoria en x0: preferir tau_gravity.txt (OMDyn(x0,0)),
+    // que es el torque exacto para sostener el robot en x0 durante el warmup.
+    // Si no existe, usar u_ref[0] como fallback (puede causar deriva en warmup).
+    {
+      std::vector<std::vector<double>> rows;
+      const std::string grav_path = ref_dir_ + "/tau_gravity.txt";
+      if (load_matrix(grav_path, 4, rows) && !rows.empty()) {
+        tau_gravity_ = Eigen::Vector4d(rows[0][0], rows[0][1], rows[0][2], rows[0][3]);
+        RCLCPP_INFO(get_logger(),
+          "tau_gravity.txt cargado: [%.3f %.3f %.3f %.3f] Nm",
+          tau_gravity_[0], tau_gravity_[1], tau_gravity_[2], tau_gravity_[3]);
+      } else {
+        tau_gravity_ = u_ref_[0];
+        RCLCPP_WARN(get_logger(),
+          "tau_gravity.txt no encontrado — usando u_ref[0]: [%.3f %.3f %.3f %.3f] Nm",
+          tau_gravity_[0], tau_gravity_[1], tau_gravity_[2], tau_gravity_[3]);
+      }
+    }
+
     const double t_warmup = this->get_parameter("t_warmup").as_double();
     warmup_ticks_ = static_cast<int>(std::round(t_warmup / 0.01));
-    RCLCPP_INFO(get_logger(),
-      "Compensacion gravitatoria: [%.3f %.3f %.3f %.3f] Nm  (t_warmup=%.1f s)",
-      tau_gravity_[0], tau_gravity_[1], tau_gravity_[2], tau_gravity_[3], t_warmup);
+    RCLCPP_INFO(get_logger(), "Warmup: %.1f s  (tau_gravity aplicado)", t_warmup);
 
     open_csv(test_num);
 
@@ -204,6 +220,7 @@ public:
       "/joint_states", 10,
       [this](const sensor_msgs::msg::JointState::SharedPtr msg) {
         last_js_ = msg;
+        js_updated_ = true;
       });
 
     timer_ = this->create_wall_timer(10ms, [this]() { tick(); });
@@ -268,15 +285,21 @@ private:
 
     // ── Fase de inicializacion: compensacion gravitatoria ─────────────────
     if (warmup_ticks_ > 0) {
+      js_updated_ = false;   // reiniciar flag al terminar warmup en el ultimo tick
       std_msgs::msg::Float64MultiArray cmd;
       cmd.data.assign(tau_gravity_.data(), tau_gravity_.data() + NARM);
       torque_pub_->publish(cmd);
       --warmup_ticks_;
       if (warmup_ticks_ == 0) {
+        js_updated_ = false;  // forzar espera de estado fresco al iniciar TV-LQR
         RCLCPP_INFO(get_logger(), "Compensacion gravitatoria completada. Iniciando TV-LQR.");
       }
       return;
     }
+
+    // Esperar al menos un mensaje nuevo de joint_states antes de arrancar
+    if (!js_updated_) { return; }
+    js_updated_ = false;
 
     // ── Leer estado articular ─────────────────────────────────────────────
     Eigen::Vector4d q, dq;
@@ -352,6 +375,7 @@ private:
 
   int             warmup_ticks_;
   Eigen::Vector4d tau_gravity_;
+  bool            js_updated_;
 
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr torque_pub_;
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr  joint_sub_;

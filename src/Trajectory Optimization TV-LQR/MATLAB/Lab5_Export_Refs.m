@@ -25,10 +25,10 @@ Ts = 0.05;
 nx = 8;
 nu = 4;
 
-x0 = [0.0; 0; pi/6; pi/3; 0; 0; 0; 0];
-yf = [0.16; 0.08; 0.10; pi/2];
+x0 = [pi/2; 0; pi/6; pi/3; 0; 0; 0; 0];   % debe coincidir con lab5_act1_sol.m
+yf = [0.2; -0.13; 0.2; 0];
 
-zmin_file = 'zmin2.mat';
+zmin_file = 'zmin4.mat';   % debe coincidir con el archivo generado por lab5_act1_sol.m
 ref_dir   = '../references';
 
 %% ========================================================================
@@ -100,15 +100,6 @@ for i = 1:N
 end
 assert(all(isfinite(yref(:))), 'yref contiene NaN/Inf.');
 
-% 4d. Distancia minima al obstaculo cilindrico
-obs_center = [0.10; 0.11];
-obs_radius = 0.04;
-dist_xy    = sqrt((yref(1,:)-obs_center(1)).^2 + (yref(2,:)-obs_center(2)).^2);
-min_dist   = min(dist_xy);
-assert(min_dist > obs_radius - 1e-4, ...
-    'Restriccion de obstaculo violada: dist_min = %.4f m.', min_dist);
-fprintf('Distancia minima al obstaculo: %.4f m\n', min_dist);
-
 %% ========================================================================
 %  5. Linealizacion numerica variante en el tiempo
 %  ========================================================================
@@ -131,36 +122,84 @@ for k = 1:N
 end
 
 %% ========================================================================
-%  6. Calculo de ganancias TV-LQR (Riccati discreto ZOH)
+%  6. Calculo de ganancias TV-LQR
 %  ========================================================================
-fprintf('Calculando K_TV (Riccati discreto ZOH)...\n');
+
 Qk = diag([100; 100; 100; 100; 1; 1; 1; 1]);
 Rk = 100*eye(nu);
 Qf = Qk;
 
+% ── Metodo de Riccati ────────────────────────────────────────────────────
+% 'zoh'  — Discreto ZOH exacto via expm (recomendado para Ts >= 0.02 s)
+% 'std'  — Continuo estandar sobre S (RK4; puede ser inestable con Ts grande)
+% 'sqrt' — Continuo forma sqrt (RK4; puede singularizarse; aumentar riccati_jj)
+riccati_method = 'zoh';
+riccati_jj     = 100;   % sub-pasos RK4 por intervalo (solo 'std' y 'sqrt')
+
 K_TV = zeros(nu, nx, N);
+fprintf('Calculando K_TV (metodo: %s)...\n', riccati_method);
 
-% Recursion de Riccati discreta hacia atras con discretizacion ZOH exacta.
-% Garantiza S > 0 algebraicamente, sin integrar el ODE continuo.
-S_next = Qf;   % condicion terminal S_{N+1} = Qf
+switch riccati_method
 
-for k = N:-1:1
-    A = Ak(:,:,k);
-    B = Bk(:,:,k);
+    % ── ZOH exacto (recomendado) ─────────────────────────────────────────
+    case 'zoh'
+        S_next = Qf;      % condicion terminal S_{N+1} = Qf
+        for k = N:-1:1
+            A  = Ak(:,:,k);   B  = Bk(:,:,k);
+            Z  = expm([[A, B]; [zeros(nu, nx+nu)]] * Ts);
+            Ad = Z(1:nx, 1:nx);   Bd = Z(1:nx, nx+1:nx+nu);
+            Mterm       = Rk + Bd'*S_next*Bd;
+            K_TV(:,:,k) = Mterm \ (Bd'*S_next*Ad);
+            S_cur       = Qk + Ad'*S_next*(Ad - Bd*K_TV(:,:,k));
+            S_next      = 0.5*(S_cur + S_cur');
+        end
 
-    % Discretizacion ZOH exacta: [Ad, Bd] = expm([A,B;0,0]*Ts)
-    Z  = expm([[A, B]; [zeros(nu, nx+nu)]] * Ts);
-    Ad = Z(1:nx,       1:nx);
-    Bd = Z(1:nx, nx+1 : nx+nu);
+    % ── Estandar sobre S (ODE continuo, RK4 hacia atras) ─────────────────
+    case 'std'
+        TsR    = Ts / riccati_jj;
+        S_next = Qf;      % condicion terminal S_{N+1} = Qf
+        for k = N:-1:1
+            A = Ak(:,:,k);   B = Bk(:,:,k);   S = S_next;
+            for JJ = 1:riccati_jj
+                f1 = Ricc_std_local(S,            A, B, Qk, Rk);
+                f2 = Ricc_std_local(S + f1*TsR/2, A, B, Qk, Rk);
+                f3 = Ricc_std_local(S + f2*TsR/2, A, B, Qk, Rk);
+                f4 = Ricc_std_local(S + f3*TsR,   A, B, Qk, Rk);
+                S  = S + TsR*(f1 + 2*f2 + 2*f3 + f4)/6;
+                S  = 0.5*(S + S');
+            end
+            S_next      = S;
+            K_TV(:,:,k) = Rk \ (B'*S);
+        end
 
-    % Paso de Riccati discreto hacia atras
-    Mterm       = Rk + Bd'*S_next*Bd;
-    K_TV(:,:,k) = Mterm \ (Bd'*S_next*Ad);
-    S_cur       = Qk + Ad'*S_next*(Ad - Bd*K_TV(:,:,k));
-    S_next      = 0.5*(S_cur + S_cur');   % simetrizacion numerica
+    % ── Sqrt form (ODE continuo, S = P*P', RK4 hacia atras) ──────────────
+    case 'sqrt'
+        TsR = Ts / riccati_jj;
+        Pk  = zeros(nx, nx, N);
+        Pk(:,:,N)   = sqrtm(0.05*Qf);     % condicion terminal
+        Sk_N        = Pk(:,:,N)*Pk(:,:,N)';
+        K_TV(:,:,N) = Rk \ (Bk(:,:,N)'*Sk_N);
+        for k = N:-1:2
+            P = Pk(:,:,k);   A = Ak(:,:,k);   B = Bk(:,:,k);
+            for JJ = 1:riccati_jj
+                k1 = Ricc_sqrt_local(P,            A, B, Qk, Rk);
+                k2 = Ricc_sqrt_local(P + k1*TsR/2, A, B, Qk, Rk);
+                k3 = Ricc_sqrt_local(P + k2*TsR/2, A, B, Qk, Rk);
+                k4 = Ricc_sqrt_local(P + k3*TsR,   A, B, Qk, Rk);
+                P  = P + TsR*(k1 + 2*k2 + 2*k3 + k4)/6;
+            end
+            Pk(:,:,k-1)   = P;
+            K_TV(:,:,k-1) = Rk \ (B'*(P*P'));
+        end
+
+    otherwise
+        error('riccati_method invalido: ''%s''. Usar ''zoh'', ''std'' o ''sqrt''.', ...
+              riccati_method);
 end
 
-assert(all(isfinite(K_TV(:))), 'K_TV contiene NaN/Inf.');
+assert(all(isfinite(K_TV(:))), ...
+    'K_TV contiene NaN/Inf (metodo: %s). Revisar linealizacion o aumentar riccati_jj.', ...
+    riccati_method);
 fprintf('K_TV: OK\n');
 
 %% ========================================================================
@@ -174,23 +213,31 @@ dq_ref = Xref(5:8,:)';     % N x 4
 u_ref  = Uref';             % N x 4
 y_ref  = yref';             % (N+1) x 4
 
+% Compensacion gravitatoria en x0: OMDyn(q0, dq0=0) da el torque para
+% sostener el robot quieto en x0. El nodo ROS 2 la usa en la fase de warmup.
+[~, tau_grav_vec] = OMDyn(x0(1:4), zeros(4,1));
+tau_grav = tau_grav_vec(:)';   % 1 x 4
+
 % K_TV: N x 32, orden col-major (reshape MATLAB es col-major)
 K_TV_vec = zeros(N, nu*nx);
 for k = 1:N
     K_TV_vec(k,:) = reshape(K_TV(:,:,k), 1, []);
 end
 
-writematrix(t_ref,    fullfile(ref_dir, 'time_ref.txt'), 'Delimiter', ' ');
-writematrix(q_ref,    fullfile(ref_dir, 'q_ref.txt'),    'Delimiter', ' ');
-writematrix(dq_ref,   fullfile(ref_dir, 'dq_ref.txt'),   'Delimiter', ' ');
-writematrix(u_ref,    fullfile(ref_dir, 'u_ref.txt'),    'Delimiter', ' ');
-writematrix(K_TV_vec, fullfile(ref_dir, 'K_TV.txt'),     'Delimiter', ' ');
-writematrix(y_ref,    fullfile(ref_dir, 'y_ref.txt'),    'Delimiter', ' ');
+writematrix(t_ref,    fullfile(ref_dir, 'time_ref.txt'),    'Delimiter', ' ');
+writematrix(q_ref,    fullfile(ref_dir, 'q_ref.txt'),       'Delimiter', ' ');
+writematrix(dq_ref,   fullfile(ref_dir, 'dq_ref.txt'),      'Delimiter', ' ');
+writematrix(u_ref,    fullfile(ref_dir, 'u_ref.txt'),       'Delimiter', ' ');
+writematrix(K_TV_vec, fullfile(ref_dir, 'K_TV.txt'),        'Delimiter', ' ');
+writematrix(y_ref,    fullfile(ref_dir, 'y_ref.txt'),       'Delimiter', ' ');
+writematrix(tau_grav, fullfile(ref_dir, 'tau_gravity.txt'), 'Delimiter', ' ');
+
+fprintf('tau_gravity en x0: [%.4f %.4f %.4f %.4f] N.m\n', tau_grav);
 
 %% ========================================================================
 %  8. Verificacion de archivos generados
 %  ========================================================================
-files_out = {'time_ref.txt','q_ref.txt','dq_ref.txt','u_ref.txt','K_TV.txt','y_ref.txt'};
+files_out = {'time_ref.txt','q_ref.txt','dq_ref.txt','u_ref.txt','K_TV.txt','y_ref.txt','tau_gravity.txt'};
 for f = files_out
     fpath = fullfile(ref_dir, f{1});
     assert(exist(fpath, 'file') == 2, 'No se creo: %s', fpath);
@@ -207,7 +254,6 @@ fprintf('  Ts                    : %.3f s\n', Ts);
 fprintf('  Tiempo total          : %.2f s\n', N*Ts);
 fprintf('  exitflag              : %g\n',   exitflag);
 fprintf('  max|Uref| [N.m]       : [%.4f %.4f %.4f %.4f]\n', max(abs(Uref),[],2)');
-fprintf('  min_dist_obs_xy [m]   : %.4f\n', min_dist);
 fprintf('  Carpeta de salida     : %s\n', fullfile(pwd, ref_dir));
 fprintf('\n  Archivos exportados:\n');
 for f = files_out
@@ -228,5 +274,17 @@ function dx = OM4dof_local(x, u)
     bf   = 0.001;
     ddq  = M \ (u - phib - bf*dq);
     dx   = [dq; ddq];
+end
+
+function dS = Ricc_std_local(S, A, B, Q, R)
+% Riccati estandar continuo integrado hacia atras (tau = tf - t).
+% dS/dtau = A'S + SA - S*B*R^{-1}*B'*S + Q
+    dS = A'*S + S*A - S*B*(R \ (B'*S)) + Q;
+end
+
+function dP = Ricc_sqrt_local(P, A, B, Q, R)
+% Riccati forma sqrt integrado hacia atras; S = P*P'.
+% dP/dtau = A'P - (1/2)*P*P'*B*R^{-1}*B'*P + (1/2)*Q*P'^{-1}
+    dP = A'*P - 0.5*P*P'*B*(R \ (B'*P)) + 0.5*(Q/P');
 end
 

@@ -4,12 +4,12 @@ clc; clear; close all
 % Pre-Laboratorio 5: Trajectory Optimization y TV-LQR
 
 % Parámetros de horizonte temporal
-N = 150;       % Número de pasos de discretización
-Ts = 0.01;    % Tiempo de muestreo
+N = 30;       % Número de pasos de discretización
+Ts = 0.05;    % Tiempo de muestreo
 nx = 8;        % Número de estados: [q1,q2,q3,q4,dq1,dq2,dq3,dq4]
 nu = 4;        % Número de entradas: torques
 
-x0 = [pi/2; 0; pi/6; pi/3; 0; 0; 0; 0];      % Estado inicial (q,dq)
+x0 = [0; 0; pi/6; pi/3; 0; 0; 0; 0];      % Estado inicial (q,dq)
 yf = [0.2; -0.13; 0.2; 0];               % Salida deseada (posición y orientación)
 
 % Saturaciones de torque

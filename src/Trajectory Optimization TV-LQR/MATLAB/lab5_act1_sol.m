@@ -20,11 +20,21 @@ rng(1);
 %  Configuracion
 %  ========================================================================
 
-EXPORT_FIGS = true;   % true  = guardar PNG (300 dpi) y EPS vectorial (600 dpi)
+EXPORT_FIGS = false;   % true  = guardar PNG (300 dpi) y EPS vectorial (600 dpi)
                        % false = solo visualizar
 
 % Directorio raiz del paquete ROS 2
 pkg_dir = '/home/utec/open_manx_ws/src/open_manipulator_x_torque_control';
+
+% ── Metodo de Riccati para ganancias TV-LQR ──────────────────────────────
+% 'zoh'  — Discreto ZOH exacto via expm (recomendado para Ts >= 0.02 s).
+%           Garantiza S > 0 algebraicamente sin integrar un ODE continuo.
+% 'std'  — Continuo estandar sobre S, integrado con RK4 hacia atras.
+%           Puede perder definitividad positiva si ||A||*Ts es grande.
+% 'sqrt' — Continuo forma sqrt (S = P*P'), integrado con RK4 hacia atras.
+%           Puede singularizarse (P -> 0) con Ts grande; aumentar riccati_jj.
+riccati_method = 'zoh';
+riccati_jj     = 100;   % sub-pasos RK4 por intervalo Ts (solo 'std' y 'sqrt')
 
 %% ========================================================================
 %  1. Parametros generales
@@ -35,7 +45,7 @@ Ts = 0.05;
 nx = 8;
 nu = 4;
 
-x0 = [0.0; 0; pi/6; pi/3; 0; 0; 0; 0];
+x0 = [pi/2; 0; pi/6; pi/3; 0; 0; 0; 0];
 yf = [0.2; -0.13; 0.2; 0];
 
 ukmax =  1;
@@ -78,8 +88,8 @@ options = optimoptions('fmincon', ...
 %  3. Trajectory optimization
 %  ========================================================================
 
-use_saved_solution = false;  % false = regenerar con limites articulares
-zmin_file = 'zmin2.mat';
+use_saved_solution = true;  % false = regenerar con limites articulares
+zmin_file = 'zmin4.mat';
 exitflag = NaN;
 output = struct();
 
@@ -203,11 +213,6 @@ for k = 1:N
     end
 end
 
-fprintf('\nDimension de A1: %d x %d\n', size(Ak(:,:,1),1), size(Ak(:,:,1),2));
-fprintf('Dimension de B1: %d x %d\n', size(Bk(:,:,1),1), size(Bk(:,:,1),2));
-disp('A1 = '); disp(Ak(:,:,1));
-disp('B1 = '); disp(Bk(:,:,1));
-
 %% ========================================================================
 %  6. TV-LQR: calculo de ganancias variantes en el tiempo
 %  ========================================================================
@@ -217,31 +222,69 @@ Rk = 100*eye(nu);
 Qf = Qk;
 
 K_TV = zeros(nu, nx, N);
+fprintf('Calculando K_TV (metodo: %s)...\n', riccati_method);
 
-% Riccati discreto hacia atras con discretizacion ZOH exacta (expm).
-% La recursion discreta garantiza S > 0 en cada paso sin integrar el ODE
-% continuo (que pierde definitividad positiva con Ts=0.05).
-fprintf('Calculando K_TV (Riccati discreto ZOH)...\n');
-S_next = Qf;   % condicion terminal S_{N+1} = Qf
+switch riccati_method
 
-for k = N:-1:1
-    A = Ak(:,:,k);
-    B = Bk(:,:,k);
+    % ── ZOH exacto (recomendado) ─────────────────────────────────────────
+    case 'zoh'
+        S_next = Qf;      % condicion terminal S_{N+1} = Qf
+        for k = N:-1:1
+            A  = Ak(:,:,k);   B  = Bk(:,:,k);
+            Z  = expm([[A, B]; [zeros(nu, nx+nu)]] * Ts);
+            Ad = Z(1:nx, 1:nx);   Bd = Z(1:nx, nx+1:nx+nu);
+            Mterm       = Rk + Bd'*S_next*Bd;
+            K_TV(:,:,k) = Mterm \ (Bd'*S_next*Ad);
+            S_cur       = Qk + Ad'*S_next*(Ad - Bd*K_TV(:,:,k));
+            S_next      = 0.5*(S_cur + S_cur');
+        end
 
-    % Discretizacion ZOH exacta: [Ad, Bd] = expm([A,B;0,0]*Ts)
-    Z  = expm([[A, B]; [zeros(nu, nx+nu)]] * Ts);
-    Ad = Z(1:nx,       1:nx);
-    Bd = Z(1:nx, nx+1 : nx+nu);
+    % ── Estandar sobre S (ODE continuo, RK4 hacia atras) ─────────────────
+    case 'std'
+        TsR    = Ts / riccati_jj;
+        S_next = Qf;      % condicion terminal S_{N+1} = Qf
+        for k = N:-1:1
+            A = Ak(:,:,k);   B = Bk(:,:,k);   S = S_next;
+            for JJ = 1:riccati_jj
+                f1 = Ricc_std(S,            A, B, Qk, Rk);
+                f2 = Ricc_std(S + f1*TsR/2, A, B, Qk, Rk);
+                f3 = Ricc_std(S + f2*TsR/2, A, B, Qk, Rk);
+                f4 = Ricc_std(S + f3*TsR,   A, B, Qk, Rk);
+                S  = S + TsR*(f1 + 2*f2 + 2*f3 + f4)/6;
+                S  = 0.5*(S + S');
+            end
+            S_next      = S;
+            K_TV(:,:,k) = Rk \ (B'*S);
+        end
 
-    % Paso de Riccati discreto hacia atras
-    Mterm       = Rk + Bd'*S_next*Bd;
-    K_TV(:,:,k) = Mterm \ (Bd'*S_next*Ad);
-    S_cur       = Qk + Ad'*S_next*(Ad - Bd*K_TV(:,:,k));
-    S_next      = 0.5*(S_cur + S_cur');   % simetrizacion numerica
+    % ── Sqrt form (ODE continuo, S = P*P', RK4 hacia atras) ──────────────
+    case 'sqrt'
+        TsR = Ts / riccati_jj;
+        Pk  = zeros(nx, nx, N);
+        Pk(:,:,N)   = sqrtm(0.05*Qf);     % condicion terminal (idem Lab5_Sol.m)
+        Sk_N        = Pk(:,:,N)*Pk(:,:,N)';
+        K_TV(:,:,N) = Rk \ (Bk(:,:,N)'*Sk_N);
+        for k = N:-1:2
+            P = Pk(:,:,k);   A = Ak(:,:,k);   B = Bk(:,:,k);
+            for JJ = 1:riccati_jj
+                k1 = Ricc_sqrt(P,            A, B, Qk, Rk);
+                k2 = Ricc_sqrt(P + k1*TsR/2, A, B, Qk, Rk);
+                k3 = Ricc_sqrt(P + k2*TsR/2, A, B, Qk, Rk);
+                k4 = Ricc_sqrt(P + k3*TsR,   A, B, Qk, Rk);
+                P  = P + TsR*(k1 + 2*k2 + 2*k3 + k4)/6;
+            end
+            Pk(:,:,k-1)   = P;
+            K_TV(:,:,k-1) = Rk \ (B'*(P*P'));
+        end
+
+    otherwise
+        error('riccati_method invalido: ''%s''. Usar ''zoh'', ''std'' o ''sqrt''.', ...
+              riccati_method);
 end
 
 if ~all(isfinite(K_TV(:)))
-    error('K_TV contiene NaN/Inf — revisar linealizacion y parametros.');
+    error('K_TV contiene NaN/Inf — revisar linealizacion y metodo Riccati (''%s'').', ...
+          riccati_method);
 end
 fprintf('K_TV calculado. max||K_TV(:,:,k)|| = %.4f\n', ...
     max(arrayfun(@(k) norm(K_TV(:,:,k)), 1:N)));
@@ -520,6 +563,18 @@ function u = controlTVLQR(t, x, Uref, Xref, Ts, N, K_TV)
     k = floor(t/Ts) + 1;
     k = min(max(k, 1), N);
     u = Uref(:,k) - K_TV(:,:,k)*(x - Xref(:,k));
+end
+
+function dS = Ricc_std(S, A, B, Q, R)
+% Riccati estandar continuo integrado hacia atras (tau = tf - t).
+% dS/dtau = A'S + SA - S*B*R^{-1}*B'*S + Q
+    dS = A'*S + S*A - S*B*(R \ (B'*S)) + Q;
+end
+
+function dP = Ricc_sqrt(P, A, B, Q, R)
+% Riccati forma sqrt integrado hacia atras; S = P*P'.
+% dP/dtau = A'P - (1/2)*P*P'*B*R^{-1}*B'*P + (1/2)*Q*P'^{-1}
+    dP = A'*P - 0.5*P*P'*B*(R \ (B'*P)) + 0.5*(Q/P');
 end
 
 function printMetricsParteB(metricsB, label)
