@@ -49,14 +49,16 @@ from launch_ros.substitutions import FindPackageShare
 
 
 def _load_init_config():
-    """Lee config/sim_init_config.yaml y devuelve (use_fixed_init_str, q_init)."""
+    """Lee config/sim_init_config.yaml y devuelve (use_fixed_init_str, q_init, spawn_obs, obs_pose)."""
     pkg_share = get_package_share_directory('open_manipulator_x_torque_control')
     cfg_path  = os.path.join(pkg_share, 'config', 'sim_init_config.yaml')
     with open(cfg_path, 'r') as f:
         cfg = yaml.safe_load(f)
     use_fixed = 'true' if cfg.get('use_fixed_init', False) else 'false'
     q_init    = cfg.get('q_init', [0.0, 0.0, 0.0, 0.0])
-    return use_fixed, q_init
+    spawn_obs = cfg.get('spawn_obstacle', False)
+    obs_pose  = cfg.get('obstacle_pose', [0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+    return use_fixed, q_init, spawn_obs, obs_pose
 
 
 def generate_launch_description():
@@ -64,8 +66,8 @@ def generate_launch_description():
     prefix     = LaunchConfiguration('prefix')
     start_rviz = LaunchConfiguration('start_rviz')
 
-    # Leer configuracion de posicion inicial desde YAML
-    use_fixed_init, q_init = _load_init_config()
+    # Leer configuracion de posicion inicial y obstáculo desde YAML
+    use_fixed_init, q_init, spawn_obs, obs_pose = _load_init_config()
 
     world = PathJoinSubstitution([
         FindPackageShare('open_manipulator_x_torque_control'),
@@ -195,6 +197,56 @@ def generate_launch_description():
         output='screen',
     )
 
+    # Spawn del obstáculo MDF (condicional según spawn_obstacle en sim_init_config.yaml)
+    spawn_obstacle_node = None
+    if spawn_obs:
+        _pkg = get_package_share_directory('open_manipulator_x_torque_control')
+        _stl = 'file://{}/meshes/obstacle_mdf.stl'.format(_pkg)
+        # Colisión: 3 cajas primitivas en vez de la malla STL cóncava.
+        # ODE no resuelve bien colisiones de mallas cóncavas (arcos/puentes);
+        # las trata como casco convexo y deja "huecos" en las paredes.
+        # Dimensiones en marco local del link (antes de aplicar la pose del modelo):
+        #   STL [mm]: X∈[-160,+160], Y∈[-75,+75], Z∈[0,158]  → scale 0.001
+        #   Techo  : 320×150×3 mm  → centro (0, 0, 0.1565 m)
+        #   Pared-I: 320×3×155 mm  → centro (0, -0.0735, 0.0775 m)
+        #   Pared-D: 320×3×155 mm  → centro (0, +0.0735, 0.0775 m)
+        _col = (
+            '<surface><contact><ode><kp>1000000</kp><kd>100</kd></ode></contact>'
+            '<friction><ode><mu>0.6</mu><mu2>0.6</mu2></ode></friction></surface>'
+        )
+        _sdf = (
+            '<?xml version="1.0"?><sdf version="1.9">'
+            '<model name="obstacle_mdf"><static>true</static><link name="link">'
+            '<visual name="visual"><geometry><mesh>'
+            '<uri>{uri}</uri><scale>0.001 0.001 0.001</scale>'
+            '</mesh></geometry>'
+            '<material><ambient>0.75 0.60 0.42 1</ambient>'
+            '<diffuse>0.75 0.60 0.42 1</diffuse>'
+            '<specular>0.08 0.06 0.04 1</specular></material></visual>'
+            '<collision name="col_top"><pose>0 0 0.1565 0 0 0</pose>'
+            '<geometry><box><size>0.320 0.150 0.003</size></box></geometry>'
+            + _col + '</collision>'
+            '<collision name="col_left"><pose>0 -0.0735 0.0775 0 0 0</pose>'
+            '<geometry><box><size>0.320 0.003 0.155</size></box></geometry>'
+            + _col + '</collision>'
+            '<collision name="col_right"><pose>0 0.0735 0.0775 0 0 0</pose>'
+            '<geometry><box><size>0.320 0.003 0.155</size></box></geometry>'
+            + _col + '</collision>'
+            '</link></model></sdf>'
+        ).format(uri=_stl)
+        spawn_obstacle_node = Node(
+            package='ros_gz_sim',
+            executable='create',
+            arguments=[
+                '-name', 'obstacle_mdf',
+                '-string', _sdf,
+                '-x', str(obs_pose[0]), '-y', str(obs_pose[1]), '-z', str(obs_pose[2]),
+                '-R', str(obs_pose[3]), '-P', str(obs_pose[4]), '-Y', str(obs_pose[5]),
+            ],
+            output='screen',
+            name='spawn_obstacle',
+        )
+
     rviz_config = PathJoinSubstitution([
         FindPackageShare('open_manipulator_x_bringup'),
         'rviz',
@@ -219,10 +271,14 @@ def generate_launch_description():
     )
 
     # spawn termina → espera 3 s (hardware interface se activa en el 1er paso de sim) → jsb_spawner
+    # + spawn del obstáculo MDF si está habilitado en sim_init_config.yaml
+    _post_spawn = [TimerAction(period=3.0, actions=[jsb_spawner])]
+    if spawn_obstacle_node is not None:
+        _post_spawn.append(spawn_obstacle_node)
     jsb_after_spawn = RegisterEventHandler(
         event_handler=OnProcessExit(
             target_action=spawn_robot,
-            on_exit=[TimerAction(period=3.0, actions=[jsb_spawner])],
+            on_exit=_post_spawn,
         )
     )
 
