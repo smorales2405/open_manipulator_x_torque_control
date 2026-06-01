@@ -58,7 +58,7 @@ using namespace std::chrono_literals;
 #endif
 
 static constexpr int    NARM    = 4;
-static constexpr double TAU_MAX = 1.0;   // [N·m] — limite del URDF (effort="1")
+static constexpr double TAU_MAX = 1.5;   // [N·m] — limite por articulacion (effort="1.5")
 
 // ============================================================================
 //  Nodo ROS 2
@@ -90,7 +90,7 @@ public:
       "Referencia: q_des = [0, 0, 0, 0] rad");
 
     // ── Pinocchio ─────────────────────────────────────────────────────────────
-    const std::string urdf = std::string(PACKAGE_URDF_DIR) + "/openmani.urdf";
+    const std::string urdf = std::string(PACKAGE_URDF_DIR) + "/open_manipulator_x.urdf";
     try {
       pinocchio::urdf::buildModel(urdf, model_);
     } catch (const std::exception & e) {

@@ -239,7 +239,7 @@ public:
       LAMBDA, TAU_MAX);
 
     // ── Pinocchio ────────────────────────────────────────────────────────────
-    const std::string urdf = std::string(PACKAGE_URDF_DIR) + "/openmani.urdf";
+    const std::string urdf = std::string(PACKAGE_URDF_DIR) + "/open_manipulator_x.urdf";
     try {
       pinocchio::urdf::buildModel(urdf, model_);
     } catch (const std::exception& e) {

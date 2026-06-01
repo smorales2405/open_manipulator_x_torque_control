@@ -78,7 +78,7 @@ static const Eigen::Vector4d KP = {40.0, 40.0, 40.0, 120.0};
 static const Eigen::Vector4d KD = {13.0, 13.0, 13.0,  22.0};   
 
 // Saturacion de torque por articulacion [N·m]
-static constexpr double TAU_MAX = 0.82;
+static constexpr double TAU_MAX = 1.5;
 
 // Duracion de la fase de transicion inicial [s]
 static constexpr double T_TRANS = 2.0;
@@ -172,7 +172,7 @@ public:
     t_sim_ = this->get_parameter("t_sim").as_double();
 
     // Cargar modelo Pinocchio
-    const std::string urdf = std::string(PACKAGE_URDF_DIR) + "/openmani.urdf";
+    const std::string urdf = std::string(PACKAGE_URDF_DIR) + "/open_manipulator_x.urdf";
     try {
       pinocchio::urdf::buildModel(urdf, model_);
     } catch (const std::exception & e) {

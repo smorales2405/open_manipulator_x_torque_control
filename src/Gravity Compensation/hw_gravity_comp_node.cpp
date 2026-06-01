@@ -3,6 +3,12 @@
  * Compensacion gravitacional pura — OpenMANIPULATOR-X hardware real.
  * Via Dynamixel SDK directo, sin ros2_control.
  *
+ * Modelo dinamico: urdf/open_manipulator_x.urdf
+ *   Masas y centros de gravedad actualizados desde el e-Manual oficial de
+ *   ROBOTIS (Section 2.3 Inertia), incluyendo masa del ensamble motor+eslabon
+ *   para cada joint. Los torques G(q) resultantes son mas precisos que con
+ *   el modelo CAD anterior (openmani.urdf).
+ *
  * Ley de control:
  *   tau = gravity_scale * G(q)
  *
@@ -98,12 +104,12 @@ static const std::array<int32_t, NUM_JOINTS> JOINT_ZERO_TICK = {2048, 2048, 2048
 static const std::array<double, NUM_JOINTS> ENCODER_SIGN = {+1.0, -1.0, -1.0, -1.0};
 static const std::array<double, NUM_JOINTS> CURRENT_SIGN = {+1.0, +1.0, +1.0, +1.0};
 
-// Limites articulares [rad]
+// Limites articulares [rad] — coinciden con open_manipulator_x.urdf
 static const std::array<double, NUM_JOINTS> JOINT_LOWER = {
-  -1.570796, -1.570796, -1.570796, -1.790707812546182
+  -2.827433388230814, -1.790707812546182, -0.9424777960769379, -1.790707812546182
 };
 static const std::array<double, NUM_JOINTS> JOINT_UPPER = {
-  +1.570796, +1.570796, +1.570796, +2.0420352248333655
+  +2.827433388230814, +1.5707963267948966, +1.382300767579509, +2.0420352248333655
 };
 
 // Limites de corriente de seguridad
@@ -185,7 +191,8 @@ public:
       viscous_comp_, duration_s_, log_id);
 
     // ── Pinocchio ────────────────────────────────────────────────────────────
-    const std::string urdf = std::string(PACKAGE_URDF_DIR) + "/openmani.urdf";
+    const std::string urdf = std::string(PACKAGE_URDF_DIR) + "/open_manipulator_x.urdf";
+    RCLCPP_INFO(get_logger(), "Cargando modelo dinamico: %s", urdf.c_str());
     try {
       pinocchio::urdf::buildModel(urdf, model_);
     } catch (const std::exception & e) {
@@ -193,7 +200,11 @@ public:
       throw;
     }
     data_ = pinocchio::Data(model_);
-    RCLCPP_INFO(get_logger(), "Pinocchio: nv=%d", model_.nv);
+    double total_mass = 0.0;
+    for (std::size_t i = 1; i < model_.inertias.size(); ++i)
+      total_mass += model_.inertias[i].mass();
+    RCLCPP_INFO(get_logger(), "Pinocchio: nv=%d  masa_total=%.3f kg",
+      model_.nv, total_mass);
 
     // ── CSV ──────────────────────────────────────────────────────────────────
     const std::string csv_dir = std::string(PACKAGE_DATA_DIR) + "/gravity_comp";

@@ -270,7 +270,7 @@ public:
       port_name_.c_str(), gain_scale_, deadzone_ticks_, viscous_comp_, t_imp_, log_id);
 
     // ── Pinocchio ────────────────────────────────────────────────────────────
-    const std::string urdf = std::string(PACKAGE_URDF_DIR) + "/openmani.urdf";
+    const std::string urdf = std::string(PACKAGE_URDF_DIR) + "/open_manipulator_x.urdf";
     try {
       pinocchio::urdf::buildModel(urdf, model_);
     } catch (const std::exception& e) {

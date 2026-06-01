@@ -193,8 +193,8 @@ for i = 1:4
     nexttile(tl5);
     plot(t, tau(:,i), '-', 'Color', c_tau(i,:), 'LineWidth', lw); hold on;
     yline(0,     ':',  'LineWidth', 0.8);
-    yline( 0.82, '--k', 'LineWidth', 0.9, 'Label', '+0.82 N·m');
-    yline(-0.82, '--k', 'LineWidth', 0.9, 'Label', '-0.82 N·m');
+    yline( 1.5, '--k', 'LineWidth', 0.9, 'Label', '+1.5 N·m');
+    yline(-1.5, '--k', 'LineWidth', 0.9, 'Label', '-1.5 N·m');
     xlabel('Tiempo [s]', 'FontSize', fs);
     ylabel(sprintf('$\\tau_%d\\;[\\mathrm{N{\\cdot}m}]$', i), ...
            'Interpreter', 'latex', 'FontSize', fs);

@@ -100,6 +100,8 @@ static constexpr int16_t  CURRENT_CMD_LIMIT_J123 = 190;
 static constexpr int16_t  CURRENT_CMD_LIMIT_J4   = 152;
 static constexpr int16_t  CURRENT_MEASURED_PEAK  = 220;
 
+static constexpr double TAU_MAX = 1.5;   // [N·m] saturacion de torque por articulacion
+
 static constexpr double RAMP_TIME_S = 3.0;
 
 using Vec4 = Eigen::Matrix<double, NUM_JOINTS, 1>;
@@ -213,7 +215,7 @@ public:
       port_name_.c_str(), gain_scale_, deadzone_ticks_, viscous_comp_, t_imp_, log_id);
 
     // ── Pinocchio ────────────────────────────────────────────────────────────
-    const std::string urdf = std::string(PACKAGE_URDF_DIR) + "/openmani.urdf";
+    const std::string urdf = std::string(PACKAGE_URDF_DIR) + "/open_manipulator_x.urdf";
     try {
       pinocchio::urdf::buildModel(urdf, model_);
     } catch (const std::exception& e) {
@@ -516,8 +518,9 @@ private:
       }
     }
 
-    // 5. Ley de control
-    const Vec4 tau = compute_torque(q, dq, ref);
+    // 5. Ley de control (con saturacion de torque por articulacion)
+    const Vec4 tau_unsat = compute_torque(q, dq, ref);
+    const Vec4 tau = tau_unsat.cwiseMin(TAU_MAX).cwiseMax(-TAU_MAX);
     const auto cur_cmd = torque_to_current(tau, dq);
 
     // 6. Escribir corriente

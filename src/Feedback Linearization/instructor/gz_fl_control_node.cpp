@@ -62,9 +62,11 @@ static constexpr int    NARM = 4;    // controlled joints (joint1..joint4)
 //  GANANCIAS DEL CONTROLADOR  — editar aqui para cada articulacion
 //  Indice:  [joint1, joint2, joint3, joint4]
 // ═══════════════════════════════════════════════════════════════════════════
-static const Eigen::Vector4d KP = {200.0, 200.0, 200.0, 200.0};
-static const Eigen::Vector4d KD = { 20.0,  20.0,  20.0,  20.0};
-static constexpr double TAU_MAX = 0.82;   // [N·m] limite por articulacion
+static const Eigen::Vector4d KP = {200.0, 200.0, 200.0, 400.0};
+static const Eigen::Vector4d KD = { 20.0,  20.0,  20.0,  36.0};
+static constexpr double TAU_MAX = 1.5;    // [N·m] limite por articulacion
+// Aumentado de 0.82 a 1.5 para el URDF con inercias oficiales ROBOTIS:
+// max|G_new[joint2]| = 1.18 N.m > 0.82 → saturacion permanente con el limite anterior.
 // ═══════════════════════════════════════════════════════════════════════════
 
 // ── Trajectory ──────────────────────────────────────────────────────────────
@@ -113,7 +115,7 @@ public:
     this->declare_parameter<double>("t_sim", 0.0);   // 0 = sin limite
     t_sim_ = this->get_parameter("t_sim").as_double();
 
-    const std::string urdf = std::string(PACKAGE_URDF_DIR) + "/openmani.urdf";
+    const std::string urdf = std::string(PACKAGE_URDF_DIR) + "/open_manipulator_x.urdf";
 
     // Load Pinocchio model
     try {
