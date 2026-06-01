@@ -1,17 +1,19 @@
 %% gen_OMDyn.m
 % Regenera OMDyn.m a partir de los parametros cinematicos/inerciales de
-% openmani.urdf usando derivacion simbolica (Lagrangiana).
+% open_manipulator_x.urdf usando derivacion simbolica (Lagrangiana).
 %
 % Requiere: MATLAB Symbolic Math Toolbox
 % Tiempo estimado: 15-35 minutos (sin llamadas a simplify)
 %
 % Salida:
-%   OMDyn_original.m  — copia de seguridad del OMDyn.m existente
-%   OMDyn.m           — nueva version consistente con openmani.urdf
+%   OMDyn_openmani.m  — copia de seguridad del OMDyn.m existente (openmani.urdf)
+%   OMDyn.m           — nueva version consistente con open_manipulator_x.urdf
 %
-% Parametros tomados de openmani.urdf:
-%   - Masas link1..5, centros de masa, tensores de inercia en frame del link
-%   - Origenes y ejes de joint1..4
+% Parametros tomados de open_manipulator_x.urdf:
+%   - Masas link2..5, centros de masa, tensores de inercia
+%     (transformados desde datos de ensamble ROBOTIS e-Manual, R por link:
+%      link2→I, link3→Rz(180°), link4→Ry(90°), link5→Ry(90°))
+%   - Origenes y ejes de joint1..4  (identicos a openmani.urdf)
 
 clear; clc;
 fprintf('=================================================================\n');
@@ -20,37 +22,40 @@ fprintf('=================================================================\n\n')
 t0 = tic;
 
 %% ========================================================================
-%  1. Parametros del URDF  (openmani.urdf)
+%  1. Parametros del URDF  (open_manipulator_x.urdf)
 %  ========================================================================
 
 % Masas [kg]  — link1 es la base fija, no contribuye a la dinamica
-m = [9.8406837e-02;   % link2
-     1.3850917e-01;   % link3
-     1.3274562e-01;   % link4
-     1.4327573e-01];  % link5
+% Fuente: datos de ensamble ROBOTIS e-Manual transformados al frame del link
+m = [1.0483260e-01;   % link2  (Joint1 Assembly: 104.83 g)
+     1.4234630e-01;   % link3  (Joint2 Assembly: 142.35 g)
+     1.3467049e-01;   % link4  (Joint3 Assembly: 134.67 g)
+     2.3650927e-01];  % link5  (Joint4 Assembly: 235.51 g — incluye gripper)
 
 % Centros de masa en el frame del link correspondiente [m]
-rc = [ -3.0184870e-04,  5.4043684e-04, 4.7433464e-02;   % link2
-        1.0308393e-02,  3.7743363e-04, 1.0170197e-01;   % link3
-        9.0909590e-02,  3.8929816e-04, 2.2413279e-04;   % link4
-        4.4206755e-02,  3.6839985e-07, 8.9142216e-03];  % link5
+% Transformados con rotaciones: link2→I, link3→Rz(180°), link4,5→Ry(90°)
+rc = [  0.0000000e+00, -5.6914372e-04, 2.6565513e-02;   % link2
+        9.1617228e-03,  4.1915210e-04, 1.0599938e-01;   % link3
+        9.3290225e-02,  4.4304274e-04, 3.6312773e-07;   % link4
+        6.0472935e-02,  7.9503949e-07, 6.1273313e-03];  % link5
 
 % Tensores de inercia en el CoM, en el frame del link [kg·m^2]
-%   orden: Ixx, Iyy, Izz, Ixy, Ixz, Iyz
-Ic = {[ 3.4543422e-05, -1.6031095e-08, -3.8375155e-07;
-       -1.6031095e-08,  3.2689329e-05,  2.8511935e-08;
-       -3.8375155e-07,  2.8511935e-08,  1.8850320e-05], ...  % link2
-      [ 3.3055381e-04, -9.7940978e-08, -3.8505711e-05;
-       -9.7940978e-08,  3.4290447e-04, -1.5717516e-06;
-       -3.8505711e-05, -1.5717516e-06,  6.0346498e-05], ...  % link3
-      [ 3.0654178e-05, -1.2764155e-06, -2.6874417e-07;
-       -1.2764155e-06,  2.4230292e-04,  1.1559550e-08;
-       -2.6874417e-07,  1.1559550e-08,  2.5155057e-04], ...  % link4
-      [ 8.0870749e-05,  0.0,           -1.0157896e-06;
-        0.0,            7.5980465e-05,  0.0;
-       -1.0157896e-06,  0.0,            9.3127351e-05]};      % link5
+%   I = [Ixx, Ixy, Ixz; Ixy, Iyy, Iyz; Ixz, Iyz, Izz]
+Ic = {[ 3.3802078e-05,  0.0,            0.0;
+        0.0,            2.9569411e-05,  2.2121514e-07;
+        0.0,            2.2121514e-07,  1.7810252e-05], ...  % link2
+      [ 2.3711450e-04, -2.7513999e-07, -2.6668982e-05;
+       -2.7513999e-07,  2.4488355e-04, -1.3128636e-06;
+       -2.6668982e-05, -1.3128636e-06,  4.2967059e-05], ...  % link3
+      [ 2.4809204e-05, -1.2221090e-06,  1.8290300e-09;
+       -1.2221090e-06,  1.7818139e-04,  0.0;
+        1.8290300e-09,  0.0,            1.8688812e-04], ...  % link4
+      [ 1.7393236e-04, -1.5305492e-08,  2.2615865e-05;
+       -1.5305492e-08,  2.0769766e-04, -2.2288943e-07;
+        2.2615865e-05, -2.2288943e-07,  2.6708326e-04]};     % link5
 
 % Origenes de los joints en el frame del link padre [m]
+% Nota: identicos a openmani.urdf (joint1 Z=0.017 conservado en omx.urdf)
 pj = [0.012, 0.0,   0.017;    % joint1 en link1
       0.0,   0.0,   0.0595;   % joint2 en link2
       0.024, 0.0,   0.128;    % joint3 en link3
@@ -292,13 +297,13 @@ fprintf('[%.0fs] phib calculado.\n', toc(t0));
 
 script_dir  = fileparts(mfilename('fullpath'));
 orig_file   = fullfile(script_dir, 'OMDyn.m');
-backup_file = fullfile(script_dir, 'OMDyn_original.m');
+backup_file = fullfile(script_dir, 'OMDyn_openmani.m');  % backup de la version openmani.urdf
 output_file = fullfile(script_dir, 'OMDyn.m');
 
-% Copia de seguridad del OMDyn.m original
+% Copia de seguridad del OMDyn.m existente (generado desde openmani.urdf)
 if isfile(orig_file)
     copyfile(orig_file, backup_file);
-    fprintf('\nCopia de seguridad guardada en: OMDyn_original.m\n');
+    fprintf('\nCopia de seguridad guardada en: OMDyn_openmani.m\n');
 end
 
 fprintf('[%.0fs] Generando OMDyn.m con matlabFunction (Optimize=true)...\n', toc(t0));
