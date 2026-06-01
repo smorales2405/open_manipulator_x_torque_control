@@ -182,6 +182,13 @@ target_compile_definitions(hw_tvlqr_node PRIVATE
   "PACKAGE_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\""
   "PACKAGE_SHARE_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}\"")
 
+# ── hw_torque_probe_node (diagnostico de polaridad torque->corriente) ────────
+add_executable(hw_torque_probe_node "src/Diagnostics/hw_torque_probe_node.cpp")
+ament_target_dependencies(hw_torque_probe_node rclcpp)
+target_include_directories(hw_torque_probe_node PRIVATE ${dynamixel_sdk_INCLUDE_DIRS})
+target_link_libraries(hw_torque_probe_node ${dynamixel_sdk_LIBRARIES})
+target_compile_features(hw_torque_probe_node PUBLIC cxx_std_17)
+
 # ── Forward Kinematics ───────────────────────────────────────────────────────
 set(FK_SRC "src/Forward Kinematics")
 
@@ -212,6 +219,7 @@ install(TARGETS
     gz_gravity_comp_node
     hw_gravity_comp_node
     hw_fkin_node
+    hw_torque_probe_node
   DESTINATION lib/${PROJECT_NAME})
 
 install(DIRECTORY xacro config launch scripts data urdf meshes worlds
