@@ -74,8 +74,12 @@ static constexpr char EFF_FRAME[] = "end_effector_link";
 // Ganancias cartesianas  [x,  y,  z,  phi]
 // phi usa ganancias mas altas (wn≈11 rad/s) para rechazar el acoplamiento                                                    
 // cinematico periodico inducido por la trayectoria circular (w=1 rad/s).                                                     
-static const Eigen::Vector4d KP = {40.0, 40.0, 40.0, 120.0};   
-static const Eigen::Vector4d KD = {13.0, 13.0, 13.0,  22.0};   
+// Ajustadas para el URDF con inercias oficiales ROBOTIS (brazo mas pesado:
+// M subio x1.5 en joint2, x2.8 en joint4). Las ganancias previas {40..120}/{13..22}
+// saturaban tau2 -> joint2 a su limite -> divergencia DLS. El canal phi usa KP mayor
+// (200) para rechazar el offset de seguimiento; tau4 tiene amplio headroom (max 0.15 N.m).
+static const Eigen::Vector4d KP = {100.0, 100.0, 100.0, 200.0};
+static const Eigen::Vector4d KD = {10.0, 10.0, 10.0,  20.0};
 
 // Saturacion de torque por articulacion [N·m]
 static constexpr double TAU_MAX = 1.5;
@@ -86,7 +90,7 @@ static constexpr double T_TRANS = 2.0;
 // Factor de amortiguamiento para la pseudo-inversa DLS  (Damped Least Squares)
 // Limita la norma de qddot cerca de singularidades sin afectar la inversion
 // cuando el Jacobiano esta bien condicionado (usar 0.01 - 0.05).
-static constexpr double LAMBDA    = 0.01;
+static constexpr double LAMBDA    = 0.05;
 static constexpr double LAMBDA_SQ = LAMBDA * LAMBDA;
 
 // Inicio de la trayectoria circular (= valor de la referencia en t'=0)
