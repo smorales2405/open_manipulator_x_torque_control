@@ -94,26 +94,26 @@ static constexpr uint8_t TORQUE_DISABLE_VAL   = 0;
 static constexpr double POS_UNIT_RAD            = 2.0 * PI / 4096.0;
 static constexpr double VEL_UNIT_RAD_S          = 0.229 * 2.0 * PI / 60.0;
 static constexpr double CURRENT_UNIT_A          = 0.00269;
-static constexpr double TORQUE_CONSTANT_NM_A    = 1.666;
+static constexpr double TORQUE_CONSTANT_NM_A    = 1.7826;
 static constexpr double TORQUE_PER_CURRENT_TICK = TORQUE_CONSTANT_NM_A * CURRENT_UNIT_A;
 
 static const std::array<int32_t, NUM_JOINTS> JOINT_ZERO_TICK = {2048, 2048, 2048, 2048};
-static const std::array<double,  NUM_JOINTS> ENCODER_SIGN    = {+1.0, -1.0, -1.0, -1.0};
+static const std::array<double,  NUM_JOINTS> ENCODER_SIGN    = {+1.0, +1.0, +1.0, +1.0};
 static const std::array<double,  NUM_JOINTS> CURRENT_SIGN    = {+1.0, +1.0, +1.0, +1.0};
 
 static const std::array<double, NUM_JOINTS> JOINT_LOWER = {
-  -1.570796, -1.570796, -1.570796, -1.790707812546182
+  -1.570796, -1.570796, -1.570796, -2.290707812546182
 };
 static const std::array<double, NUM_JOINTS> JOINT_UPPER = {
-  +1.570796, +1.570796, +1.570796, +2.0420352248333655
+  +1.570796, +1.570796, +1.570796, +2.2420352248333655
 };
 
-static constexpr uint16_t CURRENT_LIMIT_REGISTER = 300;
-static constexpr int16_t  CURRENT_CMD_LIMIT_J123 = 190;
-static constexpr int16_t  CURRENT_CMD_LIMIT_J4   = 152;
-static constexpr int16_t  CURRENT_MEASURED_PEAK  = 220;
+static constexpr uint16_t CURRENT_LIMIT_REGISTER = 350;
+static constexpr int16_t  CURRENT_CMD_LIMIT_J123 = 257;
+static constexpr int16_t  CURRENT_CMD_LIMIT_J4   = 257;
+static constexpr int16_t  CURRENT_MEASURED_PEAK  = 313;
 
-static constexpr double TAU_MAX = 0.82;   // [N·m]
+static constexpr double TAU_MAX = 1.0;   // [N·m]
 
 using Vec4 = Eigen::Matrix<double, NUM_JOINTS, 1>;
 
