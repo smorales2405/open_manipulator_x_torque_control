@@ -182,8 +182,20 @@ target_compile_definitions(hw_tvlqr_node PRIVATE
   "PACKAGE_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\""
   "PACKAGE_SHARE_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}\"")
 
-# ── fkin_display_node (Python) ───────────────────────────────────────────────
+# ── Forward Kinematics ───────────────────────────────────────────────────────
 set(FK_SRC "src/Forward Kinematics")
+
+# hw_fkin_node: lee posiciones del robot real (torque cero) e imprime la
+# cinematica directa del efector final. Usa fkin analitica (sin Pinocchio).
+add_executable(hw_fkin_node "${FK_SRC}/hw_fkin_node.cpp")
+ament_target_dependencies(hw_fkin_node rclcpp sensor_msgs)
+target_include_directories(hw_fkin_node PRIVATE ${dynamixel_sdk_INCLUDE_DIRS})
+target_link_libraries(hw_fkin_node
+  ${dynamixel_sdk_LIBRARIES}
+  Eigen3::Eigen)
+target_compile_features(hw_fkin_node PUBLIC cxx_std_17)
+
+# fkin_display_node (Python)
 install(PROGRAMS
   "${FK_SRC}/fkin_display_node.py"
   DESTINATION lib/${PROJECT_NAME}
@@ -199,6 +211,7 @@ install(TARGETS
     hw_tvlqr_node
     gz_gravity_comp_node
     hw_gravity_comp_node
+    hw_fkin_node
   DESTINATION lib/${PROJECT_NAME})
 
 install(DIRECTORY xacro config launch scripts data urdf meshes worlds
