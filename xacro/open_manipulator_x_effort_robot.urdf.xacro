@@ -23,8 +23,10 @@
   <!-- Propiedades de contacto Gazebo (kp, kd, mu) y transmisiones legacy del original -->
   <xacro:include filename="$(find open_manipulator_x_description)/gazebo/open_manipulator_x.gazebo.xacro" />
 
-  <!-- Cinematica, masas e inercias del paquete original (sin modificar) -->
-  <xacro:include filename="$(find open_manipulator_x_description)/urdf/open_manipulator_x.urdf.xacro" />
+  <!-- Cinematica y geometria: copia local con inercias actualizadas desde ROBOTIS e-Manual.
+       Usa los mismos meshes y estructura cinematica del paquete de descripcion,
+       pero con masa/CoG/tensor de inercia oficiales (Section 2.3, PDF de especificaciones). -->
+  <xacro:include filename="$(find open_manipulator_x_torque_control)/xacro/open_manipulator_x.urdf.xacro" />
 
   <!-- ros2_control con command_interface effort (este paquete) -->
   <xacro:include filename="$(find open_manipulator_x_torque_control)/xacro/open_manipulator_x_effort.ros2_control.xacro" />
