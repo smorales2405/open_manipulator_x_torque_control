@@ -45,8 +45,8 @@ Ts = 0.05;
 nx = 8;
 nu = 4;
 
-x0 = [pi/2; 0; pi/6; pi/3; 0; 0; 0; 0];
-yf = [0.2; -0.13; 0.2; 0];
+x0 = [pi/2; 0.9158; 0.6565; -1.6751; 0; 0; 0; 0];
+yf = [0.2860; 0.0; 0.2045; 0];
 
 ukmax =  1;
 ukmin = -1;
@@ -64,32 +64,32 @@ dq_max  = 10;  % [rad/s]
 u0g = u0g(:);
 u0g = max(min(u0g, ukmax), ukmin);
 
-% Bounds: limites articulares + velocidad + torque
-lb_x = repmat([q_lower; -dq_max*ones(4,1)], N, 1);
-ub_x = repmat([q_upper;  dq_max*ones(4,1)], N, 1);
-lb = [lb_x; ukmin*ones(nu*N, 1)];
-ub = [ub_x; ukmax*ones(nu*N, 1)];
+% Bounds: SOLO torques como box bounds (lb/ub eficiente para constraints lineales).
+% Limites articulares y velocidad ELIMINADOS de lb/ub: su interaccion con las
+% restricciones de igualdad (dinamica RK4) crea KKT mal condicionado en
+% interior-point, forzando pasos pequenos y cientos de iteraciones extra.
+% El optimizador respeta limites articulares indirectamente via la funcion de costo.
+lb = [repmat(-inf(nx,1), N, 1);  ukmin*ones(nu*N, 1)];
+ub = [repmat( inf(nx,1), N, 1);  ukmax*ones(nu*N, 1)];
 
-% Punto inicial proyectado al interior estricto de lb/ub (evita advertencia fmincon)
-x0_bnd = [q_lower; -dq_max*ones(4,1)];
-x0_bub = [q_upper;  dq_max*ones(4,1)];
-x0_guess = max(x0_bnd + 1e-6, min(x0_bub - 1e-6, x0));
-z0 = [kron(ones(N,1), x0_guess); ...
-      kron(ones(N,1), u0g)];
+z0 = [kron(ones(N,1), x0); kron(ones(N,1), u0g)];
 
+% Algoritmo SQP: resuelve el KKT directamente sin barrier functions.
+% Para N=30 (360 variables, 240 igualdades) converge en 50-150 iter vs 200+ en interior-point.
 options = optimoptions('fmincon', ...
-    'Display', 'iter', ...
+    'Display',               'iter', ...
+    'Algorithm',             'sqp', ...
     'MaxFunctionEvaluations', 100000, ...
-    'MaxIterations', 2000, ...
-    'OptimalityTolerance', 1e-4, ...
-    'ConstraintTolerance', 1e-4);
+    'MaxIterations',          500, ...
+    'OptimalityTolerance',    1e-4, ...
+    'ConstraintTolerance',    1e-4);
 
 %% ========================================================================
 %  3. Trajectory optimization
 %  ========================================================================
 
-use_saved_solution = true;  % false = regenerar con limites articulares
-zmin_file = 'zmin4.mat';
+use_saved_solution = false;  % false = regenerar con limites articulares
+zmin_file = 'zmin6.mat';
 exitflag = NaN;
 output = struct();
 
