@@ -39,21 +39,29 @@ rng(1);
 
 EXPORT_FIGS = true;
 
-pkg_dir = '/home/utec/open_manx_ws/src/open_manipulator_x_torque_control';
+pkg_dir  = '/home/utec/open_manx_ws/src/open_manipulator_x_torque_control';
+log_file = fullfile(pkg_dir, 'src', 'Trajectory Optimization TV-LQR', ...
+                   'MATLAB', 'lab5_act2_log3.txt');
+if exist(log_file,'file'), delete(log_file); end
+diary(log_file); diary on;
+fprintf('=== lab5_act2_sol  %s ===\n\n', datestr(now,'yyyy-mm-dd HH:MM:SS'));
 
-riccati_method = 'zoh';
+% Método Riccati para TV-LQR:
+%   'zoh'      — ZOH discreto (Riccati algebraico por paso, más preciso)
+%   'sqrt_rk4' — Sqrt RK4 continuo (según guía del lab, integración hacia atrás)
+riccati_method = 'sqrt_rk4';
 
 %% ========================================================================
 %  1. Parámetros generales  (iguales a Act. 1)
 %  ========================================================================
 
-N  = 30;    % 50 → 30: reduce variables de 600 a 360 (2.8× más rápido por iteración)
-Ts = 0.1;
+N  = 40;    % 50 → 30: reduce variables de 600 a 360 (2.8× más rápido por iteración)
+Ts = 0.05;
 nx = 8;
 nu = 4;  
 
-x0 = [pi/2; 0.9158; 0.6565; -1.6751; 0; 0; 0; 0];
-yf = [0.2860; 0.0; 0.2045; 0];
+x0 = [pi/2; 0; pi/6; pi/3; 0; 0; 0; 0];      % Estado inicial (q,dq)
+yf = [0.2; -0.13; 0.2; 0];               % Salida deseada (posición y orientación)
 
 ukmax =  1.0;
 ukmin = -1.0;
@@ -72,20 +80,18 @@ z_top  = 0.168;   % [m] altura pico paraboloide = z_techo(0.158) + 10 mm
 rx_obs = 0.075;   % [m] semi-ancho en X (footprint = 150 mm)
 ry_obs = 0.160;   % [m] semi-ancho en Y (footprint = 320 mm)
 
-alpha_x = z_top / rx_obs^2;   % ≈ 29.87  pendiente elevada
-alpha_y = z_top / ry_obs^2;   % ≈  6.56
+alpha_x = z_top / rx_obs^2;  % ≈ 29.87 m⁻¹
+alpha_y = z_top / ry_obs^2;  % ≈  6.56 m⁻¹
 
-c_obs   = 5e5;    % peso de penalización de obstáculo en J
-
-% Handle para evaluación vectorial del paraboloide
-z_obs_fn = @(x, y) max(0, z_top - alpha_x*(x - x_obs).^2 ...
-                                  - alpha_y*(y - y_obs).^2);
+% Paraboloide XY para verificación y visualización.
+% Usado como hard constraint en restr() — NO como penalty en Jcosto.
+z_obs_fn = @(x, y) max(0, z_top - alpha_x*(x - x_obs).^2 - alpha_y*(y - y_obs).^2);
 
 fprintf('--- Obstáculo MDF ---\n');
-fprintf('  Footprint world : X=[%.3f, %.3f]  Y=[%.3f, %.3f] m\n', ...
-        x_obs-rx_obs, x_obs+rx_obs, -ry_obs, ry_obs);
-fprintf('  z_top paraboloide = %.3f m  (techo 0.158 + 10 mm)\n', z_top);
-fprintf('  alpha_x = %.2f m^-1   alpha_y = %.2f m^-1\n\n', alpha_x, alpha_y);
+fprintf('  Footprint link1 : X=[%.5f, %.5f]  Y=[%.3f, %.3f] m\n', ...
+        x_obs-rx_obs, x_obs+rx_obs, y_obs-ry_obs, y_obs+ry_obs);
+fprintf('  z_top=%.3f m  alpha_x=%.2f  alpha_y=%.2f  (hard constraint en restr)\n\n', ...
+        z_top, alpha_x, alpha_y);
 
 %% ========================================================================
 %  3. Inicialización de la optimización
@@ -100,40 +106,26 @@ lb = [repmat(-inf(nx,1), N, 1);  ukmin*ones(nu*N, 1)];
 ub = [repmat( inf(nx,1), N, 1);  ukmax*ones(nu*N, 1)];
 x0_guess = x0;
 
-% Warm start: usar solución Act.1 (N=50) resampleada a N=30 como punto inicial.
-% Esto coloca el EE cerca de yf desde el principio, dando gradientes útiles.
-ws_file = 'zmin7.mat';
-if exist(ws_file, 'file')
-    d_ws    = load(ws_file);
-    X_ws50  = reshape(d_ws.zmin(1:8*50),       [8  50]);
-    U_ws50  = reshape(d_ws.zmin(8*50+(1:4*50)), [4  50]);
-    idx_rs  = round(linspace(1, 50, N));         % resampleo N=50 → N=30
-    X_ws    = X_ws50(:, idx_rs);
-    U_ws    = U_ws50(:, idx_rs);
-    % Proyectar dentro de lb/ub
-    X_ws    = X_ws;   % sin proyeccion: bounds de estado eliminados
-    U_ws    = max(ukmin, min(ukmax, U_ws));
-    z0      = [X_ws(:); U_ws(:)];
-    fprintf('Warm start: %s resampleado N=50→%d\n\n', ws_file, N);
-else
-    z0 = [kron(ones(N,1), x0_guess); kron(ones(N,1), u0g)];
-    fprintf('Warm start: punto constante en x0 (%s no encontrado)\n\n', ws_file);
-end
+% Warm start constante: todos los estados en x0, torques de compensación
+% gravitatoria. Factible para el hard constraint (z_obs≈0 en y0).
+z0 = [kron(ones(N,1), x0); kron(ones(N,1), u0g)];
+fprintf('Warm start: punto constante en x0 con compensacion gravitatoria\n\n');
 
 options = optimoptions('fmincon', ...
     'Display',               'iter', ...
     'Algorithm',             'sqp', ...
-    'MaxFunctionEvaluations', 100000, ...
-    'MaxIterations',          500, ...
+    'MaxFunctionEvaluations', 200000, ...
+    'MaxIterations',          1000, ...
     'OptimalityTolerance',    1e-4, ...
-    'ConstraintTolerance',    1e-4);
+    'ConstraintTolerance',    1e-4, ...
+    'OutputFcn',              @logTimingFcn);
 
 %% ========================================================================
 %  4. Trajectory optimization
 %  ========================================================================
 
 use_saved_solution = false;
-zmin_file = 'zmin_act2_2.mat';
+zmin_file = 'zmin_act2_7.mat';
 exitflag  = NaN;
 output    = struct();
 
@@ -145,10 +137,9 @@ if use_saved_solution && exist(zmin_file, 'file') == 2
     fprintf('Cargado: %s\n', zmin_file);
 else
     [zmin, ~, exitflag, output] = fmincon( ...
-        @(z) Jcosto(z, Ts, N, nx, nu, x0, yf, ...
-                    x_obs, y_obs, z_top, alpha_x, alpha_y, c_obs), ...
+        @(z) Jcosto(z, Ts, N, nx, nu, x0, yf), ...
         z0, [], [], [], [], lb, ub, ...
-        @(z) restr(z, Ts, N, nx, nu, x0), ...
+        @(z) restr(z, Ts, N, nx, nu, x0, x_obs, y_obs, z_top, alpha_x, alpha_y), ...
         options);
     save(zmin_file, 'zmin', 'exitflag', 'output');
     fprintf('Guardado: %s\n', zmin_file);
@@ -171,16 +162,20 @@ Uref = reshape(zmin(nx*N+(1:nu*N)),    [nu N]);
 min_clearance = inf;
 for k = 1:N
     yk   = open_manx_fkin(Xref(1:4,k));
-    zobs = z_obs_fn(yk(1), yk(2));
-    clr  = yk(3) - zobs;
-    if clr < min_clearance, min_clearance = clr; end
+    zobs = z_obs_fn(yk(1), yk(2));  % ≈ z_top dentro del footprint
+    if zobs > 0.01  % solo verificar cuando EE está dentro del footprint
+        clr = zobs - yk(3);         % positivo = EE por debajo del techo (correcto)
+        if clr < min_clearance, min_clearance = clr; end
+    end
 end
 
-fprintf('--- Verificación obstáculo ---\n');
-if min_clearance >= 0
-    fprintf('  OK — clearance mínimo = %.4f m\n\n', min_clearance);
+fprintf('--- Verificación obstáculo (techo) ---\n');
+if isinf(min_clearance)
+    fprintf('  INFO: trayectoria fuera del footprint en todos los pasos.\n\n');
+elseif min_clearance >= 0
+    fprintf('  OK — clearance mínimo bajo techo = %.4f m\n\n', min_clearance);
 else
-    fprintf('  ADVERTENCIA: penetración máxima = %.4f m\n', -min_clearance);
+    fprintf('  ADVERTENCIA: penetración del techo = %.4f m\n', -min_clearance);
     fprintf('  Considerar aumentar c_obs o MaxIterations.\n\n');
 end
 
@@ -241,8 +236,36 @@ switch riccati_method
             Sc          = Qk + Ad'*S_next*(Ad - Bd*K_TV(:,:,k));
             S_next      = 0.5*(Sc + Sc');
         end
+    case 'sqrt_rk4'
+        % Integración backward de Riccati en forma sqrt con RK4 (según guía lab).
+        % -dP/dt = A'P - 0.5·P·P'·B·R⁻¹·B'·P + 0.5·Q·P'^{-1}
+        % donde S = P·P'  →  K = R⁻¹·B'·S
+        Pk = zeros(nx, nx, N);
+        Sk = zeros(nx, nx, N);
+        Pk(:,:,N) = sqrtm(0.05 * Qf);
+        Sk(:,:,N) = Pk(:,:,N) * Pk(:,:,N)';
+        K_TV(:,:,N) = Rk \ (Bk(:,:,N)' * Sk(:,:,N));
+
+        for k = N:-1:2
+            P   = Pk(:,:,k);
+            A   = Ak(:,:,k);
+            B   = Bk(:,:,k);
+            jj  = 100;          % sub-pasos RK4 dentro de cada intervalo Ts
+            TsR = Ts / jj;
+            for JJ = 1:jj
+                r1 = Ricc_sqrt(P,            A, B, Qk, Rk);
+                r2 = Ricc_sqrt(P + r1*TsR/2, A, B, Qk, Rk);
+                r3 = Ricc_sqrt(P + r2*TsR/2, A, B, Qk, Rk);
+                r4 = Ricc_sqrt(P + r3*TsR,   A, B, Qk, Rk);
+                P  = P + TsR*(r1 + 2*r2 + 2*r3 + r4)/6;
+            end
+            Pk(:,:,k-1) = P;
+            Sk(:,:,k-1) = P * P';
+            K_TV(:,:,k-1) = Rk \ (B' * Sk(:,:,k-1));
+        end
+
     otherwise
-        error('Solo riccati_method=''zoh'' implementado en este script.');
+        error('riccati_method debe ser ''zoh'' o ''sqrt_rk4''.');
 end
 
 assert(all(isfinite(K_TV(:))), 'K_TV contiene NaN/Inf.');
@@ -474,12 +497,15 @@ if EXPORT_FIGS
     fprintf('\nFiguras guardadas en: %s\n', out_dir);
 end
 
+diary off;
+
 %% ========================================================================
 %  Funciones locales
 %  ========================================================================
 
-function J = Jcosto(z, Ts, N, nx, nu, x0, yf, ...
-                    x_obs, y_obs, z_top, alpha_x, alpha_y, c_obs) %#ok<INUSD>
+function J = Jcosto(z, Ts, N, nx, nu, x0, yf)
+% Solo términos de tracking y control. El obstáculo se maneja como
+% hard constraint en restr() — igual que la solución de referencia del lab.
 
     Qv      = 0.1 * eye(4);
     Qy      = diag([1000; 1000; 1000; 10]);
@@ -499,15 +525,6 @@ function J = Jcosto(z, Ts, N, nx, nu, x0, yf, ...
         yrefk = y0 + (yf - y0)*(k/N);
         dqk   = xk(5:8);
         J = J + dqk'*Qv*dqk + (yk - yrefk)'*Qy*(yk - yrefk);
-
-        % Penalización obstáculo — smooth max(0,x) para gradientes continuos.
-        % Aproximación: (x + sqrt(x²+ε²) - ε) / 2  →  max(0,x) cuando ε→0
-        % Diferenciable en toda ℝ, sin esquinas que frenen el gradiente.
-        eps_sm = 1e-3;   % suavizado [m] (~1 mm zona de transición)
-        zobs   = max(0, z_top - alpha_x*(yk(1)-x_obs)^2 - alpha_y*(yk(2)-y_obs)^2);
-        x_arg  = zobs - yk(3);
-        viol   = (x_arg + sqrt(x_arg^2 + eps_sm^2) - eps_sm) / 2;
-        J = J + c_obs * viol^2;
     end
 
     for k = 0:N-2
@@ -521,22 +538,29 @@ end
 
 % ─────────────────────────────────────────────────────────────────────────
 
-function [c_des, c_eq] = restr(z, Ts, N, nx, nu, x0)
+function [c_des, c_eq] = restr(z, Ts, N, nx, nu, x0, x_obs, y_obs, z_top, alpha_x, alpha_y)
 
     c_eq  = zeros(nx*N, 1);
-    c_des = [];
+    c_des = zeros(N, 1);   % una restricción de obstáculo por paso
 
     for k = 0:N-1
         if k == 0, xk = x0; else, xk = z(nx*(k-1) + (1:nx)); end
         uk   = z(nx*N + nu*k + (1:nu));
         xkp1 = z(nx*k + (1:nx));
 
+        % Restricciones de dinámica (RK4)
         k1 = OM4dof(k*Ts,        xk,            uk);
         k2 = OM4dof(k*Ts + Ts/2, xk + Ts*k1/2, uk);
         k3 = OM4dof(k*Ts + Ts/2, xk + Ts*k2/2, uk);
         k4 = OM4dof(k*Ts + Ts,   xk + Ts*k3,   uk);
-
         c_eq(nx*k + (1:nx)) = xkp1 - (xk + Ts*(k1 + 2*k2 + 2*k3 + k4)/6);
+
+        % Restricción evasión obstáculo (hard) — paraboloide en plano XY.
+        % El EE debe estar sobre el paraboloide: z_k ≥ z_obs(x_k, y_k).
+        % Equivalente al modelo de la guía: c_des ≤ 0.
+        yk     = open_manx_fkin(xkp1(1:4));
+        zobs_k = max(0, z_top - alpha_x*(yk(1)-x_obs)^2 - alpha_y*(yk(2)-y_obs)^2);
+        c_des(k+1) = zobs_k - yk(3);
     end
 end
 
@@ -562,4 +586,38 @@ function u = controlTVLQR(t, x, Uref, Xref, Ts, N, K_TV)
 
     k = min(max(floor(t/Ts) + 1, 1), N);
     u = Uref(:,k) - K_TV(:,:,k) * (x - Xref(:,k));
+end
+
+% ─────────────────────────────────────────────────────────────────────────
+
+function dP = Ricc_sqrt(P, A, B, Q, R)
+% Ecuación de Riccati en forma sqrt para integración backward continua.
+% Entrada:  P  — factor sqrt de S (S = P*P')
+% Salida:   dP — derivada de P
+    dP = A'*P - 0.5*P*(P'*B*(R\B')*P) + 0.5*Q*(P'\eye(size(P,1)));
+end
+
+% ─────────────────────────────────────────────────────────────────────────
+
+function stop = logTimingFcn(~, optimValues, state)
+% Registra tiempo por iteracion en el diary. Llamada por fmincon OutputFcn.
+    persistent t_prev t_start
+    stop = false;
+    switch state
+        case 'init'
+            t_start = tic;
+            t_prev  = tic;
+            fprintf('[TIME] Optimizacion iniciada: %s\n', ...
+                    datestr(now, 'yyyy-mm-dd HH:MM:SS'));
+        case 'iter'
+            dt      = toc(t_prev);
+            elapsed = toc(t_start);
+            fprintf('[TIME] iter=%4d  fval=%.6e  dt=%7.3fs  elapsed=%8.1fs\n', ...
+                    optimValues.iteration, optimValues.fval, dt, elapsed);
+            t_prev = tic;
+        case 'done'
+            elapsed = toc(t_start);
+            fprintf('[TIME] Optimizacion finalizada: %s  total=%.1fs\n', ...
+                    datestr(now,'yyyy-mm-dd HH:MM:SS'), elapsed);
+    end
 end
