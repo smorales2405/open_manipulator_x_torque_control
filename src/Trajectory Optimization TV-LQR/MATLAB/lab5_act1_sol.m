@@ -455,11 +455,11 @@ title(tl4, 'Senal de control aplicada: TV-LQR vs referencia', ...
 %  10. Exportacion de figuras
 %  ========================================================================
 if EXPORT_FIGS
-    output_dir = fullfile(pkg_dir, 'plots', 'lab5', 'matlab');
+    output_dir = fullfile(pkg_dir, 'plots', 'lab5', 'matlab', 'act1');
     if ~exist(output_dir, 'dir'), mkdir(output_dir); end
 
-    fig_names = {'qref_optimo', 'uref_optimo', ...
-                 'tvlqr_seguimiento_q', 'tvlqr_trayectoria_cart', 'tvlqr_control'};
+    fig_names = {'act1_qref_optimo', 'act1_uref_optimo', ...
+                 'act1_tvlqr_seguimiento_q', 'act1_tvlqr_trayectoria_cart', 'act1_tvlqr_control'};
 
     % PNG (300 dpi)
     for fi = 1:5

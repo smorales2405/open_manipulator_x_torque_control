@@ -5,9 +5,9 @@
 % Objetivo : Mismo x0 y yf que Act. 1, evitando el obstáculo MDF.
 %
 % Obstáculo MDF en Gazebo (sim_init_config.yaml):
-%   pose: x=0.08 m, y=0, z=0, yaw=pi/2
-%   Marco world (post-rotación yaw=pi/2):
-%     X ∈ [0.005, 0.155] m   (ancho 150 mm, centrado en x_c=0.08)
+%   pose: x=0.075 m, y=0, z=0, yaw=pi/2
+%   Marco link1 —usado por open_manx_fkin— (offset base ≈ 114.75 mm respecto a Gazebo):
+%     X ∈ [0.11475, 0.26475] m   (ancho 150 mm, centrado en x_c=0.18975)
 %     Y ∈ [-0.160, 0.160] m  (largo 320 mm, centrado en y=0)
 %     Z ∈ [0,     0.158] m   (altura techo 158 mm)
 %
@@ -41,19 +41,19 @@ EXPORT_FIGS = true;
 
 pkg_dir = '/home/utec/open_manx_ws/src/open_manipulator_x_torque_control';
 
-riccati_method = 'sqrt';
+riccati_method = 'zoh';
 
 %% ========================================================================
 %  1. Parámetros generales  (iguales a Act. 1)
 %  ========================================================================
 
 N  = 30;    % 50 → 30: reduce variables de 600 a 360 (2.8× más rápido por iteración)
-Ts = 0.05;
+Ts = 0.1;
 nx = 8;
-nu = 4;
+nu = 4;  
 
-x0 = [pi/2; 0; pi/6; pi/3; 0; 0; 0; 0];
-yf = [0.2; -0.13; 0.2; 0];
+x0 = [pi/2; 0.9158; 0.6565; -1.6751; 0; 0; 0; 0];
+yf = [0.2860; 0.0; 0.2045; 0];
 
 ukmax =  1.0;
 ukmin = -1.0;
@@ -66,7 +66,7 @@ dq_max  = 10;
 %  2. Parámetros del obstáculo MDF
 %  ========================================================================
 
-x_obs  = 0.08;    % [m] centro X del obstáculo en marco world
+x_obs  = 0.18975; % [m] centro X en marco link1 (= 0.075 m Gazebo + 114.75 mm offset base)
 y_obs  = 0.0;     % [m] centro Y
 z_top  = 0.168;   % [m] altura pico paraboloide = z_techo(0.158) + 10 mm
 rx_obs = 0.075;   % [m] semi-ancho en X (footprint = 150 mm)
@@ -102,7 +102,7 @@ x0_guess = x0;
 
 % Warm start: usar solución Act.1 (N=50) resampleada a N=30 como punto inicial.
 % Esto coloca el EE cerca de yf desde el principio, dando gradientes útiles.
-ws_file = 'zmin6.mat';
+ws_file = 'zmin7.mat';
 if exist(ws_file, 'file')
     d_ws    = load(ws_file);
     X_ws50  = reshape(d_ws.zmin(1:8*50),       [8  50]);
@@ -133,7 +133,7 @@ options = optimoptions('fmincon', ...
 %  ========================================================================
 
 use_saved_solution = false;
-zmin_file = 'zmin_act2.mat';
+zmin_file = 'zmin_act2_2.mat';
 exitflag  = NaN;
 output    = struct();
 
@@ -312,7 +312,7 @@ for iq = 1:4
     grid on; box on; set(gca,'FontSize',fs); xlim([tX(1),tX(end)]);
     if iq < 4, set(gca,'XTickLabel',[]); else, xlabel('Tiempo [s]','FontSize',fs); end
 end
-title(tl1,'Trayectorias articulares optimizadas $q_{ref}$ — Act. 2 (con obstáculo)', ...
+title(tl1,'Trayectorias articulares optimizadas $q_{ref}$ --- Act. 2 (con obstaculo)', ...
       'Interpreter','latex','FontSize',fs_ttl,'FontWeight','bold');
 
 %% ========================================================================
@@ -325,11 +325,11 @@ tl2 = tiledlayout(nu,1,'TileSpacing','compact','Padding','compact');
 for iu = 1:nu
     nexttile(tl2);
     plot(tU, Uref(iu,:), '-', 'Color', c_ref, 'LineWidth', lw);
-    ylabel(sprintf('$u_%d$ [N·m]',iu),'Interpreter','latex','FontSize',fs);
+    ylabel(sprintf('$u_%d\\;[\\mathrm{N\\cdot m}]$',iu),'Interpreter','latex','FontSize',fs);
     grid on; box on; set(gca,'FontSize',fs); xlim([tU(1),tU(end)]);
     if iu < nu, set(gca,'XTickLabel',[]); else, xlabel('Tiempo [s]','FontSize',fs); end
 end
-title(tl2,'Entradas optimizadas $u_{ref}$ — Act. 2','Interpreter','latex', ...
+title(tl2,'Entradas optimizadas $u_{ref}$ --- Act. 2','Interpreter','latex', ...
       'FontSize',fs_ttl,'FontWeight','bold');
 
 %% ========================================================================
@@ -364,31 +364,27 @@ figure(4); clf;
 set(gcf,'Name','Trayectoria 3D + Obstáculo','Color','w','Position',[160 60 1100 780]);
 hold on; grid on; box on;
 
-% ── Paraboloide: meshgrid ─────────────────────────────────────────────────
-xg = linspace(x_obs - rx_obs - 0.02, x_obs + rx_obs + 0.02, 100);
-yg = linspace(-ry_obs - 0.03, ry_obs + 0.03, 100);
-[Xg, Yg] = meshgrid(xg, yg);
-Zg = z_obs_fn(Xg, Yg);
-Zg(Zg <= 0) = NaN;   % solo dibujar dentro del footprint
+% ── Arco MDF: techo plano + dos paredes laterales ─────────────────────────
+z_ceil = z_top - 0.01;        % techo físico = 0.158 m
+x_lo   = x_obs - rx_obs;      % 0.11475 m
+x_hi   = x_obs + rx_obs;      % 0.26475 m
+y_lo   = y_obs - ry_obs;      % -0.160 m
+y_hi   = y_obs + ry_obs;      % +0.160 m
 
-h_obs_surf = surf(Xg, Yg, Zg, ...
-    'FaceAlpha', 0.50, ...
-    'EdgeColor', 'none', ...
-    'FaceColor', c_obs_color);
+% Techo plano
+h_obs_surf = patch([x_lo x_hi x_hi x_lo], [y_lo y_lo y_hi y_hi], ...
+                   [z_ceil z_ceil z_ceil z_ceil], c_obs_color, ...
+                   'FaceAlpha', 0.55, 'EdgeColor', [0.4 0.25 0.1], 'LineWidth', 0.8);
 
-% ── Contorno base del footprint en Z=0 (elipse paraboloide) ─────────────
-th = linspace(0, 2*pi, 200);
-xfp = x_obs + rx_obs*cos(th);
-yfp = y_obs + ry_obs*sin(th);
-plot3(xfp, yfp, zeros(size(th)), '--', 'Color',[0.5 0.3 0.1], 'LineWidth', 1.0);
+% Pared lateral y = y_lo
+patch([x_lo x_hi x_hi x_lo], repmat(y_lo,1,4), ...
+      [0 0 z_ceil z_ceil], c_obs_color, ...
+      'FaceAlpha', 0.35, 'EdgeColor', [0.4 0.25 0.1], 'LineWidth', 0.8);
 
-% ── Caja del obstáculo físico (trazo de referencia) ─────────────────────
-x_box = [x_obs-rx_obs, x_obs+rx_obs, x_obs+rx_obs, x_obs-rx_obs, x_obs-rx_obs];
-y_box1 = [-ry_obs, -ry_obs, ry_obs, ry_obs, -ry_obs];
-patch([x_box, fliplr(x_box)], [y_box1, fliplr(y_box1)], ...
-      [repmat(z_top-0.01,1,5), repmat(z_top-0.01,1,5)], ...
-      [0.6 0.45 0.25], 'FaceAlpha', 0.15, 'EdgeColor', [0.4 0.25 0.1], ...
-      'LineStyle', ':');
+% Pared lateral y = y_hi
+patch([x_lo x_hi x_hi x_lo], repmat(y_hi,1,4), ...
+      [0 0 z_ceil z_ceil], c_obs_color, ...
+      'FaceAlpha', 0.35, 'EdgeColor', [0.4 0.25 0.1], 'LineWidth', 0.8);
 
 % ── Monte Carlo (20 realizaciones) ───────────────────────────────────────
 for rr = 1:20
@@ -421,7 +417,7 @@ xlabel('$x$ [m]','Interpreter','latex','FontSize',fs);
 ylabel('$y$ [m]','Interpreter','latex','FontSize',fs);
 zlabel('$z$ [m]','Interpreter','latex','FontSize',fs);
 legend([h_obs_surf, h_mc, h_sim, h_ref, h_goal, h_x0], ...
-       {'Paraboloide obstáculo','MC perturbado','Simulación TV-LQR', ...
+       {'Arco MDF','MC perturbado','Simulación TV-LQR', ...
         'Referencia optimizada','$y_f$ (objetivo)','$y_0$ (inicio)'}, ...
        'Interpreter','latex','Location','northeastoutside','FontSize',fs-1);
 title('Trayectoria cartesiana 3D con obstáculo MDF — TV-LQR Act. 2', ...
@@ -447,7 +443,7 @@ for iu = 1:nu
     h1 = plot(T, U_tvlqr_sat(iu,:), '-',  'Color',c_sim,'LineWidth',lw); hold on;
     h2 = plot(T, Uref_plot(iu,:),   '--', 'Color',c_ref,'LineWidth',lw);
     if iu==1, hu=h1; hur=h2; end
-    ylabel(sprintf('$u_%d$ [N·m]',iu),'Interpreter','latex','FontSize',fs);
+    ylabel(sprintf('$u_%d\\;[\\mathrm{N\\cdot m}]$',iu),'Interpreter','latex','FontSize',fs);
     ydata  = [U_tvlqr_sat(iu,:), Uref_plot(iu,:)];
     yrange = max(max(ydata)-min(ydata), 0.05);
     ylim([min(ydata)-0.15*yrange, max(ydata)+0.15*yrange]);
@@ -467,14 +463,13 @@ if EXPORT_FIGS
     out_dir = fullfile(pkg_dir, 'plots', 'lab5', 'matlab', 'act2');
     if ~exist(out_dir,'dir'), mkdir(out_dir); end
 
-    fig_names = {'qref_act2','uref_act2','tvlqr_seguimiento_act2', ...
-                 'trayectoria_3d_act2','tvlqr_control_act2'};
+    fig_names = {'act2_qref','act2_uref','act2_tvlqr_seguimiento', ...
+                 'act2_trayectoria_3d','act2_tvlqr_control'};
 
     for fi = 1:5
         base = fullfile(out_dir, fig_names{fi});
         exportgraphics(figure(fi), [base '.png'], 'Resolution', 300);
-        exportgraphics(figure(fi), [base '.eps'], ...
-                       'ContentType','vector','Resolution',600);
+        exportgraphics(figure(fi), [base '.pdf'], 'ContentType','vector');
     end
     fprintf('\nFiguras guardadas en: %s\n', out_dir);
 end
