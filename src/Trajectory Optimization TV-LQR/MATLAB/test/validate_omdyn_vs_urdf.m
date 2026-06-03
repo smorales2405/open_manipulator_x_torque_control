@@ -21,7 +21,7 @@ clear; close all; clc;
 %  ========================================================================
 
 pkg_dir  = '/home/utec/open_manx_ws/src/open_manipulator_x_torque_control';
-urdf_path = fullfile(pkg_dir, 'urdf', 'openmani.urdf');
+urdf_path = fullfile(pkg_dir, 'urdf', 'open_manipulator_x.urdf');
 
 TOL_REL  = 1e-2;   % 1% — umbral PASS/WARN
 SHOW_FIGS = true;

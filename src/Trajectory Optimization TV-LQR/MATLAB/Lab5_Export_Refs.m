@@ -1,7 +1,7 @@
 %% Lab5_Export_Refs.m
 % Exporta las referencias TV-LQR a archivos .txt para los nodos ROS 2.
 %
-% PREREQUISITO: ejecutar lab5_act2_sol.m (o lab5_act1_sol.m) primero.
+% PREREQUISITO: ejecutar lab5_act*_sol.m primero.
 % Las siguientes variables deben existir en el workspace:
 %   N, Ts, nx, nu        — parametros del problema
 %   x0, yf               — condiciones de frontera

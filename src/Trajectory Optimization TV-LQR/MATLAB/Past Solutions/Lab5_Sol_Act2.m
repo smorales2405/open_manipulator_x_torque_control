@@ -4,12 +4,13 @@ clc; clear; close all
 % Pre-Laboratorio 5: Trajectory Optimization y TV-LQR
 
 % Parámetros de horizonte temporal
-N = 30;       % Número de pasos de discretización
-Ts = 0.05;    % Tiempo de muestreo
+t= 1.5;
+N = 40;       % Número de pasos de discretización
+Ts = t/N;    % Tiempo de muestreo
 nx = 8;        % Número de estados: [q1,q2,q3,q4,dq1,dq2,dq3,dq4]
 nu = 4;        % Número de entradas: torques
 
-x0 = [0; 0; pi/6; pi/3; 0; 0; 0; 0];      % Estado inicial (q,dq)
+x0 = [pi/2; 0; pi/6; pi/3; 0; 0; 0; 0];      % Estado inicial (q,dq)
 yf = [0.2; -0.13; 0.2; 0];               % Salida deseada (posición y orientación)
 
 % Saturaciones de torque
@@ -60,27 +61,6 @@ for k = 1:N
         Bk(:,i,k) = (f1 - f2) / (delta) ;% Derivada ∂f/∂u (analítica o numérica)
     end
 end
-%% Trajectory Optimization
-
-figure(1); clf
-% Trayectoria de referencia
-yref = [];
-for i = 1:size(X,2)
-    yref(:,i) = fkin(0, X(1:4,i), 0);
-end
-h_ref = plot3(yref(1,:), yref(2,:), yref(3,:), '-or', 'LineWidth', 1); hold on;
-
-% Punto final deseado
-h_goal = plot3(yf(1), yf(2), yf(3), '*k', 'LineWidth', 1);
-
-grid on;
-axis([-0.05 0.23 -.12 .15 -0.05 0.3]);
-view(45,70);
-xlabel('x (m)'); ylabel('y (m)'); zlabel('z (m)');
-title('Trayectoria de referencia del efector final')
-legend([h_ref, h_goal], ...
-       {'Trayectoria de referencia', 'Punto final deseado'}, ...
-       'Location', 'northeastoutside');
 %% TVLQR: Ganancias variantes
 
 %% TV-LQR: Cálculo de ganancias variantes en el tiempo
@@ -117,6 +97,7 @@ K_TV
 
 %% Simulación con TV-LQR desde condición perturbada
 x0sim = x0 + 0.05 * randn(8,1);
+%x0sim = [0.05; 0.05; -0.05; -0.05; 0; 0; 0; 0]; 
 Uref = U;
 Xref = X;
 [T,Xsim] = ode45(@(t,x)OM4dof(t,x,controlTVLQR(t,x,Uref,Xref,Ts,N,K_TV)), 0:Ts:(N*Ts), x0sim);
@@ -159,8 +140,8 @@ sgtitle('Entradas óptimas resultantes u_{ref}')
 figure(1), clf;
 for i = 1:4
     subplot(4,1,i)
-    plot(T,Xsim(i,:), 'b', 'LineWidth', 1); hold on; grid on;
-    plot(T,[x0sim(i), Xref(i,:)], 'r--', 'LineWidth', 2)
+    plot(T,Xsim(i,:), 'b'); hold on; grid on;
+    plot(T,[x0sim(i), Xref(i,:)], 'r--')
     legend(['q',num2str(i)], ['q',num2str(i),'ref'])
 end
 
@@ -181,11 +162,7 @@ for rrsim = 1:20
     for i = 1:size(Xsim,2)
         ysim(:,i) = fkin(0,Xsim(1:4,i),0);
     end
-    if rrsim == 1
-        h_sim = plot3(ysim(1,:), ysim(2,:), ysim(3,:), '-b', 'LineWidth', 1); hold on;
-    else
-        plot3(ysim(1,:), ysim(2,:), ysim(3,:), '-b', 'LineWidth', 1); hold on;
-    end
+    plot3(ysim(1,:), ysim(2,:), ysim(3,:), '-b', 'LineWidth', 1); hold on;
 end
 
 % Trayectoria de referencia
@@ -198,17 +175,26 @@ h_ref = plot3(yref(1,:), yref(2,:), yref(3,:), '-or', 'LineWidth', 1);
 % Punto final deseado
 h_goal = plot3(yf(1), yf(2), yf(3), '*k', 'LineWidth', 1);
 
+% Obstáculo: cilindro translúcido
+% [Xcil,Ycil,Zcil] = cylinder(0.04);
+% Xcil = Xcil + 0.1;
+% Ycil = Ycil + 0.11;
+% Zcil = Zcil * 0.2;
+% h_obs = surf(Xcil, Ycil, Zcil, 'EdgeColor','none', 'FaceAlpha',0.5, 'FaceColor', [0.3 0.3 1]);
+[Y,Z]=meshgrid([-.15:0.05:.15],[-0.05:0.01:0.23])
+alpha=40;
+X=0.04+alpha*(Z-0.11).^2
+mesh(X,Y,Z)
+
+
 grid on;
 axis([-0.05 0.23 -.12 .15 -0.05 0.3]);
 view(45,70);
 xlabel('x (m)'); ylabel('y (m)'); zlabel('z (m)');
 title('Trayectorias del efector final con TV-LQR')
-legend([h_sim, h_ref, h_goal], ...
-       {'Trayectorias seguidas por el efector final', ...
-        'Trayectoria de referencia', ...
-        'Punto final deseado'}, ...
+legend([h_ref, h_goal], ...
+       {'Trayectoria de referencia', 'Punto final deseado'}, ...
        'Location', 'northeastoutside');
-
 %% Funciones
 
 % Costo del Trajectory Optimization
@@ -276,6 +262,8 @@ function [c_des, c_eq] = restr(z,Ts,N,nx,nu,x0,yf,ukmax,ukmin)
         % Restricciones de torque
         c_des = [c_des; uk - ukmax; -uk + ukmin]; 
 
+        % Restricción de evasión del obstáculo
+        c_des = [c_des; yk(1) - 0.04 - 40*(yk(3)-0.11)^2];
     end
 end
 

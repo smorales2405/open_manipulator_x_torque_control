@@ -60,26 +60,29 @@ if use_saved_solution
     fprintf('Cargado: %s  (N=%d  Ts=%.3f s)\n\n', zmin_file, N, Ts);
 end
 
+% Limites de torque
 ukmax =  1.0;
 ukmin = -1.0;
 
+% Limites articulares
 q_lower = [-3/4*pi; -11/18*pi; -11/18*pi;  -5/9*pi];
 q_upper = [ 3/4*pi;   5/9*pi;     pi/2; 23/36*pi];
+% Velocidad articular maxima
 dq_max  = 10;
 
 %% ========================================================================
 %  2. Parametros del obstaculo MDF
 %  ========================================================================
 
-x_obs  = 0.22725;
-y_obs  = 0.0;
-z_ceil = 0.158;
-rx_obs = 0.075;
-ry_obs = 0.160;
-x_lo   = x_obs - rx_obs;
-x_hi   = x_obs + rx_obs;
-y_lo   = y_obs - ry_obs;
-y_hi   = y_obs + ry_obs;
+x_obs  = 0.22725; % [m] centro X en marco link1 (= 0.075 m Gazebo + 0.15225 m offset base)
+y_obs  = 0.0;     % [m] centro Y
+z_ceil = 0.158;   % [m] techo físico del arco MDF
+rx_obs = 0.075;   % [m] semi-ancho en X (footprint = 150 mm)
+ry_obs = 0.160;   % [m] semi-ancho en Y (footprint = 320 mm)
+x_lo   = x_obs - rx_obs;   % 0.11475 m
+x_hi   = x_obs + rx_obs;   % 0.26475 m
+y_lo   = y_obs - ry_obs;   % -0.160 m
+y_hi   = y_obs + ry_obs;   % +0.160 m
 
 % Constraint XZ: x_k - x_lo - alpha_z*(z_k - z_ceil_safe)^2 <= 0
 alpha_z     = 50.0;

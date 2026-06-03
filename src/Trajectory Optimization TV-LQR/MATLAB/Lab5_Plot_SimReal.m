@@ -1,4 +1,4 @@
-%% Lab5_Plot_Lab5.m
+%% Lab5_Plot_SimReal.m
 % Graficas de seguimiento TV-LQR — Laboratorio 5
 % OpenMANIPULATOR-X
 %
@@ -6,8 +6,9 @@
 %   Figura 1 — Seguimiento de posiciones articulares q1..q4
 %   Figura 2 — Error de seguimiento articular e_q1..e_q4
 %   Figura 3 — Velocidades articulares dq1..dq4
-%   Figura 4 — Torques de control tau1..tau4 vs u_ref
-%   Figura 5 — Trayectoria cartesiana del efector final (3D)
+%   Figura 4 — Trayectoria cartesiana: x, y, z, phi vs referencia (4x1)
+%   Figura 5 — Torques de control tau1..tau4 vs u_ref
+%   Figura 6 — Trayectoria cartesiana del efector final (3D)
 %
 % Configurar las variables de la seccion "Configuracion" y ejecutar.
 
@@ -17,9 +18,9 @@ clear; clc; close all;
 mode        = 'sim';   % 'sim'  = simulacion Gazebo
                        % 'real' = implementacion hardware real
 
-test_num    = 11;       % Numero de log
+test_num    = 1;       % Numero de log
 
-EXPORT_FIGS = true;   % true  = guardar PNG (300 dpi) y EPS vectorial (600 dpi)
+EXPORT_FIGS = false;   % true  = guardar PNG (300 dpi) y EPS vectorial (600 dpi)
                        % false = solo visualizar
 
 % Directorio raiz del paquete ROS 2
@@ -77,7 +78,7 @@ else
     else
         y_cart     = [];
         y_cart_ref = [];
-        warning('open_manx_fkin.m no encontrado: Figura 5 no disponible.');
+        warning('open_manx_fkin.m no encontrado: Figuras 4 y 6 no disponibles.');
     end
 end
 
@@ -159,8 +160,42 @@ end
 sgtitle(sprintf('[%s — TV-LQR] Seguimiento de velocidades articulares', mode_label), ...
         'FontSize', 14, 'FontWeight', 'bold');
 
-%% ── Figura 4 — Torques de control ────────────────────────────────────────────
-figure(4); clf;
+%% ── Figura 4 — Trayectoria cartesiana: x, y, z, phi ─────────────────────────
+if ~isempty(y_cart)
+    figure(4); clf;
+    set(gcf, 'Color', 'w', 'Position', [155 155 1100 700]);
+
+    cart_labels = {'$x$ [m]', '$y$ [m]', '$z$ [m]', '$\phi$ [rad]'};
+
+    tl4  = tiledlayout(4, 1, 'TileSpacing', 'compact', 'Padding', 'compact');
+    axs4 = gobjects(1, 4);
+    h_meas = []; h_ref = [];
+
+    for i = 1:4
+        axs4(i) = nexttile(tl4);
+        h1 = plot(t, y_cart(:,i),     '-',  'Color', c_meas, 'LineWidth', lw); hold on;
+        h2 = plot(t, y_cart_ref(:,i), '--', 'Color', c_ref,  'LineWidth', lw);
+        if i == 1, h_meas = h1; h_ref = h2; end
+        ylabel(cart_labels{i}, 'Interpreter', 'latex', 'FontSize', fs);
+        grid on; box on; set(gca, 'FontSize', fs); xlim(xlims);
+        if i < 4
+            set(gca, 'XTickLabel', []);
+        else
+            xlabel('Tiempo [s]', 'FontSize', fs);
+        end
+    end
+
+    lgd4 = legend(axs4(1), [h_meas, h_ref], {'Simulado/Real', 'Referencia'}, ...
+                  'Orientation', 'horizontal', 'FontSize', fs, 'Location', 'northoutside');
+    lgd4.Box = 'on';
+    try, lgd4.Layout.Tile = 'north'; catch, end
+
+    title(tl4, sprintf('[%s — TV-LQR] Trayectoria cartesiana: x, y, z, \\phi', mode_label), ...
+          'FontSize', fs_title, 'FontWeight', 'bold');
+end
+
+%% ── Figura 5 — Torques de control ────────────────────────────────────────────
+figure(5); clf;
 set(gcf, 'Color', 'w', 'Position', [160 160 1100 700]);
 
 for i = 1:4
@@ -190,9 +225,9 @@ sat_pct     = 100*mean(abs(tau) >= (0.82 - 1e-3));
 fprintf('Max |tau| [N.m]:           [%.4f %.4f %.4f %.4f]\n', tau_max_abs);
 fprintf('Saturacion [%%]:            [%.2f %.2f %.2f %.2f]\n', sat_pct);
 
-%% ── Figura 5 — Trayectoria cartesiana ────────────────────────────────────────
+%% ── Figura 6 — Trayectoria cartesiana 3D ─────────────────────────────────────
 if ~isempty(y_cart)
-    figure(5); clf;
+    figure(6); clf;
     set(gcf, 'Color', 'w', 'Position', [180 80 900 700]);
     hold on; grid on; box on;
 
@@ -225,9 +260,12 @@ if EXPORT_FIGS
     if ~exist(output_dir, 'dir'), mkdir(output_dir); end
 
     fig_names = {'tracking_plot_q', 'tracking_plot_error', ...
-                 'tracking_plot_dq', 'torques_plot', 'cartesian_plot'};
-    figs_to_export = [1 2 3 4];
-    if ~isempty(y_cart), figs_to_export(end+1) = 5; end
+                 'tracking_plot_dq', 'cartesian_xyz_plot', ...
+                 'torques_plot',     'cartesian_3d_plot'};
+    figs_to_export = [1 2 3 5];
+    if ~isempty(y_cart)
+        figs_to_export = [1 2 3 4 5 6];
+    end
 
     for fi = figs_to_export
         base = fullfile(output_dir, fig_names{fi});

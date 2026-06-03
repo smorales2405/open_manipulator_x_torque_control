@@ -41,8 +41,8 @@ EXPORT_FIGS = true;
 
 % ── Identificadores de sesión (editar antes de cada ejecución) ───────────────
 act_num            = 2;     % número de actividad
-trial_num          = 1;    % número de prueba — nombra el log y el zmin
-use_saved_solution = false; % true → carga N, Ts, x0, yf y zmin desde el .mat
+trial_num          = 16;    % número de prueba — nombra el log y el zmin
+use_saved_solution = true; % true → carga N, Ts, x0, yf y zmin desde el .mat
 
 pkg_dir    = '/home/utec/open_manx_ws/src/open_manipulator_x_torque_control';
 matlab_dir = fullfile(pkg_dir, 'src', 'Trajectory Optimization TV-LQR', 'MATLAB');
@@ -72,6 +72,7 @@ nx = 8;
 nu = 4;  
 
 x0 = [pi/2; 0; pi/6; pi/3; 0; 0; 0; 0];      % Estado inicial (q,dq)
+%x0 = [0; deg2rad(50); deg2rad(35); deg2rad(-105); 0; 0; 0; 0];      % Estado inicial (q,dq)
 yf = [0.2; -0.13; 0.2; 0];               % Salida deseada (posición y orientación)
 
 % ── Carga desde .mat si use_saved_solution = true ────────────────────────────
@@ -83,8 +84,8 @@ if use_saved_solution
     end
     sv       = load(zmin_file, 'zmin', 'exitflag', 'output', 'N', 'Ts', 'x0', 'yf');
     zmin     = sv.zmin;    exitflag = sv.exitflag;    output = sv.output;
-    N  = sv.N;    Ts = sv.Ts;
-    x0 = sv.x0;  yf = sv.yf;
+    % N  = sv.N;    Ts = sv.Ts;
+    % x0 = sv.x0;  yf = sv.yf;
     fprintf('Cargado: %s  (N=%d  Ts=%.3f s)\n\n', zmin_file, N, Ts);
 end
 
@@ -92,6 +93,7 @@ ukmax =  1.0;
 ukmin = -1.0;
 
 q_lower = [-3/4*pi; -11/18*pi; -11/18*pi;  -5/9*pi];
+%q_lower = [-3/4*pi; -11/18*pi; -11/18*pi;  -deg2rad(106)];
 q_upper = [ 3/4*pi;   5/9*pi;     pi/2; 23/36*pi];
 dq_max  = 10;
 

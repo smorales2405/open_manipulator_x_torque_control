@@ -111,7 +111,7 @@ public:
     // ── Parametros ──────────────────────────────────────────────────────────
     this->declare_parameter<int>        ("test_num",      1);
     this->declare_parameter<double>     ("t_sim",         0.0);
-    this->declare_parameter<double>     ("t_warmup",      2.0);
+    this->declare_parameter<double>     ("t_warmup",      3.0);
     this->declare_parameter<std::string>("reference_dir",
       "src/Trajectory Optimization TV-LQR/references");
 

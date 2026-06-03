@@ -22,7 +22,7 @@
  *   deadzone_ticks  [double]  30.0
  *   viscous_comp    [double]  5.0
  *   t_warmup        [double]  2.0   (warmup con tau_gravity antes de TV-LQR, 0 = sin warmup)
- *   torque_scale    [double]  0.5   (escala de seguridad, rango 0..1)
+ *   torque_scale    [double]  1.0   (escala de seguridad, rango 0..1)
  *   t_run           [double]  1.5   (duracion en segundos, 0 = sin limite)
  *   test_num        [int]     1     (identificador del CSV)
  *   reference_dir   [string]  "src/Trajectory Optimization TV-LQR/references"
@@ -186,7 +186,7 @@ public:
     this->declare_parameter<double>     ("deadzone_ticks", 30.0);
     this->declare_parameter<double>     ("viscous_comp",   5.0);
     this->declare_parameter<double>     ("t_warmup",       2.0);
-    this->declare_parameter<double>     ("torque_scale",   0.5);
+    this->declare_parameter<double>     ("torque_scale",   1.0);
     this->declare_parameter<double>     ("t_run",          1.5);
     this->declare_parameter<int>        ("test_num",        1);
     this->declare_parameter<std::string>("reference_dir",

@@ -8,8 +8,8 @@
 clear; clc; close all;
 
 %% ── Configuracion ────────────────────────────────────────────────────────────
-test_num_sim  = 23;   % numero de log de simulacion
-test_num_real = 7;   % numero de log de hardware
+test_num_sim  = 1;   % numero de log de simulacion
+test_num_real = 1;   % numero de log de hardware
 
 EXPORT_FIGS = false;
 

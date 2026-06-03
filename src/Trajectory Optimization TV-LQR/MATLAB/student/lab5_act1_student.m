@@ -60,11 +60,14 @@ if use_saved_solution
     fprintf('Cargado: %s  (N=%d  Ts=%.3f s)\n\n', zmin_file, N, Ts);
 end
 
-ukmax =  1;
-ukmin = -1;
+% Limites de torque
+ukmax =  1.0;
+ukmin = -1.0;
 
+% Limites articulares
 q_lower = [-3/4*pi; -11/18*pi; -11/18*pi;  -5/9*pi];
 q_upper = [ 3/4*pi;   5/9*pi;     pi/2; 23/36*pi];
+% Velocidad articular maxima
 dq_max  = 10;
 
 %% ========================================================================
