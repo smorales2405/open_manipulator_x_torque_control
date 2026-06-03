@@ -14,7 +14,7 @@
 % Modelo de obstáculo — paraboloide con pendiente elevada:
 %   z_obs(x,y) = max(0,  z_top - α_x·(x-x_c)² - α_y·(y-y_c)²)
 %   donde:
-%     z_top = 0.168 m  (techo + 10 mm margen de seguridad)
+%     z_top = 0.183 m  (techo 158 mm + 10 mm base robot + 15 mm espesor eslabón)
 %     α_x   = z_top/rx²  ≈ 29.9 m⁻¹  (pendiente elevada en X)
 %     α_y   = z_top/ry²  ≈  6.6 m⁻¹  (pendiente en Y)
 %   El paraboloide vale cero exactamente en el borde del footprint y alcanza
@@ -39,9 +39,20 @@ rng(1);
 
 EXPORT_FIGS = true;
 
-pkg_dir  = '/home/utec/open_manx_ws/src/open_manipulator_x_torque_control';
-log_file = fullfile(pkg_dir, 'src', 'Trajectory Optimization TV-LQR', ...
-                   'MATLAB', 'lab5_act2_log3.txt');
+% ── Identificadores de sesión (editar antes de cada ejecución) ───────────────
+act_num            = 2;     % número de actividad
+trial_num          = 16;    % número de prueba — nombra el log y el zmin
+use_saved_solution = false; % true → carga N, Ts, x0, yf y zmin desde el .mat
+
+pkg_dir    = '/home/utec/open_manx_ws/src/open_manipulator_x_torque_control';
+matlab_dir = fullfile(pkg_dir, 'src', 'Trajectory Optimization TV-LQR', 'MATLAB');
+log_dir    = fullfile(matlab_dir, 'logs');
+zmin_dir   = fullfile(matlab_dir, 'zmin');
+if ~exist(log_dir,  'dir'), mkdir(log_dir);  end
+if ~exist(zmin_dir, 'dir'), mkdir(zmin_dir); end
+
+zmin_file = fullfile(zmin_dir, sprintf('zmin_act%d_%d.mat', act_num, trial_num));
+log_file  = fullfile(log_dir,  sprintf('lab5_act%d_log%d.txt', act_num, trial_num));
 if exist(log_file,'file'), delete(log_file); end
 diary(log_file); diary on;
 fprintf('=== lab5_act2_sol  %s ===\n\n', datestr(now,'yyyy-mm-dd HH:MM:SS'));
@@ -49,49 +60,69 @@ fprintf('=== lab5_act2_sol  %s ===\n\n', datestr(now,'yyyy-mm-dd HH:MM:SS'));
 % Método Riccati para TV-LQR:
 %   'zoh'      — ZOH discreto (Riccati algebraico por paso, más preciso)
 %   'sqrt_rk4' — Sqrt RK4 continuo (según guía del lab, integración hacia atrás)
-riccati_method = 'sqrt_rk4';
+riccati_method = 'zoh';
 
 %% ========================================================================
 %  1. Parámetros generales  (iguales a Act. 1)
 %  ========================================================================
 
 N  = 40;    % 50 → 30: reduce variables de 600 a 360 (2.8× más rápido por iteración)
-Ts = 0.05;
+Ts = 0.1;
 nx = 8;
 nu = 4;  
 
 x0 = [pi/2; 0; pi/6; pi/3; 0; 0; 0; 0];      % Estado inicial (q,dq)
 yf = [0.2; -0.13; 0.2; 0];               % Salida deseada (posición y orientación)
 
+% ── Carga desde .mat si use_saved_solution = true ────────────────────────────
+% Sobreescribe N, Ts, x0, yf (y carga zmin/exitflag/output) desde el archivo.
+% Los valores definidos arriba sirven solo de documentación en ese caso.
+if use_saved_solution
+    if ~exist(zmin_file, 'file')
+        error('use_saved_solution=true pero no existe: %s', zmin_file);
+    end
+    sv       = load(zmin_file, 'zmin', 'exitflag', 'output', 'N', 'Ts', 'x0', 'yf');
+    zmin     = sv.zmin;    exitflag = sv.exitflag;    output = sv.output;
+    N  = sv.N;    Ts = sv.Ts;
+    x0 = sv.x0;  yf = sv.yf;
+    fprintf('Cargado: %s  (N=%d  Ts=%.3f s)\n\n', zmin_file, N, Ts);
+end
+
 ukmax =  1.0;
 ukmin = -1.0;
 
-q_lower = [-pi/2; -pi/2; -pi/2; -1.7907];
-q_upper = [ pi/2;  pi/2;  pi/2;  2.0420];
+q_lower = [-3/4*pi; -11/18*pi; -11/18*pi;  -5/9*pi];
+q_upper = [ 3/4*pi;   5/9*pi;     pi/2; 23/36*pi];
 dq_max  = 10;
 
 %% ========================================================================
 %  2. Parámetros del obstáculo MDF
 %  ========================================================================
 
-x_obs  = 0.18975; % [m] centro X en marco link1 (= 0.075 m Gazebo + 114.75 mm offset base)
+x_obs  = 0.22725; % [m] centro X en marco link1 (= 0.075 m Gazebo + 114.75 mm offset base)
 y_obs  = 0.0;     % [m] centro Y
-z_top  = 0.168;   % [m] altura pico paraboloide = z_techo(0.158) + 10 mm
+z_ceil = 0.158;   % [m] techo físico del arco MDF
 rx_obs = 0.075;   % [m] semi-ancho en X (footprint = 150 mm)
 ry_obs = 0.160;   % [m] semi-ancho en Y (footprint = 320 mm)
+x_lo   = x_obs - rx_obs;   % 0.11475 m
+x_hi   = x_obs + rx_obs;   % 0.26475 m
+y_lo   = y_obs - ry_obs;   % -0.160 m
+y_hi   = y_obs + ry_obs;   % +0.160 m
 
-alpha_x = z_top / rx_obs^2;  % ≈ 29.87 m⁻¹
-alpha_y = z_top / ry_obs^2;  % ≈  6.56 m⁻¹
-
-% Paraboloide XY para verificación y visualización.
-% Usado como hard constraint en restr() — NO como penalty en Jcosto.
-z_obs_fn = @(x, y) max(0, z_top - alpha_x*(x - x_obs).^2 - alpha_y*(y - y_obs).^2);
+% Constraint XZ — análogo a la placa del Lab 2025:
+%   x_k - x_lo - alpha_z*(z_k - z_ceil)^2 ≤ 0
+% Para avanzar en x más allá de x_lo, el EE debe estar en z alejado de z_ceil.
+% Condición mínima: alpha_z ≥ (x_yf-x_lo)/(z_yf-z_ceil)^2 = 0.085/0.00176 ≈ 48.2
+alpha_z = 50.0;    % [m⁻¹]
+% z_ceil_safe: techo efectivo del constraint = z_ceil + 10 mm de margen.
+% Garantiza que el EE entre al footprint al menos 10 mm sobre el techo físico.
+% Factibilidad yf: alpha_z*(z_yf-z_ceil_safe)^2 = 50*(0.032)^2 = 0.051 ≥ x_yf-x_lo = 0.048 ✓
+z_ceil_safe = z_ceil + 0.010;  % [m] = 0.168 m
 
 fprintf('--- Obstáculo MDF ---\n');
-fprintf('  Footprint link1 : X=[%.5f, %.5f]  Y=[%.3f, %.3f] m\n', ...
-        x_obs-rx_obs, x_obs+rx_obs, y_obs-ry_obs, y_obs+ry_obs);
-fprintf('  z_top=%.3f m  alpha_x=%.2f  alpha_y=%.2f  (hard constraint en restr)\n\n', ...
-        z_top, alpha_x, alpha_y);
+fprintf('  Footprint link1 : X=[%.5f, %.5f]  Y=[%.3f, %.3f] m\n', x_lo, x_hi, y_lo, y_hi);
+fprintf('  z_ceil=%.3f m (fisico)  z_ceil_safe=%.3f m (+10 mm)  alpha_z=%.1f\n\n', ...
+        z_ceil, z_ceil_safe, alpha_z);
 
 %% ========================================================================
 %  3. Inicialización de la optimización
@@ -101,9 +132,11 @@ fprintf('  z_top=%.3f m  alpha_x=%.2f  alpha_y=%.2f  (hard constraint en restr)\
 u0g = u0g(:);
 u0g = max(min(u0g, ukmax), ukmin);
 
-% Solo torques como box bounds (ver comentario en lab5_act1_sol.m)
-lb = [repmat(-inf(nx,1), N, 1);  ukmin*ones(nu*N, 1)];
-ub = [repmat( inf(nx,1), N, 1);  ukmax*ones(nu*N, 1)];
+% Bounds: posición articular [q_lower, q_upper] + velocidad ±dq_max + torque ±ukmax
+x_lower = [q_lower;              -dq_max * ones(4,1)];
+x_upper = [q_upper;               dq_max * ones(4,1)];
+lb = [repmat(x_lower, N, 1);  ukmin * ones(nu*N, 1)];
+ub = [repmat(x_upper, N, 1);  ukmax * ones(nu*N, 1)];
 x0_guess = x0;
 
 % Warm start constante: todos los estados en x0, torques de compensación
@@ -124,24 +157,15 @@ options = optimoptions('fmincon', ...
 %  4. Trajectory optimization
 %  ========================================================================
 
-use_saved_solution = false;
-zmin_file = 'zmin_act2_7.mat';
-exitflag  = NaN;
-output    = struct();
-
-if use_saved_solution && exist(zmin_file, 'file') == 2
-    data = load(zmin_file);
-    zmin = data.zmin;
-    if isfield(data,'exitflag'), exitflag = data.exitflag; end
-    if isfield(data,'output'),   output   = data.output;   end
-    fprintf('Cargado: %s\n', zmin_file);
-else
+if ~use_saved_solution
+    exitflag = NaN;
+    output   = struct();
     [zmin, ~, exitflag, output] = fmincon( ...
         @(z) Jcosto(z, Ts, N, nx, nu, x0, yf), ...
         z0, [], [], [], [], lb, ub, ...
-        @(z) restr(z, Ts, N, nx, nu, x0, x_obs, y_obs, z_top, alpha_x, alpha_y), ...
+        @(z) restr(z, Ts, N, nx, nu, x0, x_lo, z_ceil_safe, alpha_z), ...
         options);
-    save(zmin_file, 'zmin', 'exitflag', 'output');
+    save(zmin_file, 'zmin', 'exitflag', 'output', 'N', 'Ts', 'x0', 'yf');
     fprintf('Guardado: %s\n', zmin_file);
 end
 
@@ -159,24 +183,31 @@ Uref = reshape(zmin(nx*N+(1:nu*N)),    [nu N]);
 %  6. Verificar evasión del obstáculo
 %  ========================================================================
 
-min_clearance = inf;
+% Verificación del constraint XZ: x_k - x_lo - alpha_z*(z_k - z_ceil_safe)^2 ≤ 0
+% + clearance físico sobre techo real (z_ceil).
+max_cxz    = -inf;
+min_phys_clr = inf;
 for k = 1:N
     yk   = open_manx_fkin(Xref(1:4,k));
-    zobs = z_obs_fn(yk(1), yk(2));  % ≈ z_top dentro del footprint
-    if zobs > 0.01  % solo verificar cuando EE está dentro del footprint
-        clr = zobs - yk(3);         % positivo = EE por debajo del techo (correcto)
-        if clr < min_clearance, min_clearance = clr; end
+    c_xz = yk(1) - x_lo - alpha_z*(yk(3) - z_ceil_safe)^2;
+    if c_xz > max_cxz, max_cxz = c_xz; end
+    if yk(1) >= x_lo
+        clr = yk(3) - z_ceil;
+        if clr < min_phys_clr, min_phys_clr = clr; end
     end
 end
 
-fprintf('--- Verificación obstáculo (techo) ---\n');
-if isinf(min_clearance)
-    fprintf('  INFO: trayectoria fuera del footprint en todos los pasos.\n\n');
-elseif min_clearance >= 0
-    fprintf('  OK — clearance mínimo bajo techo = %.4f m\n\n', min_clearance);
+fprintf('--- Verificación obstáculo (constraint XZ) ---\n');
+if max_cxz <= 0
+    fprintf('  OK — constraint (z_ceil_safe=%.3f m) satisfecho (max c = %.5f)\n\n', z_ceil_safe, max_cxz);
 else
-    fprintf('  ADVERTENCIA: penetración del techo = %.4f m\n', -min_clearance);
-    fprintf('  Considerar aumentar c_obs o MaxIterations.\n\n');
+    fprintf('  ADVERTENCIA: constraint violado (max c = %.5f > 0)\n', max_cxz);
+    fprintf('  EE entra al arco cerca del techo. Re-optimizar.\n\n');
+end
+if ~isinf(min_phys_clr)
+    fprintf('  Clearance minimo sobre techo fisico (z_ceil=%.3f m): %.4f m\n\n', z_ceil, min_phys_clr);
+else
+    fprintf('  INFO: trayectoria fuera del footprint en todos los pasos.\n\n');
 end
 
 %% ========================================================================
@@ -191,7 +222,6 @@ end
 
 metricsB.exitflag     = exitflag;
 metricsB.max_abs_uref = max(abs(Uref), [], 2);
-metricsB.min_clearance = min_clearance;
 
 fprintf('Max |u_ref| por articulación: [%s] N·m\n', ...
         num2str(metricsB.max_abs_uref', ' %.4f'));
@@ -219,7 +249,7 @@ end
 %  9. TV-LQR — cálculo de ganancias variantes en el tiempo
 %  ========================================================================
 
-Qk = diag([100; 100; 100; 500;   1;  1;  1;  5]);
+Qk = diag([100; 100; 100; 500;   10;  10;  10;  50]);
 Rk = 100*eye(nu);
 Qf = Qk;
 K_TV = zeros(nu, nx, N);
@@ -388,11 +418,7 @@ set(gcf,'Name','Trayectoria 3D + Obstáculo','Color','w','Position',[160 60 1100
 hold on; grid on; box on;
 
 % ── Arco MDF: techo plano + dos paredes laterales ─────────────────────────
-z_ceil = z_top - 0.01;        % techo físico = 0.158 m
-x_lo   = x_obs - rx_obs;      % 0.11475 m
-x_hi   = x_obs + rx_obs;      % 0.26475 m
-y_lo   = y_obs - ry_obs;      % -0.160 m
-y_hi   = y_obs + ry_obs;      % +0.160 m
+% (z_ceil, x_lo/hi, y_lo/hi definidos en Sección 2)
 
 % Techo plano
 h_obs_surf = patch([x_lo x_hi x_hi x_lo], [y_lo y_lo y_hi y_hi], ...
@@ -538,10 +564,14 @@ end
 
 % ─────────────────────────────────────────────────────────────────────────
 
-function [c_des, c_eq] = restr(z, Ts, N, nx, nu, x0, x_obs, y_obs, z_top, alpha_x, alpha_y)
+function [c_des, c_eq] = restr(z, Ts, N, nx, nu, x0, x_lo, z_ceil, alpha_z)
+% Restricciones del problema de optimización.
+% Constraint de obstáculo (plano XZ, análogo al Lab 2025):
+%   x_k - x_lo - alpha_z*(z_k - z_ceil)^2 ≤ 0
+% Para avanzar en x más allá de x_lo, el EE debe estar en z alejado de z_ceil.
 
     c_eq  = zeros(nx*N, 1);
-    c_des = zeros(N, 1);   % una restricción de obstáculo por paso
+    c_des = zeros(N, 1);
 
     for k = 0:N-1
         if k == 0, xk = x0; else, xk = z(nx*(k-1) + (1:nx)); end
@@ -555,12 +585,9 @@ function [c_des, c_eq] = restr(z, Ts, N, nx, nu, x0, x_obs, y_obs, z_top, alpha_
         k4 = OM4dof(k*Ts + Ts,   xk + Ts*k3,   uk);
         c_eq(nx*k + (1:nx)) = xkp1 - (xk + Ts*(k1 + 2*k2 + 2*k3 + k4)/6);
 
-        % Restricción evasión obstáculo (hard) — paraboloide en plano XY.
-        % El EE debe estar sobre el paraboloide: z_k ≥ z_obs(x_k, y_k).
-        % Equivalente al modelo de la guía: c_des ≤ 0.
-        yk     = open_manx_fkin(xkp1(1:4));
-        zobs_k = max(0, z_top - alpha_x*(yk(1)-x_obs)^2 - alpha_y*(yk(2)-y_obs)^2);
-        c_des(k+1) = zobs_k - yk(3);
+        % Restricción evasión techo arco MDF — plano XZ (Lab 2025 style).
+        yk = open_manx_fkin(xkp1(1:4));
+        c_des(k+1) = yk(1) - x_lo - alpha_z*(yk(3) - z_ceil)^2;
     end
 end
 
