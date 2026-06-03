@@ -21,6 +21,7 @@
  *   port_name       [string]  "/dev/ttyUSB0"
  *   deadzone_ticks  [double]  30.0
  *   viscous_comp    [double]  5.0
+ *   t_warmup        [double]  2.0   (warmup con tau_gravity antes de TV-LQR, 0 = sin warmup)
  *   torque_scale    [double]  0.5   (escala de seguridad, rango 0..1)
  *   t_run           [double]  1.5   (duracion en segundos, 0 = sin limite)
  *   test_num        [int]     1     (identificador del CSV)
@@ -102,10 +103,10 @@ static const std::array<double,  NUM_JOINTS> ENCODER_SIGN    = {+1.0, +1.0, +1.0
 static const std::array<double,  NUM_JOINTS> CURRENT_SIGN    = {+1.0, +1.0, +1.0, +1.0};
 
 static const std::array<double, NUM_JOINTS> JOINT_LOWER = {
-  -1.570796, -1.570796, -1.570796, -2.290707812546182
+  -3.0/4.0*PI, -11.0/18.0*PI, -11.0/18.0*PI, -5.0/9.0*PI   // [-135°, -110°, -110°, -100°]
 };
 static const std::array<double, NUM_JOINTS> JOINT_UPPER = {
-  +1.570796, +1.570796, +1.570796, +2.2420352248333655
+  +3.0/4.0*PI, +5.0/9.0*PI,   +PI/2.0,       +23.0/36.0*PI // [+135°, +100°,  +90°, +115°]
 };
 
 static constexpr uint16_t CURRENT_LIMIT_REGISTER = 350;
@@ -177,12 +178,14 @@ class HWTVLQRNode : public rclcpp::Node
 public:
   HWTVLQRNode()
   : Node("hw_tvlqr_node"),
-    hw_active_(false), refs_loaded_(false), N_(0), Ts_(0.05)
+    hw_active_(false), refs_loaded_(false), N_(0), Ts_(0.05),
+    tau_gravity_(Vec4::Zero()), warmup_ticks_(0), warmup_active_(false)
   {
     // ── Parametros ──────────────────────────────────────────────────────────
     this->declare_parameter<std::string>("port_name",     "/dev/ttyUSB0");
     this->declare_parameter<double>     ("deadzone_ticks", 30.0);
     this->declare_parameter<double>     ("viscous_comp",   5.0);
+    this->declare_parameter<double>     ("t_warmup",       2.0);
     this->declare_parameter<double>     ("torque_scale",   0.5);
     this->declare_parameter<double>     ("t_run",          1.5);
     this->declare_parameter<int>        ("test_num",        1);
@@ -192,6 +195,7 @@ public:
     port_name_      = this->get_parameter("port_name").as_string();
     deadzone_ticks_ = this->get_parameter("deadzone_ticks").as_double();
     viscous_comp_   = this->get_parameter("viscous_comp").as_double();
+    const double t_warmup_sec = this->get_parameter("t_warmup").as_double();
     torque_scale_   = std::min(std::max(this->get_parameter("torque_scale").as_double(), 0.0), 1.0);
     t_run_          = this->get_parameter("t_run").as_double();
     const int test_num = this->get_parameter("test_num").as_int();
@@ -265,6 +269,28 @@ public:
 
     refs_loaded_ = true;
     RCLCPP_INFO(get_logger(), "Referencias cargadas: N=%d  Ts=%.3f s", N_, Ts_);
+
+    // tau_gravity.txt — 1 fila x 4 columnas (opcional, fallback a u_ref_[0])
+    {
+      std::vector<std::vector<double>> rows;
+      const std::string grav_path = ref_dir_ + "/tau_gravity.txt";
+      if (load_matrix(grav_path, 4, rows) && !rows.empty()) {
+        tau_gravity_ = Vec4(rows[0][0], rows[0][1], rows[0][2], rows[0][3]);
+        RCLCPP_INFO(get_logger(),
+          "tau_gravity.txt cargado: [%.3f %.3f %.3f %.3f] Nm",
+          tau_gravity_[0], tau_gravity_[1], tau_gravity_[2], tau_gravity_[3]);
+      } else {
+        tau_gravity_ = u_ref_[0];
+        RCLCPP_WARN(get_logger(),
+          "tau_gravity.txt no encontrado — usando u_ref[0]: [%.3f %.3f %.3f %.3f] Nm",
+          tau_gravity_[0], tau_gravity_[1], tau_gravity_[2], tau_gravity_[3]);
+      }
+    }
+
+    warmup_ticks_ = (t_warmup_sec > 0.0) ? static_cast<int>(std::round(t_warmup_sec / 0.01)) : 0;
+    warmup_active_ = (warmup_ticks_ > 0);
+    if (warmup_active_)
+      RCLCPP_INFO(get_logger(), "Warmup: %.1f s  (tau_gravity sin torque_scale)", t_warmup_sec);
 
     // ── CSV ──────────────────────────────────────────────────────────────────
     std::filesystem::create_directories(std::string(PACKAGE_DATA_DIR) + "/lab5/real");
@@ -475,6 +501,32 @@ private:
   {
     if (!hw_active_ || !refs_loaded_) return;
 
+    // ── Fase warmup: compensacion gravitatoria ────────────────────────────
+    if (warmup_active_) {
+      Vec4 q, dq;
+      std::array<int16_t, NUM_JOINTS> cur_meas{};
+      if (!read_state(q, dq, cur_meas)) {
+        emergency_stop("SyncRead fallido en warmup"); return;
+      }
+      for (int i = 0; i < NUM_JOINTS; ++i) {
+        if (q(i) < JOINT_LOWER[i] || q(i) > JOINT_UPPER[i]) {
+          emergency_stop("Articulacion " + std::to_string(i+1)
+                         + " fuera de limites en warmup: " + std::to_string(q(i)) + " rad");
+          return;
+        }
+      }
+      auto cur_cmd = torque_to_current(tau_gravity_, dq);
+      if (!send_currents(cur_cmd)) {
+        emergency_stop("SyncWrite fallido en warmup"); return;
+      }
+      if (--warmup_ticks_ == 0) {
+        warmup_active_ = false;
+        start_time_ = std::chrono::high_resolution_clock::now();
+        RCLCPP_INFO(get_logger(), "Warmup completado. Iniciando TV-LQR.");
+      }
+      return;
+    }
+
     const auto tp = std::chrono::high_resolution_clock::now();
     const double t = std::chrono::duration<double>(tp - start_time_).count();
 
@@ -587,6 +639,10 @@ private:
   bool refs_loaded_;
   int    N_;
   double Ts_;
+
+  Vec4 tau_gravity_;
+  int  warmup_ticks_;
+  bool warmup_active_;
 
   std::vector<double>                                    t_ref_;
   std::vector<Vec4>                                      q_ref_;
