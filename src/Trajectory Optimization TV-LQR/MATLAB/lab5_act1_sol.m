@@ -23,18 +23,31 @@ rng(1);
 EXPORT_FIGS = false;   % true  = guardar PNG (300 dpi) y EPS vectorial (600 dpi)
                        % false = solo visualizar
 
-% Directorio raiz del paquete ROS 2
-pkg_dir = '/home/utec/open_manx_ws/src/open_manipulator_x_torque_control';
+% ── Identificadores de sesion (editar antes de cada ejecucion) ────────────
+act_num            = 1;     % numero de actividad
+trial_num          = 1;     % numero de prueba — nombra el log y el zmin
+use_saved_solution = false; % true → carga N, Ts, x0, yf y zmin desde el .mat
+
+pkg_dir    = '/home/utec/open_manx_ws/src/open_manipulator_x_torque_control';
+matlab_dir = fullfile(pkg_dir, 'src', 'Trajectory Optimization TV-LQR', 'MATLAB');
+log_dir    = fullfile(matlab_dir, 'logs');
+zmin_dir   = fullfile(matlab_dir, 'zmin');
+if ~exist(log_dir,  'dir'), mkdir(log_dir);  end
+if ~exist(zmin_dir, 'dir'), mkdir(zmin_dir); end
+
+zmin_file = fullfile(zmin_dir, sprintf('zmin_act%d_%d.mat', act_num, trial_num));
+log_file  = fullfile(log_dir,  sprintf('lab5_act%d_log%d.txt', act_num, trial_num));
+if exist(log_file, 'file'), delete(log_file); end
+diary(log_file); diary on;
+fprintf('=== lab5_act1_sol  %s ===\n\n', datestr(now, 'yyyy-mm-dd HH:MM:SS'));
 
 % ── Metodo de Riccati para ganancias TV-LQR ──────────────────────────────
 % 'zoh'  — Discreto ZOH exacto via expm (recomendado para Ts >= 0.02 s).
 %           Garantiza S > 0 algebraicamente sin integrar un ODE continuo.
-% 'std'  — Continuo estandar sobre S, integrado con RK4 hacia atras.
-%           Puede perder definitividad positiva si ||A||*Ts es grande.
 % 'sqrt' — Continuo forma sqrt (S = P*P'), integrado con RK4 hacia atras.
 %           Puede singularizarse (P -> 0) con Ts grande; aumentar riccati_jj.
 riccati_method = 'zoh';
-riccati_jj     = 100;   % sub-pasos RK4 por intervalo Ts (solo 'std' y 'sqrt')
+riccati_jj     = 100;   % sub-pasos RK4 por intervalo Ts (solo 'sqrt')
 
 %% ========================================================================
 %  1. Parametros generales
@@ -48,12 +61,26 @@ nu = 4;
 x0 = [pi/2; 0.9158; 0.6565; -1.6751; 0; 0; 0; 0];
 yf = [0.2860; 0.0; 0.2045; 0];
 
+% ── Carga desde .mat si use_saved_solution = true ────────────────────────
+% Sobreescribe N, Ts, x0, yf (y carga zmin/exitflag/output) desde el archivo.
+% Los valores definidos arriba sirven solo de documentacion en ese caso.
+if use_saved_solution
+    if ~exist(zmin_file, 'file')
+        error('use_saved_solution=true pero no existe: %s', zmin_file);
+    end
+    sv       = load(zmin_file, 'zmin', 'exitflag', 'output', 'N', 'Ts', 'x0', 'yf');
+    zmin     = sv.zmin;    exitflag = sv.exitflag;    output = sv.output;
+    N  = sv.N;    Ts = sv.Ts;
+    x0 = sv.x0;  yf = sv.yf;
+    fprintf('Cargado: %s  (N=%d  Ts=%.3f s)\n\n', zmin_file, N, Ts);
+end
+
 ukmax =  1;
 ukmin = -1;
 
 % Limites articulares del OpenManipulator-X [rad]
-q_lower = [-pi/2; -pi/2; -pi/2; -1.7907];
-q_upper = [ pi/2;  pi/2;  pi/2;  2.0420];
+q_lower = [-3/4*pi; -11/18*pi; -11/18*pi;  -5/9*pi];
+q_upper = [ 3/4*pi;   5/9*pi;     pi/2; 23/36*pi];
 dq_max  = 10;  % [rad/s]
 
 %% ========================================================================
@@ -64,13 +91,11 @@ dq_max  = 10;  % [rad/s]
 u0g = u0g(:);
 u0g = max(min(u0g, ukmax), ukmin);
 
-% Bounds: SOLO torques como box bounds (lb/ub eficiente para constraints lineales).
-% Limites articulares y velocidad ELIMINADOS de lb/ub: su interaccion con las
-% restricciones de igualdad (dinamica RK4) crea KKT mal condicionado en
-% interior-point, forzando pasos pequenos y cientos de iteraciones extra.
-% El optimizador respeta limites articulares indirectamente via la funcion de costo.
-lb = [repmat(-inf(nx,1), N, 1);  ukmin*ones(nu*N, 1)];
-ub = [repmat( inf(nx,1), N, 1);  ukmax*ones(nu*N, 1)];
+% Bounds: posicion articular [q_lower, q_upper] + velocidad ±dq_max + torque ±ukmax
+x_lower = [q_lower;             -dq_max * ones(4,1)];
+x_upper = [q_upper;              dq_max * ones(4,1)];
+lb = [repmat(x_lower, N, 1);  ukmin * ones(nu*N, 1)];
+ub = [repmat(x_upper, N, 1);  ukmax * ones(nu*N, 1)];
 
 z0 = [kron(ones(N,1), x0); kron(ones(N,1), u0g)];
 
@@ -82,37 +107,29 @@ options = optimoptions('fmincon', ...
     'MaxFunctionEvaluations', 100000, ...
     'MaxIterations',          500, ...
     'OptimalityTolerance',    1e-4, ...
-    'ConstraintTolerance',    1e-4);
+    'ConstraintTolerance',    1e-4, ...
+    'OutputFcn',              @logTimingFcn);
 
 %% ========================================================================
 %  3. Trajectory optimization
 %  ========================================================================
 
-use_saved_solution = false;  % false = regenerar con limites articulares
-zmin_file = 'zmin6.mat';
-exitflag = NaN;
-output = struct();
-
-if use_saved_solution && exist(zmin_file, 'file') == 2
-    data = load(zmin_file);
-    zmin = data.zmin;
-    if isfield(data, 'exitflag'), exitflag = data.exitflag; end
-    if isfield(data, 'output'),   output   = data.output;   end
-    fprintf('Se cargo %s correctamente.\n', zmin_file);
-else
+if ~use_saved_solution
+    exitflag = NaN;
+    output   = struct();
+    fprintf('Warm start: punto constante en x0 con compensacion gravitatoria\n\n');
     [zmin, ~, exitflag, output] = fmincon( ...
         @(z) Jcosto(z, Ts, N, nx, nu, x0, yf), ...
         z0, [], [], [], [], lb, ub, ...
         @(z) restr(z, Ts, N, nx, nu, x0), ...
         options);
-
-    save(zmin_file, 'zmin', 'exitflag', 'output');
-    fprintf('Se guardo la trayectoria optimizada en %s.\n', zmin_file);
+    save(zmin_file, 'zmin', 'exitflag', 'output', 'N', 'Ts', 'x0', 'yf');
+    fprintf('Guardado: %s\n', zmin_file);
 end
 
 fprintf('\nExitflag fmincon: %g\n', exitflag);
 if isfield(output, 'message')
-    fprintf('Mensaje fmincon: %s\n', output.message);
+    fprintf('Mensaje: %s\n\n', output.message);
 end
 
 %%  4. Recuperar trayectorias optimizadas
@@ -239,24 +256,6 @@ switch riccati_method
             S_next      = 0.5*(S_cur + S_cur');
         end
 
-    % ── Estandar sobre S (ODE continuo, RK4 hacia atras) ─────────────────
-    case 'std'
-        TsR    = Ts / riccati_jj;
-        S_next = Qf;      % condicion terminal S_{N+1} = Qf
-        for k = N:-1:1
-            A = Ak(:,:,k);   B = Bk(:,:,k);   S = S_next;
-            for JJ = 1:riccati_jj
-                f1 = Ricc_std(S,            A, B, Qk, Rk);
-                f2 = Ricc_std(S + f1*TsR/2, A, B, Qk, Rk);
-                f3 = Ricc_std(S + f2*TsR/2, A, B, Qk, Rk);
-                f4 = Ricc_std(S + f3*TsR,   A, B, Qk, Rk);
-                S  = S + TsR*(f1 + 2*f2 + 2*f3 + f4)/6;
-                S  = 0.5*(S + S');
-            end
-            S_next      = S;
-            K_TV(:,:,k) = Rk \ (B'*S);
-        end
-
     % ── Sqrt form (ODE continuo, S = P*P', RK4 hacia atras) ──────────────
     case 'sqrt'
         TsR = Ts / riccati_jj;
@@ -278,7 +277,7 @@ switch riccati_method
         end
 
     otherwise
-        error('riccati_method invalido: ''%s''. Usar ''zoh'', ''std'' o ''sqrt''.', ...
+        error('riccati_method invalido: ''%s''. Usar ''zoh'' o ''sqrt''.', ...
               riccati_method);
 end
 
@@ -476,6 +475,8 @@ if EXPORT_FIGS
     fprintf('\nGraficas guardadas en: %s\n', output_dir);
 end
 
+diary off;
+
 %% ========================================================================
 %  Funciones locales
 %  ========================================================================
@@ -565,16 +566,33 @@ function u = controlTVLQR(t, x, Uref, Xref, Ts, N, K_TV)
     u = Uref(:,k) - K_TV(:,:,k)*(x - Xref(:,k));
 end
 
-function dS = Ricc_std(S, A, B, Q, R)
-% Riccati estandar continuo integrado hacia atras (tau = tf - t).
-% dS/dtau = A'S + SA - S*B*R^{-1}*B'*S + Q
-    dS = A'*S + S*A - S*B*(R \ (B'*S)) + Q;
-end
-
 function dP = Ricc_sqrt(P, A, B, Q, R)
 % Riccati forma sqrt integrado hacia atras; S = P*P'.
 % dP/dtau = A'P - (1/2)*P*P'*B*R^{-1}*B'*P + (1/2)*Q*P'^{-1}
     dP = A'*P - 0.5*P*P'*B*(R \ (B'*P)) + 0.5*(Q/P');
+end
+
+function stop = logTimingFcn(~, optimValues, state)
+% Registra tiempo por iteracion en el diary. Llamada por fmincon OutputFcn.
+    persistent t_prev t_start
+    stop = false;
+    switch state
+        case 'init'
+            t_start = tic;
+            t_prev  = tic;
+            fprintf('[TIME] Optimizacion iniciada: %s\n', ...
+                    datestr(now, 'yyyy-mm-dd HH:MM:SS'));
+        case 'iter'
+            dt      = toc(t_prev);
+            elapsed = toc(t_start);
+            fprintf('[TIME] iter=%4d  fval=%.6e  dt=%7.3fs  elapsed=%8.1fs\n', ...
+                    optimValues.iteration, optimValues.fval, dt, elapsed);
+            t_prev = tic;
+        case 'done'
+            elapsed = toc(t_start);
+            fprintf('[TIME] Optimizacion finalizada: %s  total=%.1fs\n', ...
+                    datestr(now, 'yyyy-mm-dd HH:MM:SS'), elapsed);
+    end
 end
 
 function printMetricsParteB(metricsB, label)
