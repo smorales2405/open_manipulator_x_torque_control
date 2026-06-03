@@ -11,7 +11,7 @@
 %   Figura 2 — Entradas optimizadas u_ref
 %   Figura 3 — Seguimiento articular con TV-LQR (simulacion vs referencia)
 %   Figura 4 — Trayectoria cartesiana del efector final (Monte Carlo)
-%   Figura 5 — Senal de control TV-LQR vs referencia
+%   Figura 5 — Señal de control TV-LQR vs referencia
 
 clear; close all; clc;
 rng(1);
@@ -26,7 +26,7 @@ EXPORT_FIGS = false;   % true  = guardar PNG (300 dpi) y EPS vectorial (600 dpi)
 % ── Identificadores de sesion (editar antes de cada ejecucion) ────────────
 act_num            = 1;     % numero de actividad
 trial_num          = 1;     % numero de prueba — nombra el log y el zmin
-use_saved_solution = true; % true → carga N, Ts, x0, yf y zmin desde el .mat
+use_saved_solution = false; % true → carga N, Ts, x0, yf y zmin desde el .mat
 
 pkg_dir    = '/home/utec/open_manx_ws/src/open_manipulator_x_torque_control';
 matlab_dir = fullfile(pkg_dir, 'src', 'Trajectory Optimization TV-LQR', 'MATLAB');
@@ -408,9 +408,9 @@ legend([h_mc, h_sim, h_ref, h_goal], ...
        'Interpreter', 'latex', 'Location', 'northeastoutside');
 set(gca, 'FontSize', fs);
 
-% Figura 5 — Senal de control TV-LQR vs referencia
+% Figura 5 — Señal de control TV-LQR vs referencia
 figure(5); clf;
-set(gcf, 'Name', 'Senal de control TV-LQR', ...
+set(gcf, 'Name', 'Señal de control TV-LQR', ...
          'Color', 'w', 'Position', [170 110 1100 560]);
 
 tl4  = tiledlayout(nu, 1, 'TileSpacing', 'compact', 'Padding', 'compact');
@@ -442,12 +442,12 @@ for iu = 1:nu
 end
 
 lgd4 = legend(axs4(1), [h_uact, h_uref2], ...
-              {'TV-LQR saturado', 'Referencia'}, ...
+              {'TV-LQR', 'Referencia'}, ...
               'Orientation', 'horizontal', 'FontSize', fs, 'Location', 'northoutside');
 lgd4.Box = 'on';
 try, lgd4.Layout.Tile = 'north'; catch, end
 
-title(tl4, 'Senal de control aplicada: TV-LQR vs referencia', ...
+title(tl4, 'Señal de control aplicada: TV-LQR vs referencia', ...
       'FontSize', fs_ttl, 'FontWeight', 'bold');
 
 %% ========================================================================

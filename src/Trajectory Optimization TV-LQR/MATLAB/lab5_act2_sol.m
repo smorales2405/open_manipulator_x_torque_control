@@ -41,7 +41,7 @@ EXPORT_FIGS = true;
 
 % ── Identificadores de sesión (editar antes de cada ejecución) ───────────────
 act_num            = 2;     % número de actividad
-trial_num          = 16;    % número de prueba — nombra el log y el zmin
+trial_num          = 1;    % número de prueba — nombra el log y el zmin
 use_saved_solution = false; % true → carga N, Ts, x0, yf y zmin desde el .mat
 
 pkg_dir    = '/home/utec/open_manx_ws/src/open_manipulator_x_torque_control';
@@ -507,7 +507,7 @@ for iu = 1:nu
     grid on; box on; set(gca,'FontSize',fs); xlim(xlims);
     if iu < nu, set(gca,'XTickLabel',[]); else, xlabel('Tiempo [s]','FontSize',fs); end
 end
-legend(nexttile(tl5,1),[hu,hur],{'TV-LQR saturado','Referencia'}, ...
+legend(nexttile(tl5,1),[hu,hur],{'TV-LQR','Referencia'}, ...
        'Orientation','horizontal','FontSize',fs,'Location','northoutside');
 title(tl5,'Señal de control TV-LQR vs referencia — Act. 2', ...
       'FontSize',fs_ttl,'FontWeight','bold');
