@@ -26,7 +26,7 @@ EXPORT_FIGS = false;   % true  = guardar PNG (300 dpi) y EPS vectorial (600 dpi)
 % ── Identificadores de sesion (editar antes de cada ejecucion) ────────────
 act_num            = 1;     % numero de actividad
 trial_num          = 1;     % numero de prueba — nombra el log y el zmin
-use_saved_solution = false; % true → carga N, Ts, x0, yf y zmin desde el .mat
+use_saved_solution = true; % true → carga N, Ts, x0, yf y zmin desde el .mat
 
 pkg_dir    = '/home/utec/open_manx_ws/src/open_manipulator_x_torque_control';
 matlab_dir = fullfile(pkg_dir, 'src', 'Trajectory Optimization TV-LQR', 'MATLAB');
@@ -53,13 +53,13 @@ riccati_jj     = 100;   % sub-pasos RK4 por intervalo Ts (solo 'sqrt')
 %  1. Parametros generales
 %  ========================================================================
 
-N  = 30;
-Ts = 0.05;
+N  = 40;
+Ts = 0.1;
 nx = 8;
 nu = 4;
 
-x0 = [pi/2; 0.9158; 0.6565; -1.6751; 0; 0; 0; 0];
-yf = [0.2860; 0.0; 0.2045; 0];
+x0 = [pi/2; 0; pi/6; pi/3; 0; 0; 0; 0];      % Estado inicial (q,dq)
+yf = [0.2; -0.13; 0.2; 0];               % Salida deseada (posición y orientación)
 
 % ── Carga desde .mat si use_saved_solution = true ────────────────────────
 % Sobreescribe N, Ts, x0, yf (y carga zmin/exitflag/output) desde el archivo.
@@ -191,7 +191,7 @@ end
 title(tlB2, 'Entradas optimizadas $u_{ref}$', ...
       'Interpreter', 'latex', 'FontSize', fs_ttl, 'FontWeight', 'bold');
 
-%% 4.1 Metricas - Parte B
+%% 4.1 Métricas de la trayectoria optimizada
 
 yref = zeros(4, N+1);
 yref(:,1) = open_manx_fkin(x0(1:4));
@@ -199,11 +199,11 @@ for i = 1:N
     yref(:,i+1) = open_manx_fkin(Xref(1:4,i));
 end
 
-metricsB = struct();
-metricsB.exitflag     = exitflag;
-metricsB.max_abs_uref = max(abs(Uref), [], 2);
+metrics_trajopt = struct();
+metrics_trajopt.exitflag     = exitflag;
+metrics_trajopt.max_abs_uref = max(abs(Uref), [], 2);
 
-printMetricsParteB(metricsB, 'Lab 5 Actividad 1 - Parte B');
+printMetricsTrajOpt(metrics_trajopt);
 
 %% ========================================================================
 %  5. Linealizacion numerica variante en el tiempo
@@ -299,7 +299,7 @@ x0sim = x0 + 0.05*randn(nx,1);
     0:Ts:(N*Ts), x0sim);
 Xsim = Xsim';
 
-%% 8. Calculo de salidas y metricas - Parte D
+%% 8. Calculo de salidas y métricas de seguimiento TV-LQR
 
 qRefPlot = [x0(1:4), Xref(1:4,:)];
 
@@ -317,14 +317,14 @@ end
 
 joint_error = Xsim(1:4,:) - qRefPlot;
 
-metricsD = struct();
-metricsD.final_error_cart    = norm(ysim(:,end) - yf);
-metricsD.max_abs_utvlqr      = max(abs(U_tvlqr_sat), [], 2);
-metricsD.sat_percent         = 100*mean(abs(U_tvlqr_raw) >= (ukmax - 1e-8), 2);
-metricsD.max_abs_joint_error = max(abs(joint_error), [], 2);
-metricsD.rms_joint_error     = sqrt(mean(joint_error.^2, 2));
+metrics_tvlqr = struct();
+metrics_tvlqr.final_error_cart    = norm(ysim(:,end) - yf);
+metrics_tvlqr.max_abs_utvlqr      = max(abs(U_tvlqr_sat), [], 2);
+metrics_tvlqr.sat_percent         = 100*mean(abs(U_tvlqr_raw) >= (ukmax - 1e-8), 2);
+metrics_tvlqr.max_abs_joint_error = max(abs(joint_error), [], 2);
+metrics_tvlqr.rms_joint_error     = sqrt(mean(joint_error.^2, 2));
 
-printMetricsParteD(metricsD, 'Lab 5 Actividad 1 - Parte D');
+printMetricsTVLQR(metrics_tvlqr);
 
 %% 9. Graficas
 
@@ -595,28 +595,26 @@ function stop = logTimingFcn(~, optimValues, state)
     end
 end
 
-function printMetricsParteB(metricsB, label)
-
+function printMetricsTrajOpt(metrics_trajopt)
     fprintf('\n============================================================\n');
-    fprintf('Metricas - %s\n', label);
+    fprintf('Lab 5 Actividad 1 - Métricas de la trayectoria optimizada\n');
     fprintf('============================================================\n');
-    fprintf('Exitflag fmincon                 : %g\n',   metricsB.exitflag);
+    fprintf('Exitflag fmincon                 : %g\n',   metrics_trajopt.exitflag);
     fprintf('Max |u_ref| por articulacion      : [%s] N.m\n', ...
-            num2str(metricsB.max_abs_uref', ' %.4f'));
+            num2str(metrics_trajopt.max_abs_uref', ' %.4f'));
 end
 
-function printMetricsParteD(metricsD, label)
-
+function printMetricsTVLQR(metrics_tvlqr)
     fprintf('\n============================================================\n');
-    fprintf('Metricas - %s\n', label);
+    fprintf('Lab 5 Actividad 1 - Métricas de seguimiento TV-LQR\n');
     fprintf('============================================================\n');
-    fprintf('Error cartesiano final ||y(tf)-yf||: %.6f\n',    metricsD.final_error_cart);
+    fprintf('Error cartesiano final ||y(tf)-yf||: %.6f\n',    metrics_tvlqr.final_error_cart);
     fprintf('Max |u_TVLQR| por articulacion    : [%s] N.m\n', ...
-            num2str(metricsD.max_abs_utvlqr', ' %.4f'));
+            num2str(metrics_tvlqr.max_abs_utvlqr', ' %.4f'));
     fprintf('Saturacion TV-LQR por articulacion: [%s] %%\n',  ...
-            num2str(metricsD.sat_percent', ' %.2f'));
+            num2str(metrics_tvlqr.sat_percent', ' %.2f'));
     fprintf('Error maximo articular            : [%s] rad\n', ...
-            num2str(metricsD.max_abs_joint_error', ' %.5f'));
+            num2str(metrics_tvlqr.max_abs_joint_error', ' %.5f'));
     fprintf('Error RMS articular               : [%s] rad\n', ...
-            num2str(metricsD.rms_joint_error', ' %.5f'));
+            num2str(metrics_tvlqr.rms_joint_error', ' %.5f'));
 end

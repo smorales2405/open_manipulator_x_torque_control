@@ -220,11 +220,15 @@ for i = 1:N
     yref(:,i+1) = open_manx_fkin(Xref(1:4,i));
 end
 
-metricsB.exitflag     = exitflag;
-metricsB.max_abs_uref = max(abs(Uref), [], 2);
+metrics_trajopt.exitflag     = exitflag;
+metrics_trajopt.max_abs_uref = max(abs(Uref), [], 2);
 
-fprintf('Max |u_ref| por articulación: [%s] N·m\n', ...
-        num2str(metricsB.max_abs_uref', ' %.4f'));
+fprintf('\n============================================================\n');
+fprintf('Lab 5 Actividad 2 - Métricas de la trayectoria optimizada\n');
+fprintf('============================================================\n');
+fprintf('Exitflag fmincon                 : %g\n',   metrics_trajopt.exitflag);
+fprintf('Max |u_ref| por articulacion     : [%s] N·m\n', ...
+        num2str(metrics_trajopt.max_abs_uref', ' %.4f'));
 
 %% ========================================================================
 %  8. Linealización numérica variante en el tiempo
@@ -325,16 +329,20 @@ end
 
 joint_error = Xsim(1:4,:) - [x0(1:4), Xref(1:4,:)];
 
-metricsD.final_error_cart    = norm(ysim(1:3,end) - yf(1:3));
-metricsD.max_abs_utvlqr      = max(abs(U_tvlqr_sat), [], 2);
-metricsD.sat_percent         = 100*mean(abs(U_tvlqr_raw) >= (ukmax-1e-8), 2);
-metricsD.max_abs_joint_error = max(abs(joint_error), [], 2);
-metricsD.rms_joint_error     = sqrt(mean(joint_error.^2, 2));
+metrics_tvlqr.final_error_cart    = norm(ysim(1:3,end) - yf(1:3));
+metrics_tvlqr.max_abs_utvlqr      = max(abs(U_tvlqr_sat), [], 2);
+metrics_tvlqr.sat_percent         = 100*mean(abs(U_tvlqr_raw) >= (ukmax-1e-8), 2);
+metrics_tvlqr.max_abs_joint_error = max(abs(joint_error), [], 2);
+metrics_tvlqr.rms_joint_error     = sqrt(mean(joint_error.^2, 2));
 
-fprintf('\nError cartesiano final ||y(tf)-yf|| = %.6f m\n', metricsD.final_error_cart);
-fprintf('Max |u_TVLQR|  : [%s] N·m\n', num2str(metricsD.max_abs_utvlqr', ' %.4f'));
-fprintf('Error max artic: [%s] rad\n', num2str(metricsD.max_abs_joint_error', ' %.5f'));
-fprintf('Error RMS artic: [%s] rad\n', num2str(metricsD.rms_joint_error', ' %.5f'));
+fprintf('\n============================================================\n');
+fprintf('Lab 5 Actividad 2 - Métricas de seguimiento TV-LQR\n');
+fprintf('============================================================\n');
+fprintf('Error cartesiano final ||y(tf)-yf||: %.6f m\n',  metrics_tvlqr.final_error_cart);
+fprintf('Max |u_TVLQR| por articulacion    : [%s] N·m\n', num2str(metrics_tvlqr.max_abs_utvlqr', ' %.4f'));
+fprintf('Saturacion TV-LQR por articulacion: [%s] %%\n',  num2str(metrics_tvlqr.sat_percent', ' %.2f'));
+fprintf('Error max artic                   : [%s] rad\n', num2str(metrics_tvlqr.max_abs_joint_error', ' %.5f'));
+fprintf('Error RMS artic                   : [%s] rad\n', num2str(metrics_tvlqr.rms_joint_error', ' %.5f'));
 
 %% ========================================================================
 %  11. Estilo común
