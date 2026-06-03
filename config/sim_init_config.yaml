@@ -14,8 +14,8 @@
 #   Home (todos cero)  : use_fixed_init: true    q_init: [0.0, 0.0, 0.0, 0.0]
 
 use_fixed_init: true
-q_init: [0.0, 0.0, 0.0, 0.0]   # x0 = [0, 0, 0, 0]
-#q_init: [1.5708, 0.0, 0.5236, 1.0472]   # x0 = [pi/2, 0, pi/6, pi/3]
+#q_init: [0.0, 0.0, 0.0, 0.0]           # x0 = [0, 0, 0, 0]
+q_init: [1.5708, 0.0, 0.5236, 1.0472]   # x0 = [pi/2, 0, pi/6, pi/3]
 
 # ─── Obstáculo MDF ───────────────────────────────────────────────────────────
 #
@@ -29,4 +29,4 @@ q_init: [0.0, 0.0, 0.0, 0.0]   # x0 = [0, 0, 0, 0]
 #   Punto de partida: obstáculo a 0.16 m en +X, frente al espacio de trabajo.
 
 spawn_obstacle: true
-obstacle_pose: [0.08, 0.0, 0.0, 0.0, 0.0, 1.5708]
+obstacle_pose: [0.1125, 0.0, 0.0, 0.0, 0.0, 1.5708]
