@@ -8,8 +8,8 @@
 clear; clc; close all;
 
 %% ── Configuracion ────────────────────────────────────────────────────────────
-test_num_sim  = 1;   % numero de log de simulacion
-test_num_real = 1;   % numero de log de hardware
+test_num_sim  = 23;   % numero de log de simulacion
+test_num_real = 7;   % numero de log de hardware
 
 EXPORT_FIGS = false;
 
@@ -71,29 +71,39 @@ end
 sgtitle('[Comparacion Sim vs Real] Posiciones articulares', ...
         'FontSize', 14, 'FontWeight', 'bold');
 
-%% ── Figura 2 — Comparacion de errores articulares ───────────────────────────
-e_sim  = qs - q_refs;
-e_real = qr - q_refr;
+%% ── Figura 2 — Trayectoria cartesiana: x, y, z, phi ─────────────────────────
+ys_cart = zeros(numel(ts), 4);
+yr_cart = zeros(numel(tr), 4);
+y_ref_cart = zeros(numel(ts), 4);
+for i = 1:numel(ts)
+    ys_cart(i,:)    = open_manx_fkin(qs(i,:)')';
+    y_ref_cart(i,:) = open_manx_fkin(q_refs(i,:)')';
+end
+for i = 1:numel(tr)
+    yr_cart(i,:) = open_manx_fkin(qr(i,:)')';
+end
+
+cartLabels = {'$x$ [m]', '$y$ [m]', '$z$ [m]', '$\phi$ [rad]'};
 
 figure(2); clf;
-set(gcf, 'Color', 'w', 'Position', [120 120 1100 560]);
-tl2 = tiledlayout(2, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
+set(gcf, 'Color', 'w', 'Position', [120 120 1100 700]);
+tl2 = tiledlayout(4, 1, 'TileSpacing', 'compact', 'Padding', 'compact');
 
 for i = 1:4
     nexttile(tl2);
-    plot(ts, e_sim(:,i),  '-', 'Color', c_sim,  'LineWidth', lw); hold on;
-    plot(tr, e_real(:,i), '-', 'Color', c_real, 'LineWidth', lw);
-    yline(0, ':', 'LineWidth', 0.8);
-    xlabel('Tiempo [s]', 'FontSize', fs);
-    ylabel(sprintf('$e_{q_%d}$ [rad]', i), 'Interpreter', 'latex', 'FontSize', fs);
-    title(jointNames{i}, 'FontSize', fs_title);
+    plot(ts, ys_cart(:,i),    '-',  'Color', c_sim,  'LineWidth', lw); hold on;
+    plot(tr, yr_cart(:,i),    '-',  'Color', c_real, 'LineWidth', lw);
+    plot(ts, y_ref_cart(:,i), '--', 'Color', c_ref,  'LineWidth', lw);
+    ylabel(cartLabels{i}, 'Interpreter', 'latex', 'FontSize', fs);
     if i == 1
-        legend({'Simulacion', 'Hardware'}, 'Location', 'best', 'FontSize', fs-1);
+        legend({'Simulacion', 'Hardware', 'Referencia'}, ...
+               'Location', 'best', 'FontSize', fs-1);
     end
     grid on; box on; set(gca, 'FontSize', fs);
     xlim([0, max(ts(end), tr(end))]);
+    if i < 4, set(gca, 'XTickLabel', []); else, xlabel('Tiempo [s]', 'FontSize', fs); end
 end
-title(tl2, '[Comparacion Sim vs Real] Error de seguimiento articular', ...
+title(tl2, '[Comparacion Sim vs Real] Trayectoria cartesiana del efector final', ...
       'FontSize', 14, 'FontWeight', 'bold');
 
 %% ── Figura 3 — Comparacion de torques ───────────────────────────────────────
@@ -104,8 +114,8 @@ for i = 1:4
     subplot(2,2,i);
     plot(ts, taus(:,i), '-', 'Color', c_sim,  'LineWidth', lw); hold on;
     plot(tr, taur(:,i), '-', 'Color', c_real, 'LineWidth', lw);
-    yline( 0.82, 'k--', 'LineWidth', 0.8);
-    yline(-0.82, 'k--', 'LineWidth', 0.8);
+    yline( 1.0, 'k--', 'LineWidth', 0.8);
+    yline(-1.0, 'k--', 'LineWidth', 0.8);
     xlabel('Tiempo [s]', 'FontSize', fs);
     ylabel(sprintf('$\\tau_%d\\;[\\mathrm{N\\cdot m}]$', i), ...
            'Interpreter', 'latex', 'FontSize', fs);
@@ -121,6 +131,8 @@ sgtitle('[Comparacion Sim vs Real] Torques de control', ...
         'FontSize', 14, 'FontWeight', 'bold');
 
 %% ── Tabla de metricas ────────────────────────────────────────────────────────
+e_sim  = qs - q_refs;
+e_real = qr - q_refr;
 fprintf('\n======================================================\n');
 fprintf('Comparacion de metricas — Lab5 Actividad 1\n');
 fprintf('======================================================\n');
@@ -138,8 +150,8 @@ for i = 1:4
 end
 fprintf('%s\n', repmat('-', 1, 56));
 for i = 1:4
-    sat_s = 100*mean(abs(taus(:,i)) >= 0.82 - 1e-3);
-    sat_r = 100*mean(abs(taur(:,i)) >= 0.82 - 1e-3);
+    sat_s = 100*mean(abs(taus(:,i)) >= 1.0 - 1e-3);
+    sat_r = 100*mean(abs(taur(:,i)) >= 1.0 - 1e-3);
     fprintf('Saturacion tau%d [%%]            %10.2f  %10.2f\n', i, sat_s, sat_r);
 end
 fprintf('%s\n', repmat('-', 1, 56));
@@ -154,7 +166,7 @@ if EXPORT_FIGS
                        sprintf('sim%d_real%d', test_num_sim, test_num_real));
     if ~exist(out_dir, 'dir'), mkdir(out_dir); end
 
-    fig_names = {'compare_q', 'compare_error', 'compare_tau'};
+    fig_names = {'compare_q', 'compare_cart', 'compare_tau'};
     for fi = 1:3
         base = fullfile(out_dir, fig_names{fi});
         exportgraphics(figure(fi), [base '.png'], 'Resolution', 300);
