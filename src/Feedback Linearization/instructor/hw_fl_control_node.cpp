@@ -96,10 +96,10 @@ static const std::array<double,  NUM_JOINTS> ENCODER_SIGN    = {+1.0, +1.0, +1.0
 static const std::array<double,  NUM_JOINTS> CURRENT_SIGN    = {+1.0, +1.0, +1.0, +1.0};
 
 static const std::array<double, NUM_JOINTS> JOINT_LOWER = {
-  -3.0/4.0*PI, -11.0/18.0*PI, -11.0/18.0*PI, -5.0/9.0*PI   // [-135°, -110°, -110°, -100°]
+  -3.0/4.0*PI, -11.0/18.0*PI, -11.0/18.0*PI, -1.8
 };
 static const std::array<double, NUM_JOINTS> JOINT_UPPER = {
-  +3.0/4.0*PI, +5.0/9.0*PI,   +PI/2.0,       +23.0/36.0*PI // [+135°, +100°,  +90°, +115°]
+  +3.0/4.0*PI, +5.0/9.0*PI,   +PI/2.0,       2.1
 };
 
 static constexpr uint16_t CURRENT_LIMIT_REGISTER = 350;
