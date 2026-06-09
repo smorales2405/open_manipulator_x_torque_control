@@ -16,7 +16,7 @@ clear; clc; close all;
 mode        = 'sim';   % 'sim'  = simulacion Gazebo
                        % 'real' = implementacion hardware real
 
-test_num    = 1;       % Numero de log
+test_num    = 6;       % Numero de log
 
 EXPORT_FIGS = false;    % true  = guardar PNG (300 dpi) y EPS vectorial (600 dpi)
                        % false = solo visualizar
@@ -52,6 +52,12 @@ fprintf('[%s] Cargado: %s  (%d muestras)\n', mode_label, csvFile, height(T));
 t = T.t - T.t(1);
 
 q = [T.q1, T.q2, T.q3, T.q4];
+
+% Velocidades articulares filtradas (nuevos CSV con EMA; puede no existir en anteriores)
+has_dq_filt = ismember('dq1_filt', T.Properties.VariableNames);
+if has_dq_filt
+    dq_filt = [T.dq1_filt, T.dq2_filt, T.dq3_filt, T.dq4_filt];
+end
 
 y     = [T.x,     T.y,     T.z,     T.phi    ];
 y_des = [T.x_des, T.y_des, T.z_des, T.phi_des];
@@ -193,8 +199,8 @@ for i = 1:4
     nexttile(tl5);
     plot(t, tau(:,i), '-', 'Color', c_tau(i,:), 'LineWidth', lw); hold on;
     yline(0,     ':',  'LineWidth', 0.8);
-    yline( 1.5, '--k', 'LineWidth', 0.9, 'Label', '+1.5 N·m');
-    yline(-1.5, '--k', 'LineWidth', 0.9, 'Label', '-1.5 N·m');
+    yline( 1.2, '--k', 'LineWidth', 0.9, 'Label', '+1.2 N·m');
+    yline(-1.2, '--k', 'LineWidth', 0.9, 'Label', '-1.2 N·m');
     xlabel('Tiempo [s]', 'FontSize', fs);
     ylabel(sprintf('$\\tau_%d\\;[\\mathrm{N{\\cdot}m}]$', i), ...
            'Interpreter', 'latex', 'FontSize', fs);

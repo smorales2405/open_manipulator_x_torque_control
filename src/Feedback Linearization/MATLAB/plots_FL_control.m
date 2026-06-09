@@ -12,10 +12,10 @@
 clear; clc; close all;
 
 %% ── Configuracion ────────────────────────────────────────────────────────────
-mode        = 'sim';   % 'sim'  = simulacion Gazebo
+mode        = 'real';   % 'sim'  = simulacion Gazebo
                        % 'real' = implementacion hardware real
 
-test_num    = 1;       % Numero de log
+test_num    = 20;       % Numero de log
 
 EXPORT_FIGS = false;    % true  = guardar PNG (300 dpi) y EPS vectorial (600 dpi)
                        % false = solo visualizar
@@ -56,6 +56,12 @@ q_des  = [T.q1_des,  T.q2_des,  T.q3_des,  T.q4_des ];
 dq     = [T.dq1,     T.dq2,     T.dq3,     T.dq4    ];
 dq_des = [T.dq1_des, T.dq2_des, T.dq3_des, T.dq4_des];
 
+% Velocidad filtrada (columna nueva; puede no existir en CSVs anteriores)
+has_dq_filt = ismember('dq1_filt', T.Properties.VariableNames);
+if has_dq_filt
+    dq_filt = [T.dq1_filt, T.dq2_filt, T.dq3_filt, T.dq4_filt];
+end
+
 tau    = [T.tau1,    T.tau2,    T.tau3,    T.tau4   ];
 
 %% ── Estilo ───────────────────────────────────────────────────────────────────
@@ -63,7 +69,8 @@ lw         = 1.6;
 fs         = 11;
 fs_title   = 12;
 color_ref  = [0.8500 0.3250 0.0980];   % naranja — referencia
-color_meas = [0.0000 0.4470 0.7410];   % azul    — medicion
+color_meas = [0.0000 0.4470 0.7410];   % azul    — medicion (raw)
+color_filt = [0.4660 0.6740 0.1880];   % verde   — medicion filtrada
 color_tau  = [0.4660 0.6740 0.1880];   % verde   — torque
 jointNames = {'Articulacion 1', 'Articulacion 2', ...
               'Articulacion 3', 'Articulacion 4'};
@@ -72,23 +79,28 @@ xlims = [t(1), t(end)];
 %% ── Figura 1 — Posiciones articulares ────────────────────────────────────────
 figure(1); clf;
 set(gcf, 'Color', 'w', 'Position', [100 100 1100 700]);
+tl1  = tiledlayout(2, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
+axs1 = gobjects(1, 4);
+h_ref1 = []; h_mea1 = [];
 
 for i = 1:4
-    subplot(2,2,i);
-    plot(t, q(:,i),     '-',  'Color', color_meas, 'LineWidth', lw); hold on;
-    plot(t, q_des(:,i), '--', 'Color', color_ref,  'LineWidth', lw);
+    axs1(i) = nexttile(tl1);
+    h2 = plot(t, q(:,i),     '-',  'Color', color_meas, 'LineWidth', lw); hold on;
+    h1 = plot(t, q_des(:,i), '--', 'Color', color_ref,  'LineWidth', lw);
+    if i == 1; h_ref1 = h1; h_mea1 = h2; end
     xlabel('Tiempo [s]', 'FontSize', fs);
     ylabel(sprintf('$q_%d$ [rad]', i), 'Interpreter', 'latex', 'FontSize', fs);
-    title([jointNames{i}], 'FontSize', fs_title);
-    legend({sprintf('$q_{%d,med}$', i), sprintf('$q_{%d,des}$', i)}, ...
-           'Interpreter', 'latex', 'Location', 'best');
+    title(jointNames{i}, 'FontSize', fs_title);
     grid on; box on;
     set(gca, 'FontSize', fs);
     xlim(xlims);
 end
 
-sgtitle(sprintf('[%s] Seguimiento de posiciones articulares', mode_label), ...
-        'FontSize', 14, 'FontWeight', 'bold');
+lgd1 = legend(axs1(1), [h_ref1, h_mea1], {'Referencia', 'Medicion'}, ...
+              'Orientation', 'horizontal', 'FontSize', fs, 'Location', 'northoutside');
+lgd1.Layout.Tile = 'north';
+title(tl1, sprintf('[%s] Seguimiento de posiciones articulares', mode_label), ...
+      'FontSize', 14, 'FontWeight', 'bold');
 
 %% ── Figura 2 — Errores de seguimiento articular ──────────────────────────────
 e_q = q - q_des;
@@ -116,24 +128,33 @@ title(tl2, sprintf('[%s] FL Control - Errores de Seguimiento Articular', mode_la
 %% ── Figura 3 — Velocidades articulares ───────────────────────────────────────
 figure(3); clf;
 set(gcf, 'Color', 'w', 'Position', [130 130 1100 700]);
+tl3  = tiledlayout(2, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
+axs3 = gobjects(1, 4);
+h_ref3 = []; h_mea3 = [];
 
 for i = 1:4
-    subplot(2,2,i);
-    plot(t, dq(:,i),     '-',  'Color', color_meas, 'LineWidth', lw); hold on;
-    plot(t, dq_des(:,i), '--', 'Color', color_ref,  'LineWidth', lw);
+    axs3(i) = nexttile(tl3);
+    % Usar velocidad filtrada si esta disponible, sino la cruda (CSVs anteriores)
+    dq_plot = dq(:,i);
+    if has_dq_filt
+        dq_plot = dq_filt(:,i);
+    end
+    h2 = plot(t, dq_plot,      '-',  'Color', color_meas, 'LineWidth', lw); hold on;
+    h1 = plot(t, dq_des(:,i),  '--', 'Color', color_ref,  'LineWidth', lw);
+    if i == 1; h_ref3 = h1; h_mea3 = h2; end
     xlabel('Tiempo [s]', 'FontSize', fs);
-    ylabel(sprintf('$\\dot{q}_%d$ [rad/s]', i), ...
-           'Interpreter', 'latex', 'FontSize', fs);
-    title([jointNames{i}], 'FontSize', fs_title);
-    legend({sprintf('$\\dot{q}_{%d,med}$', i), sprintf('$\\dot{q}_{%d,des}$', i)}, ...
-           'Interpreter', 'latex', 'Location', 'best');
+    ylabel(sprintf('$\\dot{q}_%d$ [rad/s]', i), 'Interpreter', 'latex', 'FontSize', fs);
+    title(jointNames{i}, 'FontSize', fs_title);
     grid on; box on;
     set(gca, 'FontSize', fs);
     xlim(xlims);
 end
 
-sgtitle(sprintf('[%s] Seguimiento de velocidades articulares', mode_label), ...
-        'FontSize', 14, 'FontWeight', 'bold');
+lgd3 = legend(axs3(1), [h_ref3, h_mea3], {'Referencia', 'Medicion'}, ...
+              'Orientation', 'horizontal', 'FontSize', fs, 'Location', 'northoutside');
+lgd3.Layout.Tile = 'north';
+title(tl3, sprintf('[%s] Seguimiento de velocidades articulares', mode_label), ...
+      'FontSize', 14, 'FontWeight', 'bold');
 
 %% ── Figura 4 — Torques de control ────────────────────────────────────────────
 figure(4); clf;
