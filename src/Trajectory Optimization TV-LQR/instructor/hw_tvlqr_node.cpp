@@ -13,19 +13,23 @@
  *   - Inicializacion Dynamixel SDK (init_hardware, shutdown_hardware)
  *   - Lectura de estado SyncRead: q, dq, corriente medida (read_state)
  *   - Escritura de corriente SyncWrite (send_currents)
- *   - Conversion torque -> corriente con compensacion de deadzone y viscosa
+ *   - Conversion torque -> corriente via modelo OLS identificado (motor_params.yaml)
  *   - Verificacion de corriente medida (parada de emergencia)
  *   - Publicador /hw/joint_states para monitoreo
  *
  * Parametros ROS 2 (--ros-args -p nombre:=valor):
- *   port_name       [string]  "/dev/ttyUSB0"
- *   deadzone_ticks  [double]  30.0
- *   viscous_comp    [double]  5.0
- *   t_warmup        [double]  2.0   (warmup con tau_gravity antes de TV-LQR, 0 = sin warmup)
- *   torque_scale    [double]  1.0   (escala de seguridad, rango 0..1)
- *   t_run           [double]  1.5   (duracion en segundos, 0 = sin limite)
- *   test_num        [int]     1     (identificador del CSV)
- *   reference_dir   [string]  "src/Trajectory Optimization TV-LQR/references"
+ *   port_name              [string]    "/dev/ttyUSB0"
+ *   t_warmup               [double]    2.0   (warmup con tau_gravity antes de TV-LQR, 0 = sin warmup)
+ *   torque_scale           [double]    1.0   (escala de seguridad, rango 0..1)
+ *   t_run                  [double]    1.5   (duracion en segundos, 0 = sin limite)
+ *   test_num               [int]       1     (identificador del CSV)
+ *   reference_dir          [string]    "src/Trajectory Optimization TV-LQR/references"
+ *   vel_cutoff_hz          [double]    2.0   (filtro EMA velocidad; 0 = desactivado)
+ *   motor_alpha            [double[4]] ticks/N·m
+ *   motor_Fv               [double[4]] ticks/(rad/s)
+ *   motor_Fc               [double[4]] ticks
+ *   motor_I_offset         [double[4]] ticks
+ *   motor_epsilon_friction [double]    rad/s
  *
  * Publisher: /hw/joint_states (sensor_msgs/JointState) — monitoreo
  *
@@ -103,10 +107,10 @@ static const std::array<double,  NUM_JOINTS> ENCODER_SIGN    = {+1.0, +1.0, +1.0
 static const std::array<double,  NUM_JOINTS> CURRENT_SIGN    = {+1.0, +1.0, +1.0, +1.0};
 
 static const std::array<double, NUM_JOINTS> JOINT_LOWER = {
-  -3.0/4.0*PI, -11.0/18.0*PI, -11.0/18.0*PI, -5.0/9.0*PI   // [-135°, -110°, -110°, -100°]
+  -3.0/4.0*PI, -11.0/18.0*PI, -11.0/18.0*PI, -1.8
 };
 static const std::array<double, NUM_JOINTS> JOINT_UPPER = {
-  +3.0/4.0*PI, +5.0/9.0*PI,   +PI/2.0,       +23.0/36.0*PI // [+135°, +100°,  +90°, +115°]
+  +3.0/4.0*PI, +5.0/9.0*PI,   +PI/2.0,       2.1
 };
 
 static constexpr uint16_t CURRENT_LIMIT_REGISTER = 350;
@@ -114,7 +118,7 @@ static constexpr int16_t  CURRENT_CMD_LIMIT_J123 = 257;
 static constexpr int16_t  CURRENT_CMD_LIMIT_J4   = 257;
 static constexpr int16_t  CURRENT_MEASURED_PEAK  = 313;
 
-static constexpr double TAU_MAX = 1.0;   // [N·m]
+static constexpr double TAU_MAX = 1.2;   // [N·m]
 
 using Vec4 = Eigen::Matrix<double, NUM_JOINTS, 1>;
 
@@ -183,8 +187,6 @@ public:
   {
     // ── Parametros ──────────────────────────────────────────────────────────
     this->declare_parameter<std::string>("port_name",     "/dev/ttyUSB0");
-    this->declare_parameter<double>     ("deadzone_ticks", 30.0);
-    this->declare_parameter<double>     ("viscous_comp",   5.0);
     this->declare_parameter<double>     ("t_warmup",       2.0);
     this->declare_parameter<double>     ("torque_scale",   1.0);
     this->declare_parameter<double>     ("t_run",          1.5);
@@ -192,20 +194,49 @@ public:
     this->declare_parameter<std::string>("reference_dir",
       "src/Trajectory Optimization TV-LQR/references");
 
-    port_name_      = this->get_parameter("port_name").as_string();
-    deadzone_ticks_ = this->get_parameter("deadzone_ticks").as_double();
-    viscous_comp_   = this->get_parameter("viscous_comp").as_double();
+    using dvec = std::vector<double>;
+    this->declare_parameter<dvec>("motor_alpha",            dvec{208.5, 208.5, 208.5, 208.5});
+    this->declare_parameter<dvec>("motor_Fv",               dvec{0.0,   0.0,   0.0,   0.0  });
+    this->declare_parameter<dvec>("motor_Fc",               dvec{0.0,   0.0,   0.0,   0.0  });
+    this->declare_parameter<dvec>("motor_I_offset",         dvec{0.0,   0.0,   0.0,   0.0  });
+    this->declare_parameter<double>("motor_epsilon_friction", 0.05);
+    this->declare_parameter<double>("vel_cutoff_hz",          2.0);
+
+    port_name_        = this->get_parameter("port_name").as_string();
     const double t_warmup_sec = this->get_parameter("t_warmup").as_double();
-    torque_scale_   = std::min(std::max(this->get_parameter("torque_scale").as_double(), 0.0), 1.0);
-    t_run_          = this->get_parameter("t_run").as_double();
+    torque_scale_     = std::min(std::max(this->get_parameter("torque_scale").as_double(), 0.0), 1.0);
+    t_run_            = this->get_parameter("t_run").as_double();
     const int test_num = this->get_parameter("test_num").as_int();
     const std::string ref_name = this->get_parameter("reference_dir").as_string();
     ref_dir_ = std::string(PACKAGE_SHARE_DIR) + "/" + ref_name;
 
+    auto load_vec4 = [this](const std::string & name) {
+      auto v = get_parameter(name).as_double_array();
+      return Vec4(v[0], v[1], v[2], v[3]);
+    };
+    motor_alpha_    = load_vec4("motor_alpha");
+    motor_Fv_       = load_vec4("motor_Fv");
+    motor_Fc_       = load_vec4("motor_Fc");
+    motor_I_offset_ = load_vec4("motor_I_offset");
+    motor_epsilon_  = get_parameter("motor_epsilon_friction").as_double();
+
+    vel_cutoff_hz_    = get_parameter("vel_cutoff_hz").as_double();
+    vel_filter_alpha_ = (vel_cutoff_hz_ > 0.0)
+        ? std::exp(-2.0 * PI * vel_cutoff_hz_ * 0.01)
+        : 0.0;
+
     RCLCPP_INFO(get_logger(),
-      "puerto=%s  dz=%.1f  visc=%.2f  scale=%.2f  t_run=%.1fs  id=%d",
-      port_name_.c_str(), deadzone_ticks_, viscous_comp_,
-      torque_scale_, t_run_, test_num);
+      "puerto=%s  scale=%.2f  t_run=%.1fs  id=%d",
+      port_name_.c_str(), torque_scale_, t_run_, test_num);
+    RCLCPP_INFO(get_logger(),
+      "motor α=[%.1f %.1f %.1f %.1f]  Fv=[%.2f %.2f %.2f %.2f]  ε=%.3f",
+      motor_alpha_(0), motor_alpha_(1), motor_alpha_(2), motor_alpha_(3),
+      motor_Fv_(0), motor_Fv_(1), motor_Fv_(2), motor_Fv_(3), motor_epsilon_);
+    if (vel_cutoff_hz_ > 0.0)
+      RCLCPP_INFO(get_logger(),
+        "Filtro velocidad: fc=%.1f Hz  α=%.4f", vel_cutoff_hz_, vel_filter_alpha_);
+    else
+      RCLCPP_WARN(get_logger(), "Filtro velocidad DESACTIVADO (vel_cutoff_hz=0).");
     RCLCPP_INFO(get_logger(), "reference_dir: %s", ref_dir_.c_str());
 
     // ── Seccion 1: Carga de referencias ─────────────────────────────────────
@@ -298,7 +329,7 @@ public:
                 + std::to_string(test_num) + ".csv";
     csv_.open(csv_path_);
     if (csv_.is_open()) {
-      csv_ << "t,q1,q2,q3,q4,dq1,dq2,dq3,dq4,"
+      csv_ << "t,q1,q2,q3,q4,dq1,dq2,dq3,dq4,dq1_filt,dq2_filt,dq3_filt,dq4_filt,"
               "q1_ref,q2_ref,q3_ref,q4_ref,dq1_ref,dq2_ref,dq3_ref,dq4_ref,"
               "tau1,tau2,tau3,tau4,"
               "curr_cmd1,curr_cmd2,curr_cmd3,curr_cmd4,"
@@ -465,21 +496,19 @@ private:
     return true;
   }
 
-  // Conversion torque -> corriente con compensacion de deadzone y viscosa
   std::array<int16_t, NUM_JOINTS> torque_to_current(const Vec4 & tau, const Vec4 & dq)
   {
-    static const std::array<double,  NUM_JOINTS> dz_gain = {0.8, 0.9, 0.9, 1.0};
     static const std::array<int16_t, NUM_JOINTS> cur_lim = {
       CURRENT_CMD_LIMIT_J123, CURRENT_CMD_LIMIT_J123,
       CURRENT_CMD_LIMIT_J123, CURRENT_CMD_LIMIT_J4
     };
     std::array<int16_t, NUM_JOINTS> cmd{};
     for (int i = 0; i < NUM_JOINTS; ++i) {
-      double c = CURRENT_SIGN[i] * ENCODER_SIGN[i] * tau(i) / TORQUE_PER_CURRENT_TICK;
-      c += CURRENT_SIGN[i] * ENCODER_SIGN[i] * viscous_comp_ * dq(i);
-      if (deadzone_ticks_ > 0.0)
-        c += dz_gain[i] * deadzone_ticks_ * std::tanh(30.0 * c * CURRENT_UNIT_A);
-      cmd[i] = clampCurrent(c, cur_lim[i]);
+      const double I_model = motor_alpha_(i) * tau(i)
+                           + motor_Fv_(i)    * dq(i)
+                           + motor_Fc_(i)    * std::tanh(dq(i) / motor_epsilon_)
+                           + motor_I_offset_(i);
+      cmd[i] = clampCurrent(CURRENT_SIGN[i] * ENCODER_SIGN[i] * I_model, cur_lim[i]);
     }
     return cmd;
   }
@@ -508,6 +537,12 @@ private:
       if (!read_state(q, dq, cur_meas)) {
         emergency_stop("SyncRead fallido en warmup"); return;
       }
+      if (!dq_filter_initialized_) {
+        dq_filtered_           = dq;
+        dq_filter_initialized_ = true;
+      } else {
+        dq_filtered_ = vel_filter_alpha_ * dq_filtered_ + (1.0 - vel_filter_alpha_) * dq;
+      }
       for (int i = 0; i < NUM_JOINTS; ++i) {
         if (q(i) < JOINT_LOWER[i] || q(i) > JOINT_UPPER[i]) {
           emergency_stop("Articulacion " + std::to_string(i+1)
@@ -515,7 +550,7 @@ private:
           return;
         }
       }
-      auto cur_cmd = torque_to_current(tau_gravity_, dq);
+      auto cur_cmd = torque_to_current(tau_gravity_, dq_filtered_);
       if (!send_currents(cur_cmd)) {
         emergency_stop("SyncWrite fallido en warmup"); return;
       }
@@ -547,6 +582,14 @@ private:
       return;
     }
 
+    // ── 1b. Filtro EMA sobre velocidad medida ─────────────────────────────
+    if (!dq_filter_initialized_) {
+      dq_filtered_           = dq;
+      dq_filter_initialized_ = true;
+    } else {
+      dq_filtered_ = vel_filter_alpha_ * dq_filtered_ + (1.0 - vel_filter_alpha_) * dq;
+    }
+
     // ── 2. Verificar limites articulares ──────────────────────────────────
     for (int i = 0; i < NUM_JOINTS; ++i) {
       if (q(i) < JOINT_LOWER[i] || q(i) > JOINT_UPPER[i]) {
@@ -570,7 +613,7 @@ private:
     // ── Seccion 4: Saturacion y escala de seguridad ───────────────────────
     const Vec4 tau_sat = tau.cwiseMin(TAU_MAX).cwiseMax(-TAU_MAX);
     const Vec4 tau_cmd = torque_scale_ * tau_sat;
-    auto cur_cmd = torque_to_current(tau_cmd, dq);
+    auto cur_cmd = torque_to_current(tau_cmd, dq_filtered_);
 
     // ── 5. Enviar corriente ────────────────────────────────────────────────
     if (!send_currents(cur_cmd)) {
@@ -606,14 +649,15 @@ private:
     // ── Seccion 5: Exportacion de datos al CSV ────────────────────────────
     if (csv_.is_open()) {
       csv_ << std::fixed << std::setprecision(6)
-           << t                << ","
-           << q(0)             << "," << q(1)  << "," << q(2)  << "," << q(3)  << ","
-           << dq(0)            << "," << dq(1) << "," << dq(2) << "," << dq(3) << ","
-           << q_ref_[k](0)    << "," << q_ref_[k](1)  << "," << q_ref_[k](2)  << "," << q_ref_[k](3)  << ","
-           << dq_ref_[k](0)   << "," << dq_ref_[k](1) << "," << dq_ref_[k](2) << "," << dq_ref_[k](3) << ","
-           << tau_sat(0)       << "," << tau_sat(1) << "," << tau_sat(2) << "," << tau_sat(3) << ","
-           << cur_cmd[0]       << "," << cur_cmd[1] << "," << cur_cmd[2] << "," << cur_cmd[3] << ","
-           << cur_meas[0]      << "," << cur_meas[1] << "," << cur_meas[2] << "," << cur_meas[3]
+           << t                       << ","
+           << q(0)  << "," << q(1)  << "," << q(2)  << "," << q(3)  << ","
+           << dq(0) << "," << dq(1) << "," << dq(2) << "," << dq(3) << ","
+           << dq_filtered_(0) << "," << dq_filtered_(1) << "," << dq_filtered_(2) << "," << dq_filtered_(3) << ","
+           << q_ref_[k](0)  << "," << q_ref_[k](1)  << "," << q_ref_[k](2)  << "," << q_ref_[k](3)  << ","
+           << dq_ref_[k](0) << "," << dq_ref_[k](1) << "," << dq_ref_[k](2) << "," << dq_ref_[k](3) << ","
+           << tau_sat(0) << "," << tau_sat(1) << "," << tau_sat(2) << "," << tau_sat(3) << ","
+           << cur_cmd[0] << "," << cur_cmd[1] << "," << cur_cmd[2] << "," << cur_cmd[3] << ","
+           << cur_meas[0] << "," << cur_meas[1] << "," << cur_meas[2] << "," << cur_meas[3]
            << "\n";
     }
 
@@ -633,7 +677,13 @@ private:
 
   std::string ref_dir_;
   std::string port_name_;
-  double      deadzone_ticks_, viscous_comp_, torque_scale_, t_run_;
+  double      torque_scale_, t_run_;
+  Vec4        motor_alpha_, motor_Fv_, motor_Fc_, motor_I_offset_;
+  double      motor_epsilon_;
+  double      vel_cutoff_hz_;
+  double      vel_filter_alpha_;
+  Vec4        dq_filtered_;
+  bool        dq_filter_initialized_{false};
 
   bool hw_active_;
   bool refs_loaded_;
