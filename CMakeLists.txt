@@ -16,10 +16,11 @@ find_package(Eigen3 REQUIRED NO_MODULE)
 find_package(pinocchio REQUIRED)
 find_package(dynamixel_sdk REQUIRED)
 
-set(FL_INSTR "src/Feedback Linearization/instructor")
-set(FL_STUD  "src/Feedback Linearization/student")
-set(TO_INSTR "src/Trajectory Optimization TV-LQR/instructor")
-set(GC_SRC   "src/Gravity Compensation")
+set(FL_INSTR   "src/Feedback Linearization/instructor")
+set(FL_STUD    "src/Feedback Linearization/student")
+set(TO_INSTR   "src/Trajectory Optimization TV-LQR/instructor")
+set(GC_SRC     "src/Gravity Compensation")
+set(IDENT_SRC  "src/Identification")
 
 # ── gz_fl_control_node ───────────────────────────────────────────────────────
 add_executable(gz_fl_control_node "${FL_INSTR}/gz_fl_control_node.cpp")
@@ -60,6 +61,7 @@ target_compile_features(hw_fl_control_node PUBLIC cxx_std_17)
 target_compile_definitions(hw_fl_control_node PRIVATE
   "PACKAGE_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\""
   "PACKAGE_URDF_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/urdf\""
+  "PACKAGE_CONFIG_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/config\""
   COAL_DISABLE_HPP_FCL_WARNINGS)
 
 # ── hw_io_control_node ───────────────────────────────────────────────────────
@@ -75,6 +77,7 @@ target_compile_features(hw_io_control_node PUBLIC cxx_std_17)
 target_compile_definitions(hw_io_control_node PRIVATE
   "PACKAGE_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\""
   "PACKAGE_URDF_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/urdf\""
+  "PACKAGE_CONFIG_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/config\""
   COAL_DISABLE_HPP_FCL_WARNINGS)
 
 # ── gz_fl_control_node_base ──────────────────────────────────────────────────
@@ -116,6 +119,7 @@ target_compile_features(hw_fl_control_node_base PUBLIC cxx_std_17)
 target_compile_definitions(hw_fl_control_node_base PRIVATE
   "PACKAGE_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\""
   "PACKAGE_URDF_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/urdf\""
+  "PACKAGE_CONFIG_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/config\""
   COAL_DISABLE_HPP_FCL_WARNINGS)
 
 # ── hw_io_control_node_base ──────────────────────────────────────────────────
@@ -131,6 +135,7 @@ target_compile_features(hw_io_control_node_base PUBLIC cxx_std_17)
 target_compile_definitions(hw_io_control_node_base PRIVATE
   "PACKAGE_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\""
   "PACKAGE_URDF_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/urdf\""
+  "PACKAGE_CONFIG_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/config\""
   COAL_DISABLE_HPP_FCL_WARNINGS)
 
 # ── gz_gravity_comp_node ─────────────────────────────────────────────────────
@@ -182,6 +187,34 @@ target_compile_definitions(hw_tvlqr_node PRIVATE
   "PACKAGE_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\""
   "PACKAGE_SHARE_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}\"")
 
+# ── hw_identify_node ─────────────────────────────────────────────────────────
+add_executable(hw_identify_node "${IDENT_SRC}/hw_identify_node.cpp")
+ament_target_dependencies(hw_identify_node rclcpp sensor_msgs)
+target_include_directories(hw_identify_node PRIVATE ${dynamixel_sdk_INCLUDE_DIRS})
+target_link_libraries(hw_identify_node
+  ${dynamixel_sdk_LIBRARIES}
+  pinocchio::pinocchio_default
+  pinocchio::pinocchio_parsers
+  Eigen3::Eigen)
+target_compile_features(hw_identify_node PUBLIC cxx_std_17)
+target_compile_definitions(hw_identify_node PRIVATE
+  "PACKAGE_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\""
+  "PACKAGE_URDF_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/urdf\""
+  COAL_DISABLE_HPP_FCL_WARNINGS)
+
+
+# ── hw_sinusoidal_torque_node (diagnostico: torques sinusoidales por joint) ──
+add_executable(hw_sinusoidal_torque_node "src/Diagnostics/hw_sinusoidal_torque_node.cpp")
+ament_target_dependencies(hw_sinusoidal_torque_node rclcpp sensor_msgs)
+target_include_directories(hw_sinusoidal_torque_node PRIVATE ${dynamixel_sdk_INCLUDE_DIRS})
+target_link_libraries(hw_sinusoidal_torque_node
+  ${dynamixel_sdk_LIBRARIES}
+  Eigen3::Eigen)
+target_compile_features(hw_sinusoidal_torque_node PUBLIC cxx_std_17)
+target_compile_definitions(hw_sinusoidal_torque_node PRIVATE
+  "PACKAGE_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\""
+  "PACKAGE_CONFIG_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/config\"")
+
 # ── hw_torque_probe_node (diagnostico de polaridad torque->corriente) ────────
 add_executable(hw_torque_probe_node "src/Diagnostics/hw_torque_probe_node.cpp")
 ament_target_dependencies(hw_torque_probe_node rclcpp)
@@ -219,7 +252,9 @@ install(TARGETS
     gz_gravity_comp_node
     hw_gravity_comp_node
     hw_fkin_node
+    hw_sinusoidal_torque_node
     hw_torque_probe_node
+    hw_identify_node
   DESTINATION lib/${PROJECT_NAME})
 
 install(DIRECTORY xacro config launch scripts data urdf meshes worlds

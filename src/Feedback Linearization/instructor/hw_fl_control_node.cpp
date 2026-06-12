@@ -54,6 +54,9 @@
 #ifndef PACKAGE_URDF_DIR
 #define PACKAGE_URDF_DIR "."
 #endif
+#ifndef PACKAGE_CONFIG_DIR
+#define PACKAGE_CONFIG_DIR "."
+#endif
 
 using namespace std::chrono_literals;
 
@@ -91,23 +94,9 @@ static constexpr double CURRENT_UNIT_A         = 0.00269;
 static constexpr double TORQUE_CONSTANT_NM_A   = 1.654;
 static constexpr double TORQUE_PER_CURRENT_TICK = TORQUE_CONSTANT_NM_A * CURRENT_UNIT_A;
 
-static const std::array<int32_t, NUM_JOINTS> JOINT_ZERO_TICK = {2048, 2048, 2048, 2048};
-static const std::array<double,  NUM_JOINTS> ENCODER_SIGN    = {+1.0, +1.0, +1.0, +1.0};
-static const std::array<double,  NUM_JOINTS> CURRENT_SIGN    = {+1.0, +1.0, +1.0, +1.0};
-
-static const std::array<double, NUM_JOINTS> JOINT_LOWER = {
-  -3.0/4.0*PI, -11.0/18.0*PI, -11.0/18.0*PI, -1.8
-};
-static const std::array<double, NUM_JOINTS> JOINT_UPPER = {
-  +3.0/4.0*PI, +5.0/9.0*PI,   +PI/2.0,       2.1
-};
-
-static constexpr uint16_t CURRENT_LIMIT_REGISTER = 350;
-static constexpr int16_t  CURRENT_CMD_LIMIT_J123 = 257;
-static constexpr int16_t  CURRENT_CMD_LIMIT_J4   = 257;
-static constexpr int16_t  CURRENT_MEASURED_PEAK  = 313;
-
-static constexpr double TAU_MAX = 1.2;   // [N·m] saturacion de torque por articulacion
+// JOINT_ZERO_TICK, ENCODER_SIGN, CURRENT_SIGN, JOINT_LOWER/UPPER,
+// CURRENT_LIMIT_REGISTER, CURRENT_CMD_LIMIT, CURRENT_MEASURED_PEAK, TAU_MAX
+// → cargados desde config/motor_params.yaml como parámetros ROS 2.
 
 static constexpr double RAMP_TIME_S = 3.0;
 
@@ -199,8 +188,8 @@ static Reference quinticTransition(double t, double T, const Vec4& q0)
 class HWFLControlNode : public rclcpp::Node
 {
 public:
-  HWFLControlNode()
-  : Node("hw_fl_control_node"),
+  explicit HWFLControlNode(const rclcpp::NodeOptions& opts = rclcpp::NodeOptions())
+  : Node("hw_fl_control_node", opts),
     hw_active_(false), q_initial_captured_(false)
   {
     // ── Parámetros ──────────────────────────────────────────────────────────
@@ -216,6 +205,17 @@ public:
     this->declare_parameter<dvec>("motor_I_offset",         dvec{0.0,   0.0,   0.0,   0.0  });
     this->declare_parameter<double>("motor_epsilon_friction", 0.05);
     this->declare_parameter<double>("vel_cutoff_hz",         2.0);
+
+    using ivec = std::vector<int64_t>;
+    this->declare_parameter<ivec>  ("joint_zero_tick",        ivec{2048, 2048, 2048, 2048});
+    this->declare_parameter<dvec>  ("encoder_sign",           dvec{+1.0, +1.0, +1.0, +1.0});
+    this->declare_parameter<dvec>  ("current_sign",           dvec{+1.0, +1.0, +1.0, +1.0});
+    this->declare_parameter<dvec>  ("joint_lower",            dvec{-2.356194, -1.919862, -1.919862, -1.8});
+    this->declare_parameter<dvec>  ("joint_upper",            dvec{+2.356194, +1.745329, +1.570796, +2.1});
+    this->declare_parameter<int>   ("current_limit_register", 350);
+    this->declare_parameter<ivec>  ("current_cmd_limit",      ivec{257, 257, 257, 257});
+    this->declare_parameter<int>   ("current_measured_peak",  313);
+    this->declare_parameter<double>("tau_max",                1.2);
 
     port_name_      = this->get_parameter("port_name").as_string();
     gain_scale_     = this->get_parameter("gain_scale").as_double();
@@ -238,12 +238,38 @@ public:
         ? std::exp(-2.0 * PI * vel_cutoff_hz_ * 0.01)
         : 0.0;
 
+    {
+      const auto zt = get_parameter("joint_zero_tick").as_integer_array();
+      for (int i = 0; i < NUM_JOINTS; ++i) joint_zero_tick_[i] = static_cast<int32_t>(zt[i]);
+    }
+    encoder_sign_ = load_vec4("encoder_sign");
+    current_sign_ = load_vec4("current_sign");
+    joint_lower_  = load_vec4("joint_lower");
+    joint_upper_  = load_vec4("joint_upper");
+    current_limit_register_ = static_cast<uint16_t>(get_parameter("current_limit_register").as_int());
+    {
+      const auto cl = get_parameter("current_cmd_limit").as_integer_array();
+      for (int i = 0; i < NUM_JOINTS; ++i) current_cmd_limit_[i] = static_cast<int16_t>(cl[i]);
+    }
+    current_measured_peak_ = static_cast<int16_t>(get_parameter("current_measured_peak").as_int());
+    tau_max_ = get_parameter("tau_max").as_double();
+
     RCLCPP_INFO(get_logger(), "puerto=%s  gain=%.2f  dur=%.1fs  id=%d",
       port_name_.c_str(), gain_scale_, t_imp_, log_id);
     RCLCPP_INFO(get_logger(),
       "motor α=[%.1f %.1f %.1f %.1f]  Fv=[%.2f %.2f %.2f %.2f]  ε=%.3f",
       motor_alpha_(0), motor_alpha_(1), motor_alpha_(2), motor_alpha_(3),
       motor_Fv_(0), motor_Fv_(1), motor_Fv_(2), motor_Fv_(3), motor_epsilon_);
+    RCLCPP_INFO(get_logger(),
+      "hw: zero=[%d %d %d %d]  enc_sign=[%.0f %.0f %.0f %.0f]  cur_sign=[%.0f %.0f %.0f %.0f]",
+      joint_zero_tick_[0], joint_zero_tick_[1], joint_zero_tick_[2], joint_zero_tick_[3],
+      encoder_sign_(0), encoder_sign_(1), encoder_sign_(2), encoder_sign_(3),
+      current_sign_(0), current_sign_(1), current_sign_(2), current_sign_(3));
+    RCLCPP_INFO(get_logger(),
+      "hw: tau_max=%.2f N·m  cmd_lim=[%d %d %d %d]  meas_peak=%d  lim_reg=%d",
+      tau_max_, current_cmd_limit_[0], current_cmd_limit_[1],
+      current_cmd_limit_[2], current_cmd_limit_[3],
+      static_cast<int>(current_measured_peak_), static_cast<int>(current_limit_register_));
     if (vel_cutoff_hz_ > 0.0)
       RCLCPP_INFO(get_logger(),
         "Filtro velocidad: fc=%.1f Hz  α=%.4f  (lag@0.2Hz≈%.1f°)",
@@ -327,7 +353,7 @@ private:
 
     for (const auto id : DXL_ID) {
       if (!dxl_write1(id, ADDR_OPERATING_MODE, CURRENT_CONTROL_MODE, "set mode") ||
-          !dxl_write2(id, ADDR_CURRENT_LIMIT, CURRENT_LIMIT_REGISTER, "set limit") ||
+          !dxl_write2(id, ADDR_CURRENT_LIMIT, current_limit_register_, "set limit") ||
           !dxl_write1(id, ADDR_TORQUE_ENABLE, TORQUE_ENABLE_VAL, "enable torque")) {
         port_handler_->closePort();
         return false;
@@ -423,8 +449,8 @@ private:
       const int16_t rc = toSigned16(static_cast<uint32_t>(
         grp_cur_->getData(id, ADDR_PRESENT_CURRENT,  LEN_PRESENT_CURRENT)));
 
-      q(i)   = ENCODER_SIGN[i] * static_cast<double>(wrappedTickDiff(rp, JOINT_ZERO_TICK[i])) * POS_UNIT_RAD;
-      dq(i)  = ENCODER_SIGN[i] * static_cast<double>(rv) * VEL_UNIT_RAD_S;
+      q(i)   = encoder_sign_(i) * static_cast<double>(wrappedTickDiff(rp, joint_zero_tick_[i])) * POS_UNIT_RAD;
+      dq(i)  = encoder_sign_(i) * static_cast<double>(rv) * VEL_UNIT_RAD_S;
       cur[i] = rc;
     }
     return true;
@@ -458,7 +484,7 @@ private:
   {
     Vec4 kp, kd;
     kp << 1000.0, 1000.0, 1000.0, 1000.0;
-    kd <<  1.0,  1.0,  1.0,  1.0;
+    kd <<    5.0,    5.0,    5.0,    5.0;
     kp *= gain_scale_;
     kd *= std::sqrt(std::max(gain_scale_, 0.0));
 
@@ -479,16 +505,13 @@ private:
 
   std::array<int16_t, NUM_JOINTS> torque_to_current(const Vec4& tau, const Vec4& dq)
   {
-    static const std::array<int16_t, NUM_JOINTS> cur_lim = {
-      CURRENT_CMD_LIMIT_J123, CURRENT_CMD_LIMIT_J123, CURRENT_CMD_LIMIT_J123, CURRENT_CMD_LIMIT_J4
-    };
     std::array<int16_t, NUM_JOINTS> cmd{};
     for (int i = 0; i < NUM_JOINTS; ++i) {
       const double I_model = motor_alpha_(i) * tau(i)
                            + motor_Fv_(i)    * dq(i)
                            + motor_Fc_(i)    * std::tanh(dq(i) / motor_epsilon_)
                            + motor_I_offset_(i);
-      cmd[i] = clampCurrent(CURRENT_SIGN[i] * ENCODER_SIGN[i] * I_model, cur_lim[i]);
+      cmd[i] = clampCurrent(current_sign_(i) * encoder_sign_(i) * I_model, current_cmd_limit_[i]);
     }
     return cmd;
   }
@@ -559,7 +582,7 @@ private:
 
     // 4. Verificar límites de la referencia
     for (int i = 0; i < NUM_JOINTS; ++i) {
-      if (ref.q(i) < JOINT_LOWER[i] + 0.02 || ref.q(i) > JOINT_UPPER[i] - 0.02) {
+      if (ref.q(i) < joint_lower_(i) + 0.02 || ref.q(i) > joint_upper_(i) - 0.02) {
         emergency_stop("Referencia fuera de límites articulares");
         return;
       }
@@ -567,7 +590,7 @@ private:
 
     // 5. Ley de control — usa dq_filtered_ para reducir chattering por ruido de encoder
     const Vec4 tau_unsat = compute_torque(q, dq_filtered_, ref);
-    const Vec4 tau = tau_unsat.cwiseMin(TAU_MAX).cwiseMax(-TAU_MAX);
+    const Vec4 tau = tau_unsat.cwiseMin(tau_max_).cwiseMax(-tau_max_);
     const auto cur_cmd = torque_to_current(tau, dq_filtered_);
 
     // 6. Escribir corriente
@@ -578,7 +601,7 @@ private:
 
     // 7. Verificar corriente medida (seguridad)
     for (int i = 0; i < NUM_JOINTS; ++i) {
-      if (std::abs(cur_meas[i]) > CURRENT_MEASURED_PEAK) {
+      if (std::abs(cur_meas[i]) > current_measured_peak_) {
         emergency_stop("Corriente medida insegura en J" + std::to_string(i + 1)
                        + ": " + std::to_string(cur_meas[i]) + " ticks");
         return;
@@ -637,6 +660,14 @@ private:
   Vec4   motor_alpha_, motor_Fv_, motor_Fc_, motor_I_offset_;
   double motor_epsilon_;
 
+  std::array<int32_t, NUM_JOINTS> joint_zero_tick_;
+  Vec4     encoder_sign_, current_sign_;
+  Vec4     joint_lower_, joint_upper_;
+  uint16_t current_limit_register_;
+  std::array<int16_t, NUM_JOINTS> current_cmd_limit_;
+  int16_t  current_measured_peak_;
+  double   tau_max_;
+
   double vel_cutoff_hz_;
   double vel_filter_alpha_;
   Vec4   dq_filtered_;
@@ -667,8 +698,29 @@ private:
 int main(int argc, char* argv[])
 {
   rclcpp::init(argc, argv);
+
+  rclcpp::NodeOptions opts;
+  const std::string cfg = std::string(PACKAGE_CONFIG_DIR) + "/motor_params.yaml";
+
+  if (std::filesystem::exists(cfg)) {
+    std::vector<std::string> args = {"--ros-args", "--params-file", cfg};
+    bool in_ros_args = false;
+    for (int i = 1; i < argc; ++i) {
+      const std::string a(argv[i]);
+      if (a == "--ros-args") { in_ros_args = true; continue; }
+      if (in_ros_args) args.push_back(a);
+    }
+    opts.arguments(args);
+    opts.use_global_arguments(false);
+    RCLCPP_INFO(rclcpp::get_logger("hw_fl_control_node"),
+      "motor_params auto-cargado: %s", cfg.c_str());
+  } else {
+    RCLCPP_WARN(rclcpp::get_logger("hw_fl_control_node"),
+      "motor_params no encontrado: %s — usando defaults del código.", cfg.c_str());
+  }
+
   try {
-    rclcpp::spin(std::make_shared<HWFLControlNode>());
+    rclcpp::spin(std::make_shared<HWFLControlNode>(opts));
   } catch (const std::exception& e) {
     RCLCPP_FATAL(rclcpp::get_logger("hw_fl_control_node"), "Excepcion: %s", e.what());
     rclcpp::shutdown();

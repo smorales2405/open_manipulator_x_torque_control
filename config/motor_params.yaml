@@ -1,0 +1,41 @@
+/**:
+  ros__parameters:
+
+    # ── Parámetros de conversión torque→corriente (OpenMANIPULATOR-X) ────────
+    # Identificados con OLS a partir de hw_fl_data_17.csv (Lab 4, Acto 1)
+    # Modelo: I_cmd[i] = α[i]·τ[i] + Fv[i]·dq[i] + Fc[i]·tanh(dq[i]/ε) + I_offset[i]
+    #
+    # Unidades:
+    #   motor_alpha          [ticks/N·m]     — ganancia proporcional al torque
+    #   motor_Fv             [ticks/(rad/s)] — fricción viscosa
+    #   motor_Fc             [ticks]         — fricción de Coulomb
+    #   motor_I_offset       [ticks]         — offset de corriente (absorbe error de modelo)
+    #   motor_epsilon_friction [rad/s]       — suavizado del tanh (zona muerta continua)
+    #
+    # Método: OLS completo para J2 y J3 (R²>0.91); α fijo=media(J2,J3) para J1 y J4
+    # kt_efectivo = 1/(α·Iu) = 1.654 N·m/A  (vs 1.783 N·m/A de datasheet)
+
+    motor_alpha:             [224.80, 225.70, 223.89, 224.80]    # J1 J2 J3 J4
+    motor_Fv:                [5.170,  4.351,  5.151,  3.563]
+    motor_Fc:                [3.777,  1.993,  2.115,  8.474]
+    motor_I_offset:          [-0.422, -17.206, -21.957, -9.602]
+    motor_epsilon_friction:   0.05
+
+    # ── Configuración de hardware (señales, encoder, límites) ────────────────
+    # joint_zero_tick  : posición cero del encoder [ticks] por joint
+    # encoder_sign     : dirección positiva del encoder (+1 o -1)
+    # current_sign     : polaridad de la corriente respecto al encoder (+1 o -1)
+    # joint_lower/upper: límites articulares [rad]  (≡ -3π/4, -11π/18, -11π/18, -1.8 / +3π/4, +5π/9, +π/2, +2.1)
+    # current_limit_register : valor escrito en el registro Current Limit de Dynamixel (addr 38)
+    # current_cmd_limit      : corriente comandada máxima por joint [ticks]
+    # current_measured_peak  : umbral de parada de emergencia [ticks]
+    # tau_max                : saturación de torque [N·m]
+    joint_zero_tick:          [2048, 2048, 2048, 2048]
+    encoder_sign:             [1.0,  1.0,  1.0,  1.0]
+    current_sign:             [1.0,  1.0,  1.0,  1.0]
+    joint_lower:              [-2.356194, -1.919862, -1.919862, -1.8]
+    joint_upper:              [ 2.356194,  1.745329,  1.570796,  2.1]
+    current_limit_register:   350
+    current_cmd_limit:        [257, 257, 257, 257]
+    current_measured_peak:    313
+    tau_max:                  1.2
