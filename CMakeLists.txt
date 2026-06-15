@@ -21,6 +21,7 @@ set(FL_STUD    "src/Feedback Linearization/student")
 set(TO_INSTR   "src/Trajectory Optimization TV-LQR/instructor")
 set(GC_SRC     "src/Gravity Compensation")
 set(IDENT_SRC  "src/Identification")
+set(SMC_INSTR  "src/Sliding Mode/instructor")
 
 # ── gz_fl_control_node ───────────────────────────────────────────────────────
 add_executable(gz_fl_control_node "${FL_INSTR}/gz_fl_control_node.cpp")
@@ -215,6 +216,45 @@ target_compile_definitions(hw_sinusoidal_torque_node PRIVATE
   "PACKAGE_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\""
   "PACKAGE_CONFIG_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/config\"")
 
+# ── gz_smc_art_node ──────────────────────────────────────────────────────────
+add_executable(gz_smc_art_node "${SMC_INSTR}/gz_SMC_art_node.cpp")
+ament_target_dependencies(gz_smc_art_node rclcpp std_msgs sensor_msgs)
+target_link_libraries(gz_smc_art_node
+  pinocchio::pinocchio_default
+  pinocchio::pinocchio_parsers
+  Eigen3::Eigen)
+target_compile_features(gz_smc_art_node PUBLIC cxx_std_17)
+target_compile_definitions(gz_smc_art_node PRIVATE
+  "PACKAGE_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\""
+  "PACKAGE_URDF_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/urdf\""
+  COAL_DISABLE_HPP_FCL_WARNINGS)
+
+# ── gz_smc_cart_node ─────────────────────────────────────────────────────────
+add_executable(gz_smc_cart_node "${SMC_INSTR}/gz_SMC_cart_node.cpp")
+ament_target_dependencies(gz_smc_cart_node rclcpp std_msgs sensor_msgs)
+target_link_libraries(gz_smc_cart_node
+  pinocchio::pinocchio_default
+  pinocchio::pinocchio_parsers
+  Eigen3::Eigen)
+target_compile_features(gz_smc_cart_node PUBLIC cxx_std_17)
+target_compile_definitions(gz_smc_cart_node PRIVATE
+  "PACKAGE_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\""
+  "PACKAGE_URDF_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/urdf\""
+  COAL_DISABLE_HPP_FCL_WARNINGS)
+
+# ── gz_SMCI_cart_node ────────────────────────────────────────────────────────
+add_executable(gz_SMCI_cart_node "${SMC_INSTR}/gz_SMCI_cart_node.cpp")
+ament_target_dependencies(gz_SMCI_cart_node rclcpp std_msgs sensor_msgs)
+target_link_libraries(gz_SMCI_cart_node
+  pinocchio::pinocchio_default
+  pinocchio::pinocchio_parsers
+  Eigen3::Eigen)
+target_compile_features(gz_SMCI_cart_node PUBLIC cxx_std_17)
+target_compile_definitions(gz_SMCI_cart_node PRIVATE
+  "PACKAGE_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\""
+  "PACKAGE_URDF_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/urdf\""
+  COAL_DISABLE_HPP_FCL_WARNINGS)
+
 # ── hw_torque_probe_node (diagnostico de polaridad torque->corriente) ────────
 add_executable(hw_torque_probe_node "src/Diagnostics/hw_torque_probe_node.cpp")
 ament_target_dependencies(hw_torque_probe_node rclcpp)
@@ -255,6 +295,7 @@ install(TARGETS
     hw_sinusoidal_torque_node
     hw_torque_probe_node
     hw_identify_node
+    gz_smc_art_node gz_smc_cart_node gz_SMCI_cart_node
   DESTINATION lib/${PROJECT_NAME})
 
 install(DIRECTORY xacro config launch scripts data urdf meshes worlds
