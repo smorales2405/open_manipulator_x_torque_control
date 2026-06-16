@@ -44,9 +44,10 @@
 //    Fase transicion quintica [0, T_TRANS):  y0 → Y_START
 //    Fase seguimiento [T_TRANS, inf):        t' = t − T_TRANS
 //      y_d    = [0.20+0.03 sin(w t'), 0.03 cos(w t'),
-//                0.18+0.015 sin(2w t'), 0.40+0.02 sin(2w t')]
-//      ydot_d = [0.03w cos,  −0.03w sin,  0.03w cos(2wt'),  0.04w cos(2wt')]
-//      yddot_d= [−0.03w² sin, −0.03w² cos, −0.06w² sin(2wt'), −0.08w² sin(2wt')]
+//                0.18+0.015 sin(2w t'), -0.77-0.02 sin(2w t')]
+//      ydot_d = [0.03w cos,  −0.03w sin,  0.03w cos(2wt'), -0.04w cos(2wt')]
+//      yddot_d= [−0.03w² sin, −0.03w² cos, −0.06w² sin(2wt'), +0.08w² sin(2wt')]
+//      phi=-0.77: solucion DLS minima norma desde q_init=[0,0.81,0.76,-1.66] a [x=0.20,z=0.18]
 //      w = 0.5 rad/s
 //
 //  ── CSV ───────────────────────────────────────────────────────────────────
@@ -55,8 +56,9 @@
 //              xdot,ydot,zdot,phidot, xdot_des,ydot_des,zdot_des,phidot_des,
 //              s1,s2,s3,s4, tau1..tau4, sat1..sat4, cond_J, xi1..xi4
 //
-//  Nota: usar sim_init_config.yaml con use_fixed_init: true
-//        y q_init: [0.0, -0.55, 0.21, 0.92]
+//  Nota: usar sim_init_config.yaml con use_fixed_init: false.
+//        El brazo cae al equilibrio elbow-down con phi≈-0.08 rad en [x=0.20, z=0.18].
+//        La trayectoria phi_d esta disenada para este equilibrio.
 //
 //  Ejemplos de uso:
 //
@@ -113,13 +115,13 @@ static constexpr double LAMBDA_DLS    = 0.01;
 static constexpr double LAMBDA_DLS_SQ = LAMBDA_DLS * LAMBDA_DLS;
 
 // Duracion de la transicion quintica
-static constexpr double T_TRANS = 4.0;    // [s]
+static constexpr double T_TRANS = 10.0;   // [s]
 
 // Frame del efector final (definido en el URDF)
 static constexpr char EFF_FRAME[] = "end_effector_link";
 
 // Punto final de la transicion (inicio de la trayectoria cartesiana)
-static const Eigen::Vector4d Y_START {0.20, 0.03, 0.18, 0.60};
+static const Eigen::Vector4d Y_START {0.20, 0.03, 0.18, -0.77};
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  GANANCIAS ISMC CARTESIANO  [x, y, z, phi]
@@ -156,19 +158,19 @@ static CartRef desiredTrajectory(double t)
       0.20 + 0.03  * std::sin(w * t),
       0.03         * std::cos(w * t),
       0.18 + 0.015 * std::sin(2.0 * w * t),
-      0.40 + 0.02  * std::sin(2.0 * w * t);
+      -0.77 - 0.02 * std::sin(2.0 * w * t);
 
   ref.ydot <<
        0.03  * w * std::cos(w * t),
       -0.03  * w * std::sin(w * t),
        0.03  * w * std::cos(2.0 * w * t),
-       0.04  * w * std::cos(2.0 * w * t);
+      -0.04  * w * std::cos(2.0 * w * t);
 
   ref.yddot <<
       -0.03  * w * w * std::sin(w * t),
       -0.03  * w * w * std::cos(w * t),
       -0.06  * w * w * std::sin(2.0 * w * t),
-      -0.08  * w * w * std::sin(2.0 * w * t);
+      +0.08  * w * w * std::sin(2.0 * w * t);
 
   return ref;
 }

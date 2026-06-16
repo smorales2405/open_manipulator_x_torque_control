@@ -17,16 +17,20 @@
 //    e_y    = y - y_d,    edot_y = ydot - ydot_d
 //    s_y    = edot_y + Lambda_y * e_y
 //
-//  Ley de control SMC cartesiana:
-//    v_y       = yddot_d - Lambda_y * edot_y - K_y * rho(s_y)
+//  Ley de control SMC cartesiana (ley de alcance exponencial + conmutacion):
+//    v_y       = yddot_d - Lambda_y * edot_y - K_s * s_y - K_y * rho(s_y)
 //    qddot_cmd = J_y^# * (v_y - Jydot * qdot)
 //    tau       = M_hat(q) * qddot_cmd + Phi_hat(q,qdot) + tau_fric_hat(qdot)
 //    tau_sat   = clamp(tau, -TAU_MAX, TAU_MAX)
 //
 //  Trayectoria cartesiana de referencia (omega = 0.5 rad/s, Guia Lab 6 Sec. 6.2):
-//    y_d    = [0.20 + 0.03*sin(w*t'), 0.03*cos(w*t'), 0.18 + 0.015*sin(2*w*t'), 0.60]
-//    ydot_d = [0.03*w*cos(w*t'), -0.03*w*sin(w*t'), 0.03*w*cos(2*w*t'), 0]
-//    yddot_d= [-0.03*w^2*sin(w*t'), -0.03*w^2*cos(w*t'), -0.06*w^2*sin(2*w*t'), 0]
+//    y_d    = [0.20 + 0.03*sin(w*t'), 0.03*cos(w*t'), 0.18 + 0.015*sin(2*w*t'), -0.77 - 0.02*sin(2*w*t')]
+//    ydot_d = [0.03*w*cos(w*t'), -0.03*w*sin(w*t'), 0.03*w*cos(2*w*t'), -0.04*w*cos(2*w*t')]
+//    yddot_d= [-0.03*w^2*sin(w*t'), -0.03*w^2*cos(w*t'), -0.06*w^2*sin(2*w*t'), +0.08*w^2*sin(2*w*t')]
+//
+//  Nota phi: -0.77 es la solucion DLS de minima norma desde q_init=[0,0.81,0.76,-1.66].
+//  La DLS lleva phi naturalmente de -0.08 a -0.77 al subir z de 0.034 a 0.18 (|Dq|=0.87 rad,
+//  vs |Dq|=2.04 rad para phi=-0.08). La fase es OPUESTA a z: dz/dphi ≈ -0.10 m/rad.
 //
 //  Fases de referencia:
 //    [0, T_TRANS)   — transicion quintica desde pose inicial hasta Y_START
@@ -52,8 +56,9 @@
 //            xdot,ydot,zdot,phidot, xdot_des,ydot_des,zdot_des,phidot_des,
 //            s1,s2,s3,s4, tau1..tau4, sat1..sat4, cond_J
 //
-//  Nota: usar sim_init_config.yaml con use_fixed_init: true
-//        y q_init: [0.0, -0.5, 0.3, 0.785] (phi_init≈0.585, cercano a Y_START).
+//  Nota: usar sim_init_config.yaml con use_fixed_init: false.
+//        El brazo cae al equilibrio elbow-down con phi≈-0.08 rad en [x=0.20, z=0.18].
+//        La trayectoria phi_d esta disenada para este equilibrio.
 //
 //  Ejemplos de uso:
 //
@@ -110,20 +115,21 @@ static constexpr double LAMBDA_DLS_SQ = LAMBDA_DLS * LAMBDA_DLS;
 
 // Duracion de la transicion quintica: debe ser suficiente para cubrir la
 // distancia desde la pose inicial hasta Y_START (tipicamente 4-5 s)
-static constexpr double T_TRANS = 4.0;    // [s]
+static constexpr double T_TRANS = 10.0;   // [s]
 
 // Frame del efector final
 static constexpr char EFF_FRAME[] = "end_effector_link";
 
 // Punto de inicio de la trayectoria: y_d(t'=0)
-// Verificar con FK(q_init) del sim_init_config.yaml que coincida con este valor
-static const Eigen::Vector4d Y_START {0.20, 0.03, 0.18, 0.60};
+// phi=-0.77: solucion DLS minima norma desde q_init=[0,0.81,0.76,-1.66] a [x=0.20,z=0.18]
+static const Eigen::Vector4d Y_START {0.20, 0.03, 0.18, -0.77};
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  GANANCIAS SMC CARTESIANO  [x, y, z, phi]
 // ═══════════════════════════════════════════════════════════════════════════
-static const Eigen::Vector4d LAMBDA_Y = {5.0,  5.0,  5.0,  50.0};   // superficie [1/s]
-static const Eigen::Vector4d K_Y      = {20.0, 20.0, 20.0, 100.0};  // ganancia de conmutacion
+static const Eigen::Vector4d LAMBDA_Y = {5.0,  5.0,  5.0,  10.0};   // superficie [1/s]
+static const Eigen::Vector4d K_S      = {5.0,  5.0,  5.0,  10.0};   // proporcional a superficie (alcance exponencial)
+static const Eigen::Vector4d K_Y      = {20.0, 20.0, 20.0, 30.0};   // ganancia de conmutacion
 // ═══════════════════════════════════════════════════════════════════════════
 
 // ── Referencia cartesiana ────────────────────────────────────────────────────
@@ -143,19 +149,19 @@ static CartRef desiredTrajectory(double t)
       0.20 + 0.03 * std::sin(w * t),
       0.03 * std::cos(w * t),
       0.18 + 0.015 * std::sin(2.0 * w * t),
-      0.40 + 0.02 * std::sin(2.0 * w * t),
+      -0.77 - 0.02 * std::sin(2.0 * w * t),
 
   ref.ydot <<
        0.03 * w * std::cos(w * t),
       -0.03 * w * std::sin(w * t),
        0.03 * w * std::cos(2.0 * w * t),
-       0.04 * w * std::cos(2.0 * w * t);
+      -0.04 * w * std::cos(2.0 * w * t);
 
   ref.yddot <<
       -0.03 * w * w * std::sin(w * t),
       -0.03 * w * w * std::cos(w * t),
       -0.06 * w * w * std::sin(2.0 * w * t),
-      -0.08 * w * w * std::sin(2.0 * w * t);
+      +0.08 * w * w * std::sin(2.0 * w * t);
 
   return ref;
 }
@@ -267,8 +273,9 @@ public:
       "SMC cartesiano — rho=%s  phi=%.4f  alpha=%.1f  tau_max=%.2f N·m",
       rho_str_.c_str(), phi_, alpha_, TAU_MAX);
     RCLCPP_INFO(this->get_logger(),
-      "Lambda_y=[%.1f %.1f %.1f %.1f]  K_y=[%.1f %.1f %.1f %.1f]",
+      "Lambda_y=[%.1f %.1f %.1f %.1f]  K_s=[%.1f %.1f %.1f %.1f]  K_y=[%.1f %.1f %.1f %.1f]",
       LAMBDA_Y[0], LAMBDA_Y[1], LAMBDA_Y[2], LAMBDA_Y[3],
+      K_S[0],      K_S[1],      K_S[2],      K_S[3],
       K_Y[0],      K_Y[1],      K_Y[2],      K_Y[3]);
     RCLCPP_INFO(this->get_logger(),
       "lambda_DLS=%.3f  B_fric=%.4f N·m·s/rad  T_trans=%.1f s",
@@ -430,9 +437,11 @@ private:
     // 8. Funcion de conmutacion rho(s_y)
     const Eigen::Vector4d rho = rho_vec(s_y, rho_func_, phi_, alpha_);
 
-    // 9. Aceleracion cartesiana virtual: v_y = yddot_d - Lambda_y*edot_y - K_y*rho(s_y)
+    // 9. Aceleracion cartesiana virtual: v_y = yddot_d - Lambda_y*edot_y - K_s*s_y - K_y*rho(s_y)
+    //    Ley de alcance exponencial: sdot = -K_s*s - K_y*rho(s) → convergencia mas rapida a la variedad
     const Eigen::Vector4d v_y = ref.yddot
                                - LAMBDA_Y.asDiagonal() * edot_y
+                               - K_S.asDiagonal() * s_y
                                - K_Y.asDiagonal() * rho;
 
     // 10. Aceleracion articular comandada via pseudo-inversa DLS:

@@ -23,7 +23,7 @@ mode        = 'sim';    % 'sim'  = simulacion Gazebo (gz_smc_cart_node)
 
 rho_func    = 'sat';   % Funcion de conmutacion: 'sign' | 'sat' | 'tanh'
 
-test_num    = 6;        % Identificador del ensayo (test_num usado al lanzar el nodo)
+test_num    = 8;        % Identificador del ensayo (test_num usado al lanzar el nodo)
 
 EXPORT_FIGS = false;    % true  = guardar PNG (300 dpi) y EPS vectorial (600 dpi)
                         % false = solo visualizar
