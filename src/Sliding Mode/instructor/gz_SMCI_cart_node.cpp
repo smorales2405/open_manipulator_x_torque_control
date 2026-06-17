@@ -68,8 +68,6 @@
 //    ros2 run open_manipulator_x_torque_control gz_SMCI_cart_node
 //      --ros-args -p rho_func:=sat -p phi:=0.02 -p test_num:=2 -p t_sim:=35.0
 //
-//    ros2 run open_manipulator_x_torque_control gz_SMCI_cart_node
-//      --ros-args -p rho_func:=tanh -p alpha:=100.0 -p test_num:=3 -p t_sim:=35.0
 // ============================================================================
 
 #include <chrono>
@@ -200,28 +198,26 @@ static CartRef transitionTrajectory(double t,
 }
 
 // ── Funciones de conmutacion ─────────────────────────────────────────────────
-enum class RhoFunc { SIGN, SAT, TANH };
+enum class RhoFunc { SIGN, SAT };
 
-static double rho_scalar(double s, RhoFunc func, double phi, double alpha)
+static double rho_scalar(double s, RhoFunc func, double phi)
 {
   switch (func) {
     case RhoFunc::SIGN:
       return (s > 0.0) ? 1.0 : (s < 0.0 ? -1.0 : 0.0);
     case RhoFunc::SAT:
       return std::max(-1.0, std::min(1.0, s / phi));
-    case RhoFunc::TANH:
-      return std::tanh(alpha * s);
     default:
       return 0.0;
   }
 }
 
 static Eigen::Vector4d rho_vec(const Eigen::Vector4d & s,
-                                RhoFunc func, double phi, double alpha)
+                                RhoFunc func, double phi)
 {
   Eigen::Vector4d r;
   for (int i = 0; i < NARM; ++i) {
-    r[i] = rho_scalar(s[i], func, phi, alpha);
+    r[i] = rho_scalar(s[i], func, phi);
   }
   return r;
 }
@@ -241,18 +237,14 @@ public:
     this->declare_parameter<double>     ("t_sim",    0.0);
     this->declare_parameter<std::string>("rho_func", "sign");
     this->declare_parameter<double>     ("phi",      0.02);
-    this->declare_parameter<double>     ("alpha",    100.0);
 
     const int         test_num = this->get_parameter("test_num").as_int();
     t_sim_                     = this->get_parameter("t_sim").as_double();
     phi_                       = this->get_parameter("phi").as_double();
-    alpha_                     = this->get_parameter("alpha").as_double();
     const std::string rho_str  = this->get_parameter("rho_func").as_string();
 
     if (rho_str == "sat") {
       rho_func_ = RhoFunc::SAT;  rho_str_ = "sat";
-    } else if (rho_str == "tanh") {
-      rho_func_ = RhoFunc::TANH; rho_str_ = "tanh";
     } else {
       rho_func_ = RhoFunc::SIGN; rho_str_ = "sign";
       if (rho_str != "sign") {
@@ -278,8 +270,8 @@ public:
     frame_id_ = model_.getFrameId(EFF_FRAME);
 
     RCLCPP_INFO(this->get_logger(),
-      "SMCI cart — rho=%s  phi=%.4f  alpha=%.1f  tau_max=%.2f N·m",
-      rho_str_.c_str(), phi_, alpha_, TAU_MAX);
+      "SMCI cart — rho=%s  phi=%.4f  tau_max=%.2f N·m",
+      rho_str_.c_str(), phi_, TAU_MAX);
     RCLCPP_INFO(this->get_logger(),
       "Lambda=[%.1f %.1f %.1f %.1f]  K_P=[%.1f %.1f %.1f %.1f]  "
       "K_D=[%.1f %.1f %.1f %.1f]  K_sw=[%.1f %.1f %.1f %.1f]",
@@ -446,7 +438,7 @@ private:
     const Eigen::Vector4d sdot_y = edot_y + LAMBDA_I.asDiagonal() * e_y;
 
     // 10. Funcion de conmutacion rho(s)
-    const Eigen::Vector4d rho = rho_vec(s_y, rho_func_, phi_, alpha_);
+    const Eigen::Vector4d rho = rho_vec(s_y, rho_func_, phi_);
 
     // 11. Aceleracion cartesiana virtual (IOL de s con grado relativo 2):
     //
@@ -535,7 +527,6 @@ private:
   RhoFunc     rho_func_;
   std::string rho_str_;
   double      phi_;
-  double      alpha_;
 
   Eigen::Vector4d y0_;
   bool            y0_initialized_;

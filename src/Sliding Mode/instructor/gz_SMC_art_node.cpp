@@ -19,7 +19,6 @@
 //  Funciones de conmutacion (aplicadas elemento a elemento):
 //    "sign"  ->  rho(s) = sign(s)
 //    "sat"   ->  rho(s) = sat(s / phi)        phi: capa limite [rad/s]
-//    "tanh"  ->  rho(s) = tanh(alpha * s)
 //
 //  Trayectoria articular de referencia (omega = 1.0 rad/s):
 //    q_d   = [ (pi/4)*sin(w*t),  -0.5+0.5*sin(w*t),  0.3-0.5*sin(w*t),  pi/4 ]
@@ -32,9 +31,8 @@
 //  Parametros ROS 2 (--ros-args -p nombre:=valor):
 //    test_num  [int]     1       — identificador del CSV generado
 //    t_sim     [double]  0.0     — duracion en segundos (0 = ilimitado)
-//    rho_func  [string]  "sign"  — funcion de conmutacion: "sign" | "sat" | "tanh"
+//    rho_func  [string]  "sign"  — funcion de conmutacion: "sign" | "sat"
 //    phi       [double]  0.05    — capa limite para sat(s/phi)  [rad/s]
-//    alpha     [double]  50.0    — pendiente para tanh(alpha*s)
 //
 //  CSV generado: data/lab6/sim/act1/gz_smc_art_<rho_func>_<test_num>.csv
 //  Columnas: t, q1..q4, dq1..dq4, q1_des..q4_des, dq1_des..dq4_des,
@@ -53,9 +51,6 @@
 //    ros2 run open_manipulator_x_torque_control gz_smc_art_node
 //      --ros-args -p rho_func:=sat -p phi:=0.05 -p test_num:=2 -p t_sim:=30.0
 //
-//    # Tangente hiperbolica con alpha = 50:
-//    ros2 run open_manipulator_x_torque_control gz_smc_art_node
-//      --ros-args -p rho_func:=tanh -p alpha:=50.0 -p test_num:=3 -p t_sim:=30.0
 // ============================================================================
 
 #include <chrono>
@@ -133,28 +128,26 @@ static Reference desiredTrajectory(double t)
 }
 
 // ── Funciones de conmutacion ─────────────────────────────────────────────────
-enum class RhoFunc { SIGN, SAT, TANH };
+enum class RhoFunc { SIGN, SAT };
 
-static double rho_scalar(double s, RhoFunc func, double phi, double alpha)
+static double rho_scalar(double s, RhoFunc func, double phi)
 {
   switch (func) {
     case RhoFunc::SIGN:
       return (s > 0.0) ? 1.0 : (s < 0.0 ? -1.0 : 0.0);
     case RhoFunc::SAT:
       return std::max(-1.0, std::min(1.0, s / phi));
-    case RhoFunc::TANH:
-      return std::tanh(alpha * s);
     default:
       return 0.0;
   }
 }
 
 static Eigen::Vector4d rho_vec(const Eigen::Vector4d & s,
-                                RhoFunc func, double phi, double alpha)
+                                RhoFunc func, double phi)
 {
   Eigen::Vector4d r;
   for (int i = 0; i < NARM; ++i) {
-    r[i] = rho_scalar(s[i], func, phi, alpha);
+    r[i] = rho_scalar(s[i], func, phi);
   }
   return r;
 }
@@ -171,20 +164,15 @@ public:
     this->declare_parameter<double>     ("t_sim",    0.0);
     this->declare_parameter<std::string>("rho_func", "sign");
     this->declare_parameter<double>     ("phi",      0.05);
-    this->declare_parameter<double>     ("alpha",    50.0);
 
     const int         test_num = this->get_parameter("test_num").as_int();
     t_sim_                     = this->get_parameter("t_sim").as_double();
     phi_                       = this->get_parameter("phi").as_double();
-    alpha_                     = this->get_parameter("alpha").as_double();
     const std::string rho_str  = this->get_parameter("rho_func").as_string();
 
     if (rho_str == "sat") {
       rho_func_ = RhoFunc::SAT;
       rho_str_  = "sat";
-    } else if (rho_str == "tanh") {
-      rho_func_ = RhoFunc::TANH;
-      rho_str_  = "tanh";
     } else {
       rho_func_ = RhoFunc::SIGN;
       rho_str_  = "sign";
@@ -206,8 +194,8 @@ public:
     data_ = pinocchio::Data(model_);
 
     RCLCPP_INFO(this->get_logger(),
-      "SMC articular — rho=%s  phi=%.3f  alpha=%.1f  tau_max=%.2f N·m",
-      rho_str_.c_str(), phi_, alpha_, TAU_MAX);
+      "SMC articular — rho=%s  phi=%.3f  tau_max=%.2f N·m",
+      rho_str_.c_str(), phi_, TAU_MAX);
     RCLCPP_INFO(this->get_logger(),
       "Lambda=[%.1f %.1f %.1f %.1f]  Kv=[%.1f %.1f %.1f %.1f]  Ks=[%.1f %.1f %.1f %.1f]",
       LAMBDA_Q[0], LAMBDA_Q[1], LAMBDA_Q[2], LAMBDA_Q[3],
@@ -321,7 +309,7 @@ private:
 
     const Eigen::Vector4d s_q = e_dq + LAMBDA_Q.asDiagonal() * e_q;
 
-    const Eigen::Vector4d rho  = rho_vec(s_q, rho_func_, phi_, alpha_);
+    const Eigen::Vector4d rho  = rho_vec(s_q, rho_func_, phi_);
     const Eigen::Vector4d v_q  = ref.ddq
                                 - LAMBDA_Q.asDiagonal() * e_dq
                                 - K_V.asDiagonal() * s_q
@@ -382,7 +370,6 @@ private:
   RhoFunc     rho_func_;
   std::string rho_str_;
   double      phi_;
-  double      alpha_;
 
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr torque_pub_;
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr  joint_sub_;

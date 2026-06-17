@@ -33,7 +33,6 @@
 //  Funciones de conmutacion (aplicadas elemento a elemento):
 //    "sign"  ->  rho(s) = sign(s)
 //    "sat"   ->  rho(s) = sat(s / phi)     phi: capa limite
-//    "tanh"  ->  rho(s) = tanh(alpha * s)
 //
 //  Suscriptor : /joint_states                    (sensor_msgs/JointState)
 //  Publicador : /arm_effort_controller/commands   (std_msgs/Float64MultiArray)
@@ -41,9 +40,8 @@
 //  Parametros ROS 2:
 //    test_num  [int]     1        — identificador del CSV
 //    t_sim     [double]  0.0      — duracion en segundos (0 = ilimitado)
-//    rho_func  [string]  "sign"   — funcion de conmutacion: "sign"|"sat"|"tanh"
+//    rho_func  [string]  "sign"   — funcion de conmutacion: "sign" | "sat"
 //    phi       [double]  0.02     — capa limite [m o rad]
-//    alpha     [double]  100.0    — pendiente para tanh(alpha*s)
 //
 //  CSV: data/lab6/sim/act2/gz_smc_cart_<rho_func>_<test_num>.csv
 //  Columnas: t, q1..q4, x,y,z,phi, x_des,y_des,z_des,phi_des,
@@ -61,8 +59,6 @@
 //    ros2 run open_manipulator_x_torque_control gz_smc_cart_node
 //      --ros-args -p rho_func:=sat -p phi:=0.25 -p test_num:=2 -p t_sim:=30.0
 //
-//    ros2 run open_manipulator_x_torque_control gz_smc_cart_node
-//      --ros-args -p rho_func:=tanh -p alpha:=100.0 -p test_num:=3 -p t_sim:=30.0
 // ============================================================================
 
 #include <chrono>
@@ -192,28 +188,26 @@ static CartRef transitionTrajectory(double t,
 }
 
 // ── Funciones de conmutacion ─────────────────────────────────────────────────
-enum class RhoFunc { SIGN, SAT, TANH };
+enum class RhoFunc { SIGN, SAT };
 
-static double rho_scalar(double s, RhoFunc func, double phi, double alpha)
+static double rho_scalar(double s, RhoFunc func, double phi)
 {
   switch (func) {
     case RhoFunc::SIGN:
       return (s > 0.0) ? 1.0 : (s < 0.0 ? -1.0 : 0.0);
     case RhoFunc::SAT:
       return std::max(-1.0, std::min(1.0, s / phi));
-    case RhoFunc::TANH:
-      return std::tanh(alpha * s);
     default:
       return 0.0;
   }
 }
 
 static Eigen::Vector4d rho_vec(const Eigen::Vector4d & s,
-                                RhoFunc func, double phi, double alpha)
+                                RhoFunc func, double phi)
 {
   Eigen::Vector4d r;
   for (int i = 0; i < NARM; ++i) {
-    r[i] = rho_scalar(s[i], func, phi, alpha);
+    r[i] = rho_scalar(s[i], func, phi);
   }
   return r;
 }
@@ -230,20 +224,15 @@ public:
     this->declare_parameter<double>     ("t_sim",    0.0);
     this->declare_parameter<std::string>("rho_func", "sign");
     this->declare_parameter<double>     ("phi",      0.02);
-    this->declare_parameter<double>     ("alpha",    100.0);
 
     const int         test_num = this->get_parameter("test_num").as_int();
     t_sim_                     = this->get_parameter("t_sim").as_double();
     phi_                       = this->get_parameter("phi").as_double();
-    alpha_                     = this->get_parameter("alpha").as_double();
     const std::string rho_str  = this->get_parameter("rho_func").as_string();
 
     if (rho_str == "sat") {
       rho_func_ = RhoFunc::SAT;
       rho_str_  = "sat";
-    } else if (rho_str == "tanh") {
-      rho_func_ = RhoFunc::TANH;
-      rho_str_  = "tanh";
     } else {
       rho_func_ = RhoFunc::SIGN;
       rho_str_  = "sign";
@@ -270,8 +259,8 @@ public:
     frame_id_ = model_.getFrameId(EFF_FRAME);
 
     RCLCPP_INFO(this->get_logger(),
-      "SMC cartesiano — rho=%s  phi=%.4f  alpha=%.1f  tau_max=%.2f N·m",
-      rho_str_.c_str(), phi_, alpha_, TAU_MAX);
+      "SMC cartesiano — rho=%s  phi=%.4f  tau_max=%.2f N·m",
+      rho_str_.c_str(), phi_, TAU_MAX);
     RCLCPP_INFO(this->get_logger(),
       "Lambda_y=[%.1f %.1f %.1f %.1f]  K_s=[%.1f %.1f %.1f %.1f]  K_y=[%.1f %.1f %.1f %.1f]",
       LAMBDA_Y[0], LAMBDA_Y[1], LAMBDA_Y[2], LAMBDA_Y[3],
@@ -435,7 +424,7 @@ private:
     const Eigen::Vector4d s_y    = edot_y + LAMBDA_Y.asDiagonal() * e_y;
 
     // 8. Funcion de conmutacion rho(s_y)
-    const Eigen::Vector4d rho = rho_vec(s_y, rho_func_, phi_, alpha_);
+    const Eigen::Vector4d rho = rho_vec(s_y, rho_func_, phi_);
 
     // 9. Aceleracion cartesiana virtual: v_y = yddot_d - Lambda_y*edot_y - K_s*s_y - K_y*rho(s_y)
     //    Ley de alcance exponencial: sdot = -K_s*s - K_y*rho(s) → convergencia mas rapida a la variedad
@@ -516,7 +505,6 @@ private:
   RhoFunc     rho_func_;
   std::string rho_str_;
   double      phi_;
-  double      alpha_;
 
   Eigen::Vector4d y0_;
   bool            y0_initialized_;
