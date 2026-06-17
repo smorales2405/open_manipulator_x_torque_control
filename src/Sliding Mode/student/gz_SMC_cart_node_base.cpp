@@ -37,11 +37,9 @@
 //
 //  Ejemplos de uso:
 //
-//    ros2 run open_manipulator_x_torque_control gz_smc_cart_node
-//      --ros-args -p rho_func:=sign -p test_num:=1 -p t_sim:=30.0
+//    ros2 run open_manipulator_x_torque_control gz_smc_cart_node --ros-args -p rho_func:=sign -p test_num:=1 -p t_sim:=20.0
 //
-//    ros2 run open_manipulator_x_torque_control gz_smc_cart_node
-//      --ros-args -p rho_func:=sat -p phi:=0.25 -p test_num:=2 -p t_sim:=30.0
+//    ros2 run open_manipulator_x_torque_control gz_smc_cart_node --ros-args -p rho_func:=sat -p phi:=0.25 -p test_num:=2 -p t_sim:=20.0
 //
 //  ──────────────────────────────────────────────────────────────────────────
 //  SECCIONES A COMPLETAR:
@@ -106,7 +104,6 @@ static constexpr double T_TRANS = 3.0;   // [s]
 //  de referencia, obtenida de la cinematica directa FK evaluada en q_d(0):
 //    Y_START = FK(q_d(0))
 //
-//  Usar la funcion de cinematica directa del OpenManipulator-X (Guia Lab 6).
 //  Formato: {x [m], y [m], z [m], phi [rad]}
 // ─────────────────────────────────────────────────────────────────────────────
 static const Eigen::Vector4d Y_START {0.0, 0.0, 0.0, 0.0};  // COMPLETAR

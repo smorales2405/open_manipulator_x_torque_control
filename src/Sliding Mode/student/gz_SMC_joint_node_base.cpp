@@ -30,11 +30,9 @@
 //
 //  Ejemplos de uso:
 //
-//    ros2 run open_manipulator_x_torque_control gz_smc_joint_node
-//      --ros-args -p rho_func:=sign -p test_num:=1 -p t_sim:=30.0
+//    ros2 run open_manipulator_x_torque_control gz_smc_joint_node --ros-args -p rho_func:=sign -p test_num:=1 -p t_sim:=20.0
 //
-//    ros2 run open_manipulator_x_torque_control gz_smc_joint_node
-//      --ros-args -p rho_func:=sat -p phi:=0.05 -p test_num:=2 -p t_sim:=30.0
+//    ros2 run open_manipulator_x_torque_control gz_smc_joint_node --ros-args -p rho_func:=sat -p phi:=0.05 -p test_num:=2 -p t_sim:=20.0
 //
 //  ──────────────────────────────────────────────────────────────────────────
 //  SECCIONES A COMPLETAR:

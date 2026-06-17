@@ -18,8 +18,8 @@ clear; clc; close all;
 mode = 'sim';   % 'sim' = simulacion Gazebo | 'real' = hardware
 
 % test_num independiente por funcion de conmutacion
-test_num_sign = 19;
-test_num_sat  = 15;
+test_num_sign = 1;
+test_num_sat  = 1;
 
 EXPORT_FIGS = false;    % true = guardar PNG (300 dpi) y EPS vectorial (600 dpi)
 
@@ -38,7 +38,7 @@ switch mode
         data_dir   = fullfile(pkg_dir, 'data',  'lab6', 'real', 'act1');
         output_dir = fullfile(pkg_dir, 'plots', 'lab6', 'real', 'act1', 'comp_sf');
         mode_label = 'Implementacion';
-        prefix     = 'hw_smc_art';
+        prefix     = 'hw_smc_joint';
     otherwise
         error('mode debe ser ''sim'' o ''real''.');
 end
@@ -98,7 +98,7 @@ fs_title = 14;
 colors = [0.0000 0.4470 0.7410;   % azul   — sign
           0.8500 0.3250 0.0980];  % naranja — sat
 
-lstyles  = {'-', '--'};
+lstyles  = {'-', '-'};
 rho_disp = {'sign(s)', 'sat(s/\phi)'};
 
 color_ref  = [0.4 0.4 0.4];   % gris — referencia
