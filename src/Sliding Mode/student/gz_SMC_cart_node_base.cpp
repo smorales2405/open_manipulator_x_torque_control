@@ -1,6 +1,7 @@
 // ============================================================================
-//  gz_SMC_cart_node.cpp
+//  gz_SMC_cart_node_base.cpp
 //  Control por Modo Deslizante en espacio cartesiano — OpenMANIPULATOR-X (Gazebo)
+//  [Archivo base para estudiantes — Lab 6, Actividad 2]
 //
 //  Salida cartesiana reducida:
 //    y = [x_ee, y_ee, z_ee, phi]^T
@@ -23,13 +24,6 @@
 //    tau       = M_hat(q) * qddot_cmd + Phi_hat(q,qdot) + tau_fric_hat(qdot)
 //    tau_sat   = clamp(tau, -TAU_MAX, TAU_MAX)
 //
-//  Trayectoria cartesiana de referencia (serie de Fourier, w=1.0 rad/s):
-//    x_d   = 0.172 + 0.032*sin(t) + 0.027*cos(2t) + 0.003*sin(3t)
-//    y_d   = 0.015 + 0.136*sin(t) - 0.014*cos(2t) + 0.003*sin(3t) - 0.001*cos(4t)
-//    z_d   = 0.128 - 0.008*sin(t) + 0.006*cos(2t)
-//    phi_d = 0.685 + 0.250*sin(t)
-//    (derivadas: analiticas exactas de la serie de posicion)
-//
 //  Funciones de conmutacion (aplicadas elemento a elemento):
 //    "sign"  ->  rho(s) = sign(s)
 //    "sat"   ->  rho(s) = sat(s / phi)     phi: capa limite
@@ -51,7 +45,7 @@
 //            s1,s2,s3,s4, tau1..tau4, sat1..sat4, cond_J
 //
 //  Nota: usar sim_init_config.yaml con use_fixed_init: false.
-//        El SMC actua desde t=0; el CSV almacena unicamente datos de seguimiento SMC.
+//        El CSV almacena unicamente datos de la fase de seguimiento SMC.
 //
 //  Ejemplos de uso:
 //
@@ -63,6 +57,14 @@
 //
 //    ros2 run open_manipulator_x_torque_control gz_smc_cart_node
 //      --ros-args -p rho_func:=tanh -p alpha:=100.0 -p test_num:=3 -p t_sim:=30.0
+//
+//  ──────────────────────────────────────────────────────────────────────────
+//  SECCIONES A COMPLETAR:
+//    [1] Trayectoria cartesiana de referencia  →  desiredTrajectory()
+//    [2] Vector Y_START                        →  constante Y_START
+//    [3] Funciones de conmutacion              →  rho_scalar()
+//    [4] Ganancias SMC                         →  LAMBDA_Y, K_V, K_S
+//    [5] Ley SMC cartesiana (pasos 7, 8, 9, 11) →  tick()
 // ============================================================================
 
 #include <chrono>
@@ -101,40 +103,63 @@ static constexpr double PI      = M_PI;
 static constexpr int    NARM    = 4;
 static constexpr double TAU_MAX = 1.2;    // [N·m] limite de torque por articulacion
 static constexpr double B_FRIC  = 0.001;  // [N·m·s/rad] friccion viscosa nominal
-// Amortiguamiento DLS para pseudo-inversa (evita divergencia en singularidades)
-// LAMBDA_DLS pequeno = solucion mas exacta; aumentar solo si kappa(J) > 100
+// Amortiguamiento DLS (no modificar; aumentar solo si kappa(J) > 100)
 static constexpr double LAMBDA_DLS    = 0.01;
 static constexpr double LAMBDA_DLS_SQ = LAMBDA_DLS * LAMBDA_DLS;
 
-// Frame del efector final
+// Frame del efector final (no modificar)
 static constexpr char EFF_FRAME[] = "end_effector_link";
 
-// Duracion de la transicion quintica desde y0_ hasta Y_START
+// Duracion de la transicion quintica desde y0_ hasta Y_START (no modificar)
 static constexpr double T_TRANS = 3.0;   // [s]
 
-// Y_START = FK(Q_DES_SMC) = FK([0, -0.45, 0.35, pi/4]) con q1=0 → y=0
-// FK(q_des) = [0.1988, 0.0, 0.1348, 0.6854]
-static const Eigen::Vector4d Y_START {0.1988, 0.0, 0.1348, 0.6854};
+// ─────────────────────────────────────────────────────────────────────────────
+//  [SECCION 2] Vector Y_START — COMPLETAR
+//
+//  Y_START es la pose cartesiana [x, y, z, phi] de inicio de la trayectoria
+//  de referencia, obtenida de la cinematica directa FK evaluada en q_d(0):
+//    Y_START = FK(q_d(0))
+//
+//  Usar la funcion de cinematica directa del OpenManipulator-X (Guia Lab 6).
+//  Formato: {x [m], y [m], z [m], phi [rad]}
+// ─────────────────────────────────────────────────────────────────────────────
+static const Eigen::Vector4d Y_START {0.0, 0.0, 0.0, 0.0};  // COMPLETAR
 
 // ═══════════════════════════════════════════════════════════════════════════
-//  GANANCIAS SMC CARTESIANO  [x, y, z, phi]
+//  [SECCION 4] GANANCIAS SMC CARTESIANO — COMPLETAR
+//  Ajustar los valores para cada salida cartesiana [x, y, z, phi]
+//
+//  Rangos recomendados:
+//    LAMBDA_Y : 1.0  – 50.0   [1/s]   (ancho de banda de la superficie)
+//    K_V      : 1.0  – 50.0           (alcance exponencial; proporcional a la superficie)
+//    K_S      : 5.0  – 100.0          (ganancia de conmutacion; mayor = robustez vs. chattering)
 // ═══════════════════════════════════════════════════════════════════════════
-static const Eigen::Vector4d LAMBDA_Y = {5.0,  5.0,  20.0,  50.0};   // superficie [1/s]
-static const Eigen::Vector4d K_V      = {5.0,  5.0,  20.0,  20.0};   // proporcional a superficie (alcance exponencial)
-static const Eigen::Vector4d K_S      = {20.0, 20.0, 20.0, 40.0};   // ganancia de conmutacion
+static const Eigen::Vector4d LAMBDA_Y = {0.0, 0.0, 0.0, 0.0};  // COMPLETAR
+static const Eigen::Vector4d K_V      = {0.0, 0.0, 0.0, 0.0};  // COMPLETAR
+static const Eigen::Vector4d K_S      = {0.0, 0.0, 0.0, 0.0};  // COMPLETAR
 // ═══════════════════════════════════════════════════════════════════════════
 
-// ── Referencia cartesiana ────────────────────────────────────────────────────
+// ── Estructura de referencia cartesiana ──────────────────────────────────────
 struct CartRef {
   Eigen::Vector4d y;      // posicion deseada  [x, y, z, phi]
   Eigen::Vector4d ydot;   // velocidad deseada
   Eigen::Vector4d yddot;  // aceleracion deseada
 };
 
-// Trayectoria cartesiana de referencia (serie de Fourier, w=1.0 rad/s)
-// Derivadas son las derivadas analiticas exactas de la serie de posicion.
+// ─────────────────────────────────────────────────────────────────────────────
+//  [SECCION 1] Trayectoria cartesiana de referencia — COMPLETAR
+//
+//  Definir la trayectoria como una serie de Fourier (w = 1.0 rad/s):
+//    y_d(t)    = a0 + sum_n [ An*cos(n*w*t) + Bn*sin(n*w*t) ]
+//    ydot_d(t) = derivada analitica exacta de y_d(t)
+//    yddot_d(t)= derivada analitica exacta de ydot_d(t)
+//
+//  Las variables auxiliares sN = sin(N*t) y cN = cos(N*t) ya estan
+//  declaradas para facilitar la escritura de las expresiones.
+// ─────────────────────────────────────────────────────────────────────────────
 static CartRef desiredTrajectory(double t)
 {
+  // Variables trigonometricas auxiliares (no modificar)
   const double s1 = std::sin(t);
   const double c1 = std::cos(t);
   const double s2 = std::sin(2.0 * t);
@@ -144,29 +169,37 @@ static CartRef desiredTrajectory(double t)
   const double s4 = std::sin(4.0 * t);
   const double c4 = std::cos(4.0 * t);
 
+  // Suprimir advertencias de variables no utilizadas hasta completar
+  (void)s1; (void)c1; (void)s2; (void)c2;
+  (void)s3; (void)c3; (void)s4; (void)c4;
+
   CartRef ref;
+
+  // COMPLETAR: posicion deseada y_d(t) = [x_d, y_d, z_d, phi_d]
   ref.y <<
-      0.172 + 0.032*s1 + 0.027*c2 + 0.003*s3,
-      0.015 + 0.136*s1 - 0.014*c2 + 0.003*s3 - 0.001*c4,
-      0.128 - 0.008*s1 + 0.006*c2,
-      0.685 + 0.250*s1;
+      0.0,   // x_d   : COMPLETAR
+      0.0,   // y_d   : COMPLETAR
+      0.0,   // z_d   : COMPLETAR
+      0.0;   // phi_d : COMPLETAR
 
+  // COMPLETAR: velocidad deseada ydot_d(t) (derivada analitica de y_d)
   ref.ydot <<
-       0.032*c1 - 0.054*s2 + 0.009*c3,
-       0.136*c1 + 0.028*s2 + 0.009*c3 + 0.004*s4,
-      -0.008*c1 - 0.012*s2,
-       0.250*c1;
+      0.0,   // xdot_d   : COMPLETAR
+      0.0,   // ydot_d   : COMPLETAR
+      0.0,   // zdot_d   : COMPLETAR
+      0.0;   // phidot_d : COMPLETAR
 
+  // COMPLETAR: aceleracion deseada yddot_d(t) (derivada analitica de ydot_d)
   ref.yddot <<
-      -0.032*s1 - 0.108*c2 - 0.027*s3,
-      -0.136*s1 + 0.056*c2 - 0.027*s3 + 0.016*c4,
-       0.008*s1 - 0.024*c2,
-      -0.250*s1;
+      0.0,   // xddot_d   : COMPLETAR
+      0.0,   // yddot_d   : COMPLETAR
+      0.0,   // zddot_d   : COMPLETAR
+      0.0;   // phiddot_d : COMPLETAR
 
   return ref;
 }
 
-// Transicion quintica: y0 → y_goal en [0, T] con velocidad y aceleracion nulas en extremos
+// Transicion quintica: y0 → y_goal en [0, T] (no modificar)
 static CartRef transitionTrajectory(double t,
                                     const Eigen::Vector4d & y0,
                                     const Eigen::Vector4d & y_goal,
@@ -191,23 +224,31 @@ static CartRef transitionTrajectory(double t,
   return ref;
 }
 
-// ── Funciones de conmutacion ─────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+//  [SECCION 3] Funciones de conmutacion — COMPLETAR
+//
+//  Implementar rho(s) para cada tipo:
+//    sign : rho(s) = +1 si s > 0,  -1 si s < 0,  0 si s == 0
+//    sat  : rho(s) = clamp(s / phi, -1, 1)        (phi: capa limite)
+//    tanh : rho(s) = tanh(alpha * s)
+// ─────────────────────────────────────────────────────────────────────────────
 enum class RhoFunc { SIGN, SAT, TANH };
 
 static double rho_scalar(double s, RhoFunc func, double phi, double alpha)
 {
   switch (func) {
     case RhoFunc::SIGN:
-      return (s > 0.0) ? 1.0 : (s < 0.0 ? -1.0 : 0.0);
+      return 0.0;  // COMPLETAR: sign(s)
     case RhoFunc::SAT:
-      return std::max(-1.0, std::min(1.0, s / phi));
+      return 0.0;  // COMPLETAR: sat(s/phi) = clamp(s/phi, -1, 1)
     case RhoFunc::TANH:
-      return std::tanh(alpha * s);
+      return 0.0;  // COMPLETAR: tanh(alpha*s)
     default:
       return 0.0;
   }
 }
 
+// Aplica rho_scalar elemento a elemento sobre el vector s (no modificar)
 static Eigen::Vector4d rho_vec(const Eigen::Vector4d & s,
                                 RhoFunc func, double phi, double alpha)
 {
@@ -386,7 +427,7 @@ private:
     J4.row(0) = J6.row(0).head<NARM>();
     J4.row(1) = J6.row(1).head<NARM>();
     J4.row(2) = J6.row(2).head<NARM>();
-    J4.row(3) << 0.0, 1.0, 1.0, 1.0;  // dphi/dq = [0,1,1,1] (constante analitico)
+    J4.row(3) << 0.0, 1.0, 1.0, 1.0;  // dphi/dq = [0,1,1,1]
 
     // Velocidad cartesiana actual: ydot = J4 * qdot
     const Eigen::Vector4d ydot = J4 * dq;
@@ -401,7 +442,7 @@ private:
     jdqd << bias.linear()[0],
             bias.linear()[1],
             bias.linear()[2],
-            0.0;  // Jdot_phi * qdot = 0 (fila [0,1,1,1] es constante)
+            0.0;  // Jdot_phi * qdot = 0
 
     // 4. Dinamica nominal: M(q) y Phi(q,dq) = C*dq + g
     pinocchio::crba(model_, data_, q_pin);
@@ -423,44 +464,53 @@ private:
         y0_[0], y0_[1], y0_[2], y0_[3]);
     }
 
-    // 6. Referencia segun fase
+    // 6. Referencia segun fase (transicion quintica → trayectoria SMC)
     const bool in_trans = (t_ < T_TRANS);
     const CartRef ref   = in_trans
       ? transitionTrajectory(t_, y0_, Y_START, T_TRANS)
       : desiredTrajectory(t_ - T_TRANS);
 
-    // 7. Superficie deslizante cartesiana: s_y = edot_y + Lambda_y * e_y
-    const Eigen::Vector4d e_y    = y    - ref.y;
-    const Eigen::Vector4d edot_y = ydot - ref.ydot;
-    const Eigen::Vector4d s_y    = edot_y + LAMBDA_Y.asDiagonal() * e_y;
+    // ─────────────────────────────────────────────────────────────────────────
+    //  [SECCION 5] Ley SMC cartesiana — COMPLETAR (pasos 7, 8, 9 y 11)
+    // ─────────────────────────────────────────────────────────────────────────
 
-    // 8. Funcion de conmutacion rho(s_y)
-    const Eigen::Vector4d rho = rho_vec(s_y, rho_func_, phi_, alpha_);
+    // 7. Errores cartesianos:
+    const Eigen::Vector4d e_y    = Eigen::Vector4d::Zero();
+    const Eigen::Vector4d edot_y = Eigen::Vector4d::Zero();
 
-    // 9. Aceleracion cartesiana virtual: v_y = yddot_d - Lambda_y*edot_y - K_s*s_y - K_y*rho(s_y)
-    //    Ley de alcance exponencial: sdot = -K_s*s - K_y*rho(s) → convergencia mas rapida a la variedad
-    const Eigen::Vector4d v_y = ref.yddot
-                               - LAMBDA_Y.asDiagonal() * edot_y
-                               - K_V.asDiagonal() * s_y
-                               - K_S.asDiagonal() * rho;
+    // 8. Superficie deslizante cartesiana: s_y = edot_y + Lambda_y * e_y
+    // COMPLETAR
+    const Eigen::Vector4d s_y = Eigen::Vector4d::Zero();
 
-    // 10. Aceleracion articular comandada via pseudo-inversa DLS:
+    // 9. Funcion de conmutacion: rho = rho_vec(s_y, ...)
+    // COMPLETAR
+    const Eigen::Vector4d rho = Eigen::Vector4d::Zero();
+
+    // 10. Aceleracion cartesiana virtual:
+    //    v_y = yddot_d - Lambda_y*edot_y - K_s*s_y - K_y*rho(s_y)
+    // COMPLETAR
+    const Eigen::Vector4d v_y = Eigen::Vector4d::Zero();
+
+    // 11. Aceleracion articular via pseudo-inversa DLS (no modificar):
     //     qddot_cmd = J_y^T (J_y J_y^T + lambda^2 I)^{-1} (v_y - Jydot*qdot)
-    const Eigen::Matrix4d A =
+    const Eigen::Matrix4d A_dls =
       J4 * J4.transpose() + LAMBDA_DLS_SQ * Eigen::Matrix4d::Identity();
-    const Eigen::Vector4d qddot_cmd = J4.transpose() * A.ldlt().solve(v_y - jdqd);
+    const Eigen::Vector4d qddot_cmd = J4.transpose() * A_dls.ldlt().solve(v_y - jdqd);
 
-    // 11. Torque nominal y saturado
-    const Eigen::Vector4d tau     = M4 * qddot_cmd + nle4 + tau_fric;
+    // 12. Torque nominal y saturado:
+    //     tau = M(q)*qddot_cmd + Phi(q,dq) + tau_fric(dq)
+    // COMPLETAR
+    const Eigen::Vector4d tau     = Eigen::Vector4d::Zero();
     const Eigen::Vector4d tau_sat = tau.cwiseMin(TAU_MAX).cwiseMax(-TAU_MAX);
+    // ─────────────────────────────────────────────────────────────────────────
 
-    // 12. Condicionamiento del Jacobiano (para monitoreo de singularidades)
+    // 13. Condicionamiento del Jacobiano (no modificar)
     Eigen::JacobiSVD<Eigen::Matrix4d> svd(J4);
     const double sigma_min = svd.singularValues()(NARM - 1);
     const double cond_J    = (sigma_min > 1e-10) ?
       svd.singularValues()(0) / sigma_min : 1e10;
 
-    // 13. Publicar torques
+    // 14. Publicar torques
     std_msgs::msg::Float64MultiArray cmd;
     cmd.data.assign(tau_sat.data(), tau_sat.data() + NARM);
     torque_pub_->publish(cmd);
