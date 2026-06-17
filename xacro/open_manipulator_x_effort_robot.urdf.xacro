@@ -17,6 +17,10 @@
   <xacro:arg name="q3_init"        default="0.0" />
   <xacro:arg name="q4_init"        default="0.0" />
 
+  <!-- Escalas de dinamica: leidas desde config/sim_init_config.yaml via launch file -->
+  <xacro:arg name="mass_inertia_scale" default="1.0" />
+  <xacro:arg name="friction_scale"     default="1.0" />
+
   <!-- Recursos graficos: colores Rviz y materiales Gazebo del paquete original -->
   <xacro:include filename="$(find open_manipulator_x_description)/gazebo/materials.xacro" />
 
@@ -32,7 +36,9 @@
   <xacro:include filename="$(find open_manipulator_x_torque_control)/xacro/open_manipulator_x_effort.ros2_control.xacro" />
 
   <!-- Instanciar cadena cinematica -->
-  <xacro:open_manipulator_x prefix="$(arg prefix)" />
+  <xacro:open_manipulator_x prefix="$(arg prefix)"
+                             mass_inertia_scale="$(arg mass_inertia_scale)"
+                             friction_scale="$(arg friction_scale)" />
 
   <!-- Instanciar propiedades Gazebo -->
   <xacro:open_manipulator_x_gazebo prefix="$(arg prefix)" />

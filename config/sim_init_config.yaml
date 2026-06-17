@@ -13,12 +13,12 @@
 #   x0 Lab 5 Act. 1    : use_fixed_init: true    q_init: [1.5708, 0.0, 0.5236, 1.0472]
 #   Home (todos cero)  : use_fixed_init: true    q_init: [0.0, 0.0, 0.0, 0.0]
 
-use_fixed_init: false
+use_fixed_init: true
 #q_init: [0.0, 0.0, 0.0, 0.0]           # x0 = [0, 0, 0, 0]
 #q_init: [1.5708, 0.0, 0.5236, 1.0472]   # x0 = [pi/2, 0, pi/6, pi/3]
-#q_init: [0.0, -0.785, 0.0, 0.0]
-#q_init: [0.0, -0.5, 0.3, 0.785]         # Lab6 Act1 SMC articular: q_d(0) = [0,-0.5,0.3,pi/4]
-q_init: [0.0, -0.55, 0.21, 0.92]         # Lab6 Act2 SMC cart: FK≈[0.19,0,0.17,phi=0.58]≈Y_START
+q_init: [0.0, -0.5, 0.3, 0.785]         # Lab6 Act1 SMC articular: q_d(0) = [0,-0.5,0.3,pi/4]
+#q_init: [0.0, -0.785, 0.0, 0.0]          # Lab6 Act2 SMC cart: eq. gravedad→[0,-1.3,1.4,0.69]→phi≈+0.78
+#q_init: [0.0, -0.50, 0.25, 0.85]
 
 # ─── Obstáculo MDF ───────────────────────────────────────────────────────────
 #
@@ -33,3 +33,23 @@ q_init: [0.0, -0.55, 0.21, 0.92]         # Lab6 Act2 SMC cart: FK≈[0.19,0,0.17
 
 spawn_obstacle: false
 obstacle_pose: [0.1125, 0.0, 0.0, 0.0, 0.0, 1.5708]
+
+# ─── Escalas de dinamica ─────────────────────────────────────────────────────
+#
+# mass_inertia_scale : factor multiplicativo aplicado a masas e inercias de
+#                      link1..link5 (gripper links no se ven afectados).
+#                      1.0 = valores nominales calibrados.
+#                      >1  = robot mas pesado/lento  |  <1 = mas ligero.
+#
+# friction_scale     : factor multiplicativo aplicado al parametro friction
+#                      de joint1..joint4 (damping no se modifica).
+#                      1.0 = friccion nominal identificada.
+#                      0.0 = sin friccion  |  >1 = mayor friccion.
+#
+# Rango tipico de uso:
+#   Identificacion sin friccion : friction_scale: 0.0
+#   Modelo nominal              : mass_inertia_scale: 1.0  friction_scale: 1.0
+#   Perturbacion de masa        : mass_inertia_scale: 1.5
+
+mass_inertia_scale: 1.0
+friction_scale: 1.0

@@ -10,6 +10,10 @@
     - joint4      : limites actualizados a [-1.8, 2.1] rad
     - gripper_right_joint: damping 0.1 -> 0.7 (igual que ROBOTIS URDF oficial)
 
+  Parametros de escala (configurables desde sim_init_config.yaml):
+    mass_inertia_scale : factor multiplicativo para masas e inercias de link1..link5
+    friction_scale     : factor multiplicativo para friccion de joint1..joint4
+
   Sin cambios:
     - Meshes (mismo paquete open_manipulator_x_description)
     - Origenes y ejes articulares
@@ -19,7 +23,8 @@
 
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro">
 
-  <xacro:macro name="open_manipulator_x" params="prefix=''">
+  <xacro:macro name="open_manipulator_x"
+               params="prefix='' mass_inertia_scale='1.0' friction_scale='1.0'">
 
     <xacro:property
       name="meshes_file_direction"
@@ -44,10 +49,10 @@
       <!-- link1 — balanza + Inventor CAD (escalado m_real/m_CAD) -->
       <inertial>
         <origin xyz="0.000308 0.000000 0.017927" rpy="0 0 0"/>
-        <mass value="0.0804" />
-        <inertia ixx="1.275713e-05" ixy="0.000000e+00" ixz="-1.794293e-07"
-                 iyy="2.234728e-05" iyz="0.000000e+00"
-                 izz="1.965878e-05" />
+        <mass value="${0.0804 * mass_inertia_scale}" />
+        <inertia ixx="${1.275713e-05 * mass_inertia_scale}" ixy="0.000000e+00" ixz="${-1.794293e-07 * mass_inertia_scale}"
+                 iyy="${2.234728e-05 * mass_inertia_scale}" iyz="0.000000e+00"
+                 izz="${1.965878e-05 * mass_inertia_scale}" />
       </inertial>
     </link>
 
@@ -57,7 +62,7 @@
       <origin xyz="0.012 0.0 0.017" rpy="0 0 0"/>
       <axis xyz="0 0 1"/>
       <limit velocity="4.8" effort="1.5" lower="${-3*pi/4}" upper="${3*pi/4}" />
-      <dynamics damping="0.0230" friction="0.0168"/>
+      <dynamics damping="0.0230" friction="${0.0168 * friction_scale}"/>
     </joint>
 
     <link name="${prefix}link2">
@@ -79,10 +84,10 @@
       <!-- link2 — balanza + Inventor CAD (escalado m_real/m_CAD) -->
       <inertial>
         <origin xyz="0.000000 0.000657 0.044319" rpy="0 0 0"/>
-        <mass value="0.0970" />
-        <inertia ixx="3.078317e-05" ixy="0.000000e+00" ixz="0.000000e+00"
-                 iyy="2.670366e-05" iyz="-1.289659e-07"
-                 izz="1.627175e-05" />
+        <mass value="${0.0970 * mass_inertia_scale}" />
+        <inertia ixx="${3.078317e-05 * mass_inertia_scale}" ixy="0.000000e+00" ixz="0.000000e+00"
+                 iyy="${2.670366e-05 * mass_inertia_scale}" iyz="${-1.289659e-07 * mass_inertia_scale}"
+                 izz="${1.627175e-05 * mass_inertia_scale}" />
       </inertial>
     </link>
 
@@ -92,7 +97,7 @@
       <origin xyz="0.0 0.0 0.0595" rpy="0 0 0"/>
       <axis xyz="0 1 0"/>
       <limit velocity="4.8" effort="1.5" lower="${-11*pi/18}" upper="${5*pi/9}" />
-      <dynamics damping="0.0194" friction="0.0089"/>
+      <dynamics damping="0.0194" friction="${0.0089 * friction_scale}"/>
     </joint>
 
     <link name="${prefix}link3">
@@ -114,10 +119,10 @@
       <!-- link3 — balanza + Inventor CAD (escalado m_real/m_CAD) -->
       <inertial>
         <origin xyz="0.007606 0.000389 0.099924" rpy="0 0 0"/>
-        <mass value="0.1235" />
-        <inertia ixx="1.979680e-04" ixy="-2.511443e-07" ixz="-2.497601e-05"
-                 iyy="2.046627e-04" iyz="-1.351040e-06"
-                 izz="3.374865e-05" />
+        <mass value="${0.1235 * mass_inertia_scale}" />
+        <inertia ixx="${1.979680e-04 * mass_inertia_scale}" ixy="${-2.511443e-07 * mass_inertia_scale}" ixz="${-2.497601e-05 * mass_inertia_scale}"
+                 iyy="${2.046627e-04 * mass_inertia_scale}" iyz="${-1.351040e-06 * mass_inertia_scale}"
+                 izz="${3.374865e-05 * mass_inertia_scale}" />
       </inertial>
     </link>
 
@@ -127,7 +132,7 @@
       <origin xyz="0.024 0 0.128" rpy="0 0 0"/>
       <axis xyz="0 1 0"/>
       <limit velocity="4.8" effort="1.5" lower="${-11*pi/18}" upper="${pi/2}" />
-      <dynamics damping="0.0229" friction="0.0094"/>
+      <dynamics damping="0.0229" friction="${0.0094 * friction_scale}"/>
     </joint>
 
     <link name="${prefix}link4">
@@ -149,10 +154,10 @@
       <!-- link4 — balanza + Inventor CAD (escalado m_real/m_CAD) -->
       <inertial>
         <origin xyz="0.089168 0.000437 0.000001" rpy="0 0 0"/>
-        <mass value="0.1151" />
-        <inertia ixx="1.930305e-05" ixy="-1.189078e-06" ixz="3.461654e-09"
-                 iyy="1.483284e-04" iyz="0.000000e+00"
-                 izz="1.547550e-04" />
+        <mass value="${0.1151 * mass_inertia_scale}" />
+        <inertia ixx="${1.930305e-05 * mass_inertia_scale}" ixy="${-1.189078e-06 * mass_inertia_scale}" ixz="${3.461654e-09 * mass_inertia_scale}"
+                 iyy="${1.483284e-04 * mass_inertia_scale}" iyz="0.000000e+00"
+                 izz="${1.547550e-04 * mass_inertia_scale}" />
       </inertial>
     </link>
 
@@ -162,7 +167,7 @@
       <origin xyz="0.124 0.0 0.0" rpy="0 0 0"/>
       <axis xyz="0 1 0"/>
       <limit velocity="4.8" effort="1.5" lower="-1.8" upper="2.1" />
-      <dynamics damping="0.0158" friction="0.0377"/>
+      <dynamics damping="0.0158" friction="${0.0377 * friction_scale}"/>
     </joint>
 
     <link name="${prefix}link5">
@@ -184,10 +189,10 @@
       <!-- link5 — balanza + Inventor CAD (escalado m_real/m_CAD) -->
       <inertial>
         <origin xyz="0.062451 0.000000 0.005878" rpy="0 0 0"/>
-        <mass value="0.2206" />
-        <inertia ixx="1.344328e-04" ixy="-1.788649e-08" ixz="2.259163e-05"
-                 iyy="1.892619e-04" iyz="9.936937e-07"
-                 izz="2.174510e-04" />
+        <mass value="${0.2206 * mass_inertia_scale}" />
+        <inertia ixx="${1.344328e-04 * mass_inertia_scale}" ixy="${-1.788649e-08 * mass_inertia_scale}" ixz="${2.259163e-05 * mass_inertia_scale}"
+                 iyy="${1.892619e-04 * mass_inertia_scale}" iyz="${9.936937e-07 * mass_inertia_scale}"
+                 izz="${2.174510e-04 * mass_inertia_scale}" />
       </inertial>
     </link>
 

@@ -49,16 +49,18 @@ from launch_ros.substitutions import FindPackageShare
 
 
 def _load_init_config():
-    """Lee config/sim_init_config.yaml y devuelve (use_fixed_init_str, q_init, spawn_obs, obs_pose)."""
+    """Lee config/sim_init_config.yaml y devuelve configuracion completa de simulacion."""
     pkg_share = get_package_share_directory('open_manipulator_x_torque_control')
     cfg_path  = os.path.join(pkg_share, 'config', 'sim_init_config.yaml')
     with open(cfg_path, 'r') as f:
         cfg = yaml.safe_load(f)
-    use_fixed = 'true' if cfg.get('use_fixed_init', False) else 'false'
-    q_init    = cfg.get('q_init', [0.0, 0.0, 0.0, 0.0])
-    spawn_obs = cfg.get('spawn_obstacle', False)
-    obs_pose  = cfg.get('obstacle_pose', [0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
-    return use_fixed, q_init, spawn_obs, obs_pose
+    use_fixed          = 'true' if cfg.get('use_fixed_init', False) else 'false'
+    q_init             = cfg.get('q_init', [0.0, 0.0, 0.0, 0.0])
+    spawn_obs          = cfg.get('spawn_obstacle', False)
+    obs_pose           = cfg.get('obstacle_pose', [0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+    mass_inertia_scale = cfg.get('mass_inertia_scale', 1.0)
+    friction_scale     = cfg.get('friction_scale', 1.0)
+    return use_fixed, q_init, spawn_obs, obs_pose, mass_inertia_scale, friction_scale
 
 
 def generate_launch_description():
@@ -66,8 +68,8 @@ def generate_launch_description():
     prefix     = LaunchConfiguration('prefix')
     start_rviz = LaunchConfiguration('start_rviz')
 
-    # Leer configuracion de posicion inicial y obstáculo desde YAML
-    use_fixed_init, q_init, spawn_obs, obs_pose = _load_init_config()
+    # Leer configuracion de posicion inicial, obstáculo y escalas de dinamica desde YAML
+    use_fixed_init, q_init, spawn_obs, obs_pose, mass_inertia_scale, friction_scale = _load_init_config()
 
     world = PathJoinSubstitution([
         FindPackageShare('open_manipulator_x_torque_control'),
@@ -92,26 +94,40 @@ def generate_launch_description():
                 'xacro',
                 'open_manipulator_x_effort_robot.urdf.xacro',
             ]),
-            ' prefix:=',       prefix,
+            ' prefix:=',             prefix,
             ' use_sim:=true',
-            ' use_fixed_init:=', use_fixed_init,
-            ' q1_init:=',      str(q_init[0]),
-            ' q2_init:=',      str(q_init[1]),
-            ' q3_init:=',      str(q_init[2]),
-            ' q4_init:=',      str(q_init[3]),
+            ' use_fixed_init:=',     use_fixed_init,
+            ' q1_init:=',            str(q_init[0]),
+            ' q2_init:=',            str(q_init[1]),
+            ' q3_init:=',            str(q_init[2]),
+            ' q4_init:=',            str(q_init[3]),
+            ' mass_inertia_scale:=', str(mass_inertia_scale),
+            ' friction_scale:=',     str(friction_scale),
         ]),
         value_type=str,
     )
 
-    # Mata procesos gz huerfanos de sesiones anteriores.
-    # En Fortress el simulador corre como proceso unico 'gz' (no gzserver/gzclient).
+    # Mata procesos gz huerfanos y nodos ROS 2 zombie de sesiones anteriores.
+    # pkill -9 gz/ign no alcanza: tambien pueden quedar vivos robot_state_publisher,
+    # controller_manager (dentro del plugin gz_ros2_control), parameter_bridge y
+    # spawners colgados. Si hay dos controller_manager activos, el spawner conecta
+    # al viejo (estado inconsistente) y falla al configurar los controladores.
+    # ros2 daemon stop/start limpia el cache de descubrimiento de nodos muertos.
     cleanup_gz = ExecuteProcess(
         cmd=[
             'bash', '-c',
-            'pkill -9 gz 2>/dev/null || true; '
-            'pkill -9 ign 2>/dev/null || true; '
-            'sleep 1; '
-            'echo "[cleanup] gz processes cleared"',
+            'pkill -9 -f "gz sim"              2>/dev/null || true; '
+            'pkill -9 -f "ign gazebo"          2>/dev/null || true; '
+            'pkill -9 -f "gz-sim"              2>/dev/null || true; '
+            'pkill -9 gz                       2>/dev/null || true; '
+            'pkill -9 ign                      2>/dev/null || true; '
+            'pkill -9 ruby                     2>/dev/null || true; '
+            'pkill -9 -f robot_state_publisher 2>/dev/null || true; '
+            'pkill -9 -f parameter_bridge      2>/dev/null || true; '
+            'pkill -9 -f spawner               2>/dev/null || true; '
+            'ros2 daemon stop 2>/dev/null; ros2 daemon start 2>/dev/null; '
+            'sleep 2; '
+            'echo "[cleanup] gz and ROS 2 zombie processes cleared"',
         ],
         output='screen',
         name='cleanup_gz',
