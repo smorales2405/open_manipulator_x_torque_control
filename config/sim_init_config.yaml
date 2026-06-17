@@ -13,7 +13,7 @@
 #   x0 Lab 5 Act. 1    : use_fixed_init: true    q_init: [1.5708, 0.0, 0.5236, 1.0472]
 #   Home (todos cero)  : use_fixed_init: true    q_init: [0.0, 0.0, 0.0, 0.0]
 
-use_fixed_init: true
+use_fixed_init: false
 #q_init: [0.0, 0.0, 0.0, 0.0]           # x0 = [0, 0, 0, 0]
 #q_init: [1.5708, 0.0, 0.5236, 1.0472]   # x0 = [pi/2, 0, pi/6, pi/3]
 q_init: [0.0, -0.5, 0.3, 0.785]         # Lab6 Act1 SMC articular: q_d(0) = [0,-0.5,0.3,pi/4]
@@ -42,17 +42,23 @@ obstacle_pose: [0.1125, 0.0, 0.0, 0.0, 0.0, 1.5708]
 #                      >1  = robot mas pesado/lento  |  <1 = mas ligero.
 #
 # damping_scale      : factor multiplicativo aplicado al parametro damping
-#                      de joint1..joint4 (friction permanece fijo).
+#                      de joint1..joint4.
 #                      1.0 = damping nominal identificado.
 #                      0.0 = sin damping  |  >1 = mayor amortiguamiento.
 #
+# friction_scale     : factor multiplicativo aplicado al parametro friction
+#                      de joint1..joint4.
+#                      1.0 = friccion nominal identificada.
+#                      0.0 = sin friccion  |  >1 = mayor friccion.
+#
 # Rango tipico de uso:
-#   Sin amortiguamiento viscoso : damping_scale: 0.0
-#   Modelo nominal              : mass_inertia_scale: 1.0  damping_scale: 1.0
-#   Perturbacion de masa        : mass_inertia_scale: 1.5
+#   Sin friccion/damping : damping_scale: 0.0  friction_scale: 0.0
+#   Modelo nominal       : mass_inertia_scale: 1.0  damping_scale: 1.0  friction_scale: 1.0
+#   Perturbacion de masa : mass_inertia_scale: 1.5
 
 mass_inertia_scale: 1.0
 damping_scale: 1.0
+friction_scale: 1.0
 
 # ─── Carga en el efector final ───────────────────────────────────────────────
 #

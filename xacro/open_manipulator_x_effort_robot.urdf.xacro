@@ -20,6 +20,7 @@
   <!-- Escalas de dinamica: leidas desde config/sim_init_config.yaml via launch file -->
   <xacro:arg name="mass_inertia_scale" default="1.0" />
   <xacro:arg name="damping_scale"      default="1.0" />
+  <xacro:arg name="friction_scale"     default="1.0" />
 
   <!-- Carga cilindrica en el efector final: configurables desde sim_init_config.yaml -->
   <xacro:arg name="spawn_load"    default="false" />
@@ -45,7 +46,8 @@
   <!-- Instanciar cadena cinematica -->
   <xacro:open_manipulator_x prefix="$(arg prefix)"
                              mass_inertia_scale="$(arg mass_inertia_scale)"
-                             damping_scale="$(arg damping_scale)" />
+                             damping_scale="$(arg damping_scale)"
+                             friction_scale="$(arg friction_scale)" />
 
   <!-- Instanciar propiedades Gazebo -->
   <xacro:open_manipulator_x_gazebo prefix="$(arg prefix)" />
