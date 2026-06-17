@@ -7,15 +7,6 @@
 //    M(q)*ddq + Phi(q,dq) = tau - tau_fric(dq)
 //    tau_fric_i = B_FRIC * dq_i     (B_FRIC = 0.001 N·m·s/rad)
 //
-//  Superficie deslizante articular:
-//    e_q  = q  - q_d               (error de posicion)
-//    e_dq = dq - dq_d              (error de velocidad)
-//    s_q  = e_dq + Lambda_q * e_q
-//
-//  Ley de control SMC (ley de alcance exponencial + conmutacion):
-//    v_q  = ddq_d - Lambda_q*e_dq - K_v*s_q - K_s*rho(s_q)
-//    tau  = M(q)*v_q + Phi(q,dq) + tau_fric(dq)
-//    tau_sat = clamp(tau, -TAU_MAX, TAU_MAX)
 //
 //  Funciones de conmutacion (aplicadas elemento a elemento):
 //    "sign"  ->  rho(s) = sign(s)
@@ -348,12 +339,12 @@ private:
     // ─────────────────────────────────────────────────────────────────────────
     //  [SECCION 4] Ley SMC articular — COMPLETAR
     // ─────────────────────────────────────────────────────────────────────────
-    
+
     //  4.1 Errores articulares:
     const Eigen::Vector4d e_q  = Eigen::Vector4d::Zero();
     const Eigen::Vector4d e_dq = Eigen::Vector4d::Zero();
 
-    // 4.2 Superficie deslizante: s_q = e_dq + Lambda_q * e_q
+    // 4.2 Superficie deslizante:
     // COMPLETAR
     const Eigen::Vector4d s_q = Eigen::Vector4d::Zero();
 
@@ -362,11 +353,10 @@ private:
     const Eigen::Vector4d rho = Eigen::Vector4d::Zero();
 
     // 4.4 Aceleracion articular virtual:
-    //     v_q = ddq_d - Lambda_q*e_dq - K_v*s_q - K_s*rho(s_q)
     // COMPLETAR
     const Eigen::Vector4d v_q = Eigen::Vector4d::Zero();
 
-    // Torque: tau = M(q)*v_q + Phi(q,dq) + tau_fric(dq)  (no modificar)
+    // 4.5 Torque:
     const Eigen::Vector4d tau     = Eigen::Vector4d::Zero();
     const Eigen::Vector4d tau_sat = tau.cwiseMin(TAU_MAX).cwiseMax(-TAU_MAX);
     // ─────────────────────────────────────────────────────────────────────────

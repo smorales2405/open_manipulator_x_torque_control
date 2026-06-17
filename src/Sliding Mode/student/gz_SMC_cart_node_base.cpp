@@ -14,16 +14,6 @@
 //  Pseudo-inversa amortiguada DLS:
 //    J_y^# = J_y^T (J_y J_y^T + lambda_J^2 * I)^{-1}
 //
-//  Superficie deslizante cartesiana:
-//    e_y    = y - y_d,    edot_y = ydot - ydot_d
-//    s_y    = edot_y + Lambda_y * e_y
-//
-//  Ley de control SMC cartesiana (ley de alcance exponencial + conmutacion):
-//    v_y       = yddot_d - Lambda_y * edot_y - K_s * s_y - K_y * rho(s_y)
-//    qddot_cmd = J_y^# * (v_y - Jydot * qdot)
-//    tau       = M_hat(q) * qddot_cmd + Phi_hat(q,qdot) + tau_fric_hat(qdot)
-//    tau_sat   = clamp(tau, -TAU_MAX, TAU_MAX)
-//
 //  Funciones de conmutacion (aplicadas elemento a elemento):
 //    "sign"  ->  rho(s) = sign(s)
 //    "sat"   ->  rho(s) = sat(s / phi)     phi: capa limite
@@ -159,19 +149,6 @@ struct CartRef {
 // ─────────────────────────────────────────────────────────────────────────────
 static CartRef desiredTrajectory(double t)
 {
-  // Variables trigonometricas auxiliares (no modificar)
-  const double s1 = std::sin(t);
-  const double c1 = std::cos(t);
-  const double s2 = std::sin(2.0 * t);
-  const double c2 = std::cos(2.0 * t);
-  const double s3 = std::sin(3.0 * t);
-  const double c3 = std::cos(3.0 * t);
-  const double s4 = std::sin(4.0 * t);
-  const double c4 = std::cos(4.0 * t);
-
-  // Suprimir advertencias de variables no utilizadas hasta completar
-  (void)s1; (void)c1; (void)s2; (void)c2;
-  (void)s3; (void)c3; (void)s4; (void)c4;
 
   CartRef ref;
 
@@ -478,7 +455,7 @@ private:
     const Eigen::Vector4d e_y    = Eigen::Vector4d::Zero();
     const Eigen::Vector4d edot_y = Eigen::Vector4d::Zero();
 
-    // 8. Superficie deslizante cartesiana: s_y = edot_y + Lambda_y * e_y
+    // 8. Superficie deslizante cartesiana: 
     // COMPLETAR
     const Eigen::Vector4d s_y = Eigen::Vector4d::Zero();
 
@@ -487,18 +464,16 @@ private:
     const Eigen::Vector4d rho = Eigen::Vector4d::Zero();
 
     // 10. Aceleracion cartesiana virtual:
-    //    v_y = yddot_d - Lambda_y*edot_y - K_s*s_y - K_y*rho(s_y)
     // COMPLETAR
     const Eigen::Vector4d v_y = Eigen::Vector4d::Zero();
 
     // 11. Aceleracion articular via pseudo-inversa DLS (no modificar):
-    //     qddot_cmd = J_y^T (J_y J_y^T + lambda^2 I)^{-1} (v_y - Jydot*qdot)
+    //     qddot = J_y^T (J_y J_y^T + lambda^2 I)^{-1} (v_y - Jydot*qdot)
     const Eigen::Matrix4d A_dls =
       J4 * J4.transpose() + LAMBDA_DLS_SQ * Eigen::Matrix4d::Identity();
-    const Eigen::Vector4d qddot_cmd = J4.transpose() * A_dls.ldlt().solve(v_y - jdqd);
+    const Eigen::Vector4d qddot = J4.transpose() * A_dls.ldlt().solve(v_y - jdqd);
 
     // 12. Torque nominal y saturado:
-    //     tau = M(q)*qddot_cmd + Phi(q,dq) + tau_fric(dq)
     // COMPLETAR
     const Eigen::Vector4d tau     = Eigen::Vector4d::Zero();
     const Eigen::Vector4d tau_sat = tau.cwiseMin(TAU_MAX).cwiseMax(-TAU_MAX);
