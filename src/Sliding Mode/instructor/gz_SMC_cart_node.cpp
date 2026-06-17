@@ -23,19 +23,12 @@
 //    tau       = M_hat(q) * qddot_cmd + Phi_hat(q,qdot) + tau_fric_hat(qdot)
 //    tau_sat   = clamp(tau, -TAU_MAX, TAU_MAX)
 //
-//  Trayectoria cartesiana de referencia: FK analitica de la referencia articular
-//    (misma que gz_SMC_art_node, omega = 1.0 rad/s)
-//    q_d(t') = [(pi/4)*sin(t'), -0.45+0.5*sin(t'), 0.35-0.5*sin(t'), pi/4+0.25*sin(t')]
-//    y_d(t') = FK(q_d(t'))              — open_manx_fkin.m, simplif. q2+q3=-0.10=cte
-//    ydot_d  = J(q_d)*qdot_d            — Jacobiano analitico
-//    yddot_d = J(q_d)*qddot_d + Jdot*qdot_d — segunda derivada exacta
-//
-//  Fases de control:
-//    [0, T_PD)               — Fase 0: PD articular lleva el brazo a Q_DES_SMC
-//                               tau = G(q) + Kp*(q_des - q) - Kd*qdot
-//                               q_des = [0, -0.45, 0.35, pi/4] = q_d(0) articular
-//    [T_PD, T_PD+T_TRANS)    — Fase 1: transicion quintica y0 → Y_START=FK(q_d(0))
-//    [T_PD+T_TRANS, inf)     — Fase 2: trayectoria cartesiana activa (t' = t - T_PD - T_TRANS)
+//  Trayectoria cartesiana de referencia (serie de Fourier, w=1.0 rad/s):
+//    x_d   = 0.172 + 0.032*sin(t) + 0.027*cos(2t) + 0.003*sin(3t)
+//    y_d   = 0.015 + 0.136*sin(t) - 0.014*cos(2t) + 0.003*sin(3t) - 0.001*cos(4t)
+//    z_d   = 0.128 - 0.008*sin(t) + 0.006*cos(2t)
+//    phi_d = 0.685 + 0.250*sin(t)
+//    (derivadas: analiticas exactas de la serie de posicion)
 //
 //  Funciones de conmutacion (aplicadas elemento a elemento):
 //    "sign"  ->  rho(s) = sign(s)
@@ -58,19 +51,18 @@
 //            s1,s2,s3,s4, tau1..tau4, sat1..sat4, cond_J
 //
 //  Nota: usar sim_init_config.yaml con use_fixed_init: false.
-//        La Fase 0 lleva el brazo a Q_DES_SMC = q_d(0) articular en T_PD segundos.
-//        t_sim debe incluir T_PD + T_TRANS (ej: t_sim:=48.0 = 8 PD + 10 TRANS + 30 TRAY).
+//        El SMC actua desde t=0; el CSV almacena unicamente datos de seguimiento SMC.
 //
 //  Ejemplos de uso:
 //
 //    ros2 run open_manipulator_x_torque_control gz_smc_cart_node
-//      --ros-args -p rho_func:=sign -p test_num:=1 -p t_sim:=48.0
+//      --ros-args -p rho_func:=sign -p test_num:=1 -p t_sim:=30.0
 //
 //    ros2 run open_manipulator_x_torque_control gz_smc_cart_node
-//      --ros-args -p rho_func:=sat -p phi:=0.25 -p test_num:=2 -p t_sim:=48.0
+//      --ros-args -p rho_func:=sat -p phi:=0.25 -p test_num:=2 -p t_sim:=30.0
 //
 //    ros2 run open_manipulator_x_torque_control gz_smc_cart_node
-//      --ros-args -p rho_func:=tanh -p alpha:=100.0 -p test_num:=3 -p t_sim:=48.0
+//      --ros-args -p rho_func:=tanh -p alpha:=100.0 -p test_num:=3 -p t_sim:=30.0
 // ============================================================================
 
 #include <chrono>
@@ -114,30 +106,21 @@ static constexpr double B_FRIC  = 0.001;  // [N·m·s/rad] friccion viscosa nomi
 static constexpr double LAMBDA_DLS    = 0.01;
 static constexpr double LAMBDA_DLS_SQ = LAMBDA_DLS * LAMBDA_DLS;
 
-// ─── Fase 0: PD articular ────────────────────────────────────────────────────
-// q_des = q_d(0) de la trayectoria articular: [0, -0.45, 0.35, pi/4]
-// FK(q_des) = [0.1988, 0.0, 0.1348, 0.6854] → Y_START
-static constexpr double T_PD = 5.0;   // [s] duracion de la fase PD articular
-static const Eigen::Vector4d Q_DES_SMC    = {0.0, -0.45, 0.35, PI/4.0};
-static const Eigen::Vector4d KP_PD_JOINT  = {30.0, 50.0, 50.0, 50.0};   // [N·m/rad]
-static const Eigen::Vector4d KD_PD_JOINT  = { 0.0,  0.0,  0.0,  0.0};   // [N·m·s/rad]
-// ─────────────────────────────────────────────────────────────────────────────
-
-// Duracion de la transicion quintica desde y0_ hasta Y_START
-static constexpr double T_TRANS = 0.0;   // [s]
-
 // Frame del efector final
 static constexpr char EFF_FRAME[] = "end_effector_link";
 
-// Punto de inicio de la trayectoria: y_d(t'=0)
+// Duracion de la transicion quintica desde y0_ hasta Y_START
+static constexpr double T_TRANS = 3.0;   // [s]
+
 // Y_START = FK(Q_DES_SMC) = FK([0, -0.45, 0.35, pi/4]) con q1=0 → y=0
+// FK(q_des) = [0.1988, 0.0, 0.1348, 0.6854]
 static const Eigen::Vector4d Y_START {0.1988, 0.0, 0.1348, 0.6854};
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  GANANCIAS SMC CARTESIANO  [x, y, z, phi]
 // ═══════════════════════════════════════════════════════════════════════════
-static const Eigen::Vector4d LAMBDA_Y = {5.0,  5.0,  5.0,  50.0};   // superficie [1/s]
-static const Eigen::Vector4d K_S      = {5.0,  5.0,  5.0,  20.0};   // proporcional a superficie (alcance exponencial)
+static const Eigen::Vector4d LAMBDA_Y = {5.0,  5.0,  20.0,  50.0};   // superficie [1/s]
+static const Eigen::Vector4d K_S      = {5.0,  5.0,  20.0,  20.0};   // proporcional a superficie (alcance exponencial)
 static const Eigen::Vector4d K_Y      = {20.0, 20.0, 20.0, 40.0};   // ganancia de conmutacion
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -148,73 +131,38 @@ struct CartRef {
   Eigen::Vector4d yddot;  // aceleracion deseada
 };
 
-// Trayectoria cartesiana: FK analitica de la referencia articular (w=1.0 rad/s)
-//   q_d = [(pi/4)*sin(t), -0.45+0.5*sin(t), 0.35-0.5*sin(t), pi/4+0.25*sin(t)]
-// Simplificacion exacta: q2+q3 = -0.10 = cte → s23,c23 constantes; phidot = q4dot
+// Trayectoria cartesiana de referencia (serie de Fourier, w=1.0 rad/s)
+// Derivadas son las derivadas analiticas exactas de la serie de posicion.
 static CartRef desiredTrajectory(double t)
 {
-  // Constantes de cinematica (open_manx_fkin.m)
-  static constexpr double x_base = 0.012;
-  static constexpr double z_base = 0.0765;   // 0.017 + 0.0595
-  static constexpr double x23_   = 0.024;
-  static constexpr double z23_   = 0.128;
-  static constexpr double l34_   = 0.124;
-  static constexpr double l4e_   = 0.126;
-  // q2+q3 = -0.10 = cte
-  static const double c23 = std::cos(-0.10);
-  static const double s23 = std::sin(-0.10);
-
-  // Trayectoria articular
-  const double w   = 1.0;
-  const double sw  = std::sin(w * t);
-  const double cw  = std::cos(w * t);
-
-  const double q1      = (PI/4.0) * sw;
-  const double q2      = -0.45 + 0.5 * sw;
-  const double phi_r   = -0.10 + PI/4.0 + 0.25 * sw;   // q2+q3+q4
-
-  const double q1d     = (PI/4.0) * w * cw;
-  const double q2d     =  0.5 * w * cw;
-  const double phi_rd  =  0.25 * w * cw;                // phidot = q4dot (q2d+q3d=0)
-
-  const double q1dd    = -(PI/4.0) * w * w * sw;
-  const double q2dd    = -0.5 * w * w * sw;
-  const double phi_rdd = -0.25 * w * w * sw;
-
-  // Trigonometria
-  const double c1  = std::cos(q1);
-  const double s1  = std::sin(q1);
-  const double cq2 = std::cos(q2);
-  const double sq2 = std::sin(q2);
-  const double cp  = std::cos(phi_r);
-  const double sp  = std::sin(phi_r);
-
-  // ── FK: posicion ──────────────────────────────────────────────────────
-  const double r     = x23_*cq2 + z23_*sq2 + l34_*c23 + l4e_*cp;
-  const double z_val = z_base + (-x23_*sq2 + z23_*cq2) - l34_*s23 - l4e_*sp;
-
-  // ── Velocidades: ydot = J(q)*qdot  (q2d+q3d=0 → rdot solo usa q2d, phi_rd) ──
-  const double rdot = (-x23_*sq2 + z23_*cq2)*q2d - l4e_*sp*phi_rd;
-  const double zdot = (-x23_*cq2 - z23_*sq2)*q2d - l4e_*cp*phi_rd;
-
-  // ── Aceleraciones: yddot = J*qddot + Jdot*qdot ───────────────────────
-  const double rddot = (-x23_*cq2 - z23_*sq2)*q2d*q2d
-                     + (-x23_*sq2 + z23_*cq2)*q2dd
-                     - l4e_*cp*phi_rd*phi_rd
-                     - l4e_*sp*phi_rdd;
-  const double zddot = ( x23_*sq2 - z23_*cq2)*q2d*q2d
-                     + (-x23_*cq2 - z23_*sq2)*q2dd
-                     + l4e_*sp*phi_rd*phi_rd
-                     - l4e_*cp*phi_rdd;
+  const double s1 = std::sin(t);
+  const double c1 = std::cos(t);
+  const double s2 = std::sin(2.0 * t);
+  const double c2 = std::cos(2.0 * t);
+  const double s3 = std::sin(3.0 * t);
+  const double c3 = std::cos(3.0 * t);
+  const double s4 = std::sin(4.0 * t);
+  const double c4 = std::cos(4.0 * t);
 
   CartRef ref;
-  ref.y    << x_base + r*c1,                    r*s1,
-              z_val,                             phi_r;
-  ref.ydot << rdot*c1 - r*s1*q1d,              rdot*s1 + r*c1*q1d,
-              zdot,                              phi_rd;
-  ref.yddot << rddot*c1 - 2.0*rdot*s1*q1d - r*c1*q1d*q1d - r*s1*q1dd,
-               rddot*s1 + 2.0*rdot*c1*q1d - r*s1*q1d*q1d + r*c1*q1dd,
-               zddot,                            phi_rdd;
+  ref.y <<
+      0.172 + 0.032*s1 + 0.027*c2 + 0.003*s3,
+      0.015 + 0.136*s1 - 0.014*c2 + 0.003*s3 - 0.001*c4,
+      0.128 - 0.008*s1 + 0.006*c2,
+      0.685 + 0.250*s1;
+
+  ref.ydot <<
+       0.032*c1 - 0.054*s2 + 0.009*c3,
+       0.136*c1 + 0.028*s2 + 0.009*c3 + 0.004*s4,
+      -0.008*c1 - 0.012*s2,
+       0.250*c1;
+
+  ref.yddot <<
+      -0.032*s1 - 0.108*c2 - 0.027*s3,
+      -0.136*s1 + 0.056*c2 - 0.027*s3 + 0.016*c4,
+       0.008*s1 - 0.024*c2,
+      -0.250*s1;
+
   return ref;
 }
 
@@ -425,30 +373,6 @@ private:
     q_pin.head<NARM>()  = q;
     dq_pin.head<NARM>() = dq;
 
-    // ── FASE 0: PD articular hacia Q_DES_SMC ─────────────────────────────────
-    if (t_ < T_PD) {
-      const Eigen::VectorXd zero_v = Eigen::VectorXd::Zero(model_.nv);
-      const Eigen::Vector4d tau_grav =
-        pinocchio::rnea(model_, data_, q_pin, zero_v, zero_v).head<NARM>();
-      const Eigen::Vector4d e_pd = Q_DES_SMC - q;
-      Eigen::Vector4d tau = tau_grav
-                          + KP_PD_JOINT.asDiagonal() * e_pd
-                          - KD_PD_JOINT.asDiagonal() * dq;
-      tau = tau.cwiseMin(TAU_MAX).cwiseMax(-TAU_MAX);
-
-      std_msgs::msg::Float64MultiArray cmd;
-      cmd.data.assign(tau.data(), tau.data() + NARM);
-      torque_pub_->publish(cmd);
-
-      RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-        "[PD   ] t=%.2fs  |e_q|=%.4f rad  tau=[%.3f %.3f %.3f %.3f] N·m",
-        t_, e_pd.norm(), tau[0], tau[1], tau[2], tau[3]);
-
-      t_ += 0.01;
-      return;
-    }
-    // ─────────────────────────────────────────────────────────────────────────
-
     // 2. Cinematica directa + Jacobiano reducido 4x4
     //    Filas: {vx, vy, vz, dphi/dq}  Columnas: {j1..j4}
     Eigen::MatrixXd J6 = Eigen::MatrixXd::Zero(6, model_.nv);
@@ -499,12 +423,11 @@ private:
         y0_[0], y0_[1], y0_[2], y0_[3]);
     }
 
-    // 6. Referencia segun fase (t_smc = tiempo desde fin de Fase 0)
-    const double t_smc  = t_ - T_PD;
-    const bool in_trans = (t_smc < T_TRANS);
+    // 6. Referencia segun fase
+    const bool in_trans = (t_ < T_TRANS);
     const CartRef ref   = in_trans
-      ? transitionTrajectory(t_smc, y0_, Y_START, T_TRANS)
-      : desiredTrajectory(t_smc - T_TRANS);
+      ? transitionTrajectory(t_, y0_, Y_START, T_TRANS)
+      : desiredTrajectory(t_ - T_TRANS);
 
     // 7. Superficie deslizante cartesiana: s_y = edot_y + Lambda_y * e_y
     const Eigen::Vector4d e_y    = y    - ref.y;
@@ -545,11 +468,11 @@ private:
     const char * phase = in_trans ? "TRANS" : "TRAY ";
     RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
       "[%s] t=%.2fs  |s|=%.4f  |e|=%.4f m  kJ=%.1f  tau=[%.3f %.3f %.3f %.3f] N·m",
-      phase, t_smc, s_y.norm(), e_y.norm(), cond_J,
+      phase, t_, s_y.norm(), e_y.norm(), cond_J,
       tau_sat[0], tau_sat[1], tau_sat[2], tau_sat[3]);
 
-    // 14. Registro CSV
-    if (csv_.is_open()) {
+    // 14. Registro CSV (solo fase SMC, sin transicion quintica)
+    if (!in_trans && csv_.is_open()) {
       csv_ << std::fixed << std::setprecision(6)
            << t_
            << ',' << q[0]           << ',' << q[1]           << ',' << q[2]           << ',' << q[3]
