@@ -5,7 +5,7 @@
 //
 //  Modelo dinamico nominal (Guia Lab 6, Sec. 6.1):
 //    M(q)*ddq + Phi(q,dq) = tau - tau_fric(dq)
-//    tau_fric_i = B_FRIC * dq_i     (B_FRIC = 0.001 N·m·s/rad)
+//    tau_fric   = B_FRIC.cwiseProduct(dq)   (B_FRIC = [0.0230, 0.0194, 0.0229, 0.0158] N·m·s/rad)
 //
 //
 //  Funciones de conmutacion (aplicadas elemento a elemento):
@@ -76,7 +76,8 @@ using namespace std::chrono_literals;
 static constexpr double PI      = M_PI;
 static constexpr int    NARM    = 4;
 static constexpr double TAU_MAX = 1.2;    // [N·m] limite de torque por articulacion
-static constexpr double B_FRIC  = 0.001;  // [N·m·s/rad] friccion viscosa nominal
+static const Eigen::Vector4d B_FRIC =
+  (Eigen::Vector4d() << 0.0230, 0.0194, 0.0229, 0.0158).finished();  // [N·m·s/rad] damping joint1..4 (URDF)
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  [SECCION 3] GANANCIAS SMC — COMPLETAR
@@ -220,7 +221,8 @@ public:
       K_V[0],      K_V[1],      K_V[2],      K_V[3],
       K_S[0],      K_S[1],      K_S[2],      K_S[3]);
     RCLCPP_INFO(this->get_logger(),
-      "B_fric=%.4f N·m·s/rad  (modelo nominal)", B_FRIC);
+      "B_fric=[%.4f %.4f %.4f %.4f] N·m·s/rad  (damping URDF)",
+      B_FRIC[0], B_FRIC[1], B_FRIC[2], B_FRIC[3]);
     if (t_sim_ > 0.0) {
       RCLCPP_INFO(this->get_logger(), "t_sim = %.1f s", t_sim_);
     } else {
@@ -321,7 +323,7 @@ private:
     pinocchio::nonLinearEffects(model_, data_, q_pin, dq_pin);
     const Eigen::Vector4d phi_nle = data_.nle.head<NARM>();
 
-    const Eigen::Vector4d tau_fric = B_FRIC * dq;
+    const Eigen::Vector4d tau_fric = B_FRIC.cwiseProduct(dq);
 
     // ─────────────────────────────────────────────────────────────────────────
     //  [SECCION 4] Ley SMC articular — COMPLETAR

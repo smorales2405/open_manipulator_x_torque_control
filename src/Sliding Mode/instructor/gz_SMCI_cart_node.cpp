@@ -34,7 +34,7 @@
 //      J_y * qddot_cmd = sddot_cmd − eta_I
 //      v_s = yddot_d − Lambda*edot − Jdot_y*qdot − K_D*sdot − K_P*s − K_sw*rho(s)
 //      qddot_cmd = J_y^# * v_s
-//      tau   = M(q)*qddot_cmd + Phi(q,qdot) + B_FRIC*qdot
+//      tau   = M(q)*qddot_cmd + Phi(q,qdot) + B_FRIC.cwiseProduct(qdot)
 //      tau_sat = clamp(tau, -TAU_MAX, TAU_MAX)
 //
 //  Pseudo-inversa amortiguada DLS:
@@ -105,7 +105,8 @@ using namespace std::chrono_literals;
 static constexpr double PI      = M_PI;
 static constexpr int    NARM    = 4;
 static constexpr double TAU_MAX = 1.2;    // [N·m]
-static constexpr double B_FRIC  = 0.001;  // [N·m·s/rad]
+static const Eigen::Vector4d B_FRIC =
+  (Eigen::Vector4d() << 0.0230, 0.0194, 0.0229, 0.0158).finished();  // [N·m·s/rad] damping joint1..4 (URDF)
 static constexpr double DT      = 0.01;   // [s] periodo de control 100 Hz
 
 // DLS: valor pequeno = solucion mas exacta; aumentar solo si kappa(J) > 100
@@ -280,8 +281,8 @@ public:
       K_D[0],      K_D[1],      K_D[2],      K_D[3],
       K_sw[0],     K_sw[1],     K_sw[2],     K_sw[3]);
     RCLCPP_INFO(this->get_logger(),
-      "lambda_DLS=%.3f  B_fric=%.4f N·m·s/rad  T_trans=%.1f s",
-      LAMBDA_DLS, B_FRIC, T_TRANS);
+      "lambda_DLS=%.3f  B_fric=[%.4f %.4f %.4f %.4f] N·m·s/rad  T_trans=%.1f s",
+      LAMBDA_DLS, B_FRIC[0], B_FRIC[1], B_FRIC[2], B_FRIC[3], T_TRANS);
     if (t_sim_ > 0.0) {
       RCLCPP_INFO(this->get_logger(), "t_sim = %.1f s", t_sim_);
     }
@@ -405,7 +406,7 @@ private:
     pinocchio::nonLinearEffects(model_, data_, q_pin, dq_pin);
     const Eigen::Matrix4d M4   = data_.M.topLeftCorner<NARM, NARM>();
     const Eigen::Vector4d nle4 = data_.nle.head<NARM>();
-    const Eigen::Vector4d tau_fric = B_FRIC * dq;
+    const Eigen::Vector4d tau_fric = B_FRIC.cwiseProduct(dq);
 
     // 5. Pose cartesiana actual + captura de condicion inicial
     const Eigen::Vector4d y {p_ee[0], p_ee[1], p_ee[2], phi_ee};

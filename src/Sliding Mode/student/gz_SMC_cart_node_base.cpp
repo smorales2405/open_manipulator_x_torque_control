@@ -87,7 +87,8 @@ using namespace std::chrono_literals;
 static constexpr double PI      = M_PI;
 static constexpr int    NARM    = 4;
 static constexpr double TAU_MAX = 1.2;    // [N·m] limite de torque por articulacion
-static constexpr double B_FRIC  = 0.001;  // [N·m·s/rad] friccion viscosa nominal
+static const Eigen::Vector4d B_FRIC =
+  (Eigen::Vector4d() << 0.0230, 0.0194, 0.0229, 0.0158).finished();  // [N·m·s/rad] damping joint1..4 (URDF)
 // Amortiguamiento DLS (no modificar; aumentar solo si kappa(J) > 100)
 static constexpr double LAMBDA_DLS    = 0.01;
 static constexpr double LAMBDA_DLS_SQ = LAMBDA_DLS * LAMBDA_DLS;
@@ -283,8 +284,8 @@ public:
       K_V[0],      K_V[1],      K_V[2],      K_V[3],
       K_S[0],      K_S[1],      K_S[2],      K_S[3]);
     RCLCPP_INFO(this->get_logger(),
-      "lambda_DLS=%.3f  B_fric=%.4f N·m·s/rad  T_trans=%.1f s",
-      LAMBDA_DLS, B_FRIC, T_TRANS);
+      "lambda_DLS=%.3f  B_fric=[%.4f %.4f %.4f %.4f] N·m·s/rad  T_trans=%.1f s",
+      LAMBDA_DLS, B_FRIC[0], B_FRIC[1], B_FRIC[2], B_FRIC[3], T_TRANS);
     RCLCPP_INFO(this->get_logger(),
       "Y_start=[%.3f %.3f %.3f %.3f]",
       Y_START[0], Y_START[1], Y_START[2], Y_START[3]);
@@ -415,7 +416,7 @@ private:
     pinocchio::nonLinearEffects(model_, data_, q_pin, dq_pin);
     const Eigen::Matrix4d M4   = data_.M.topLeftCorner<NARM, NARM>();
     const Eigen::Vector4d nle4 = data_.nle.head<NARM>();
-    const Eigen::Vector4d tau_fric = B_FRIC * dq;
+    const Eigen::Vector4d tau_fric = B_FRIC.cwiseProduct(dq);
 
     // 5. Pose cartesiana actual + captura de condicion inicial
     const Eigen::Vector4d y {p_ee[0], p_ee[1], p_ee[2], phi_ee};
