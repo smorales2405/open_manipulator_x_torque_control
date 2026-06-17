@@ -53,3 +53,19 @@ obstacle_pose: [0.1125, 0.0, 0.0, 0.0, 0.0, 1.5708]
 
 mass_inertia_scale: 1.0
 damping_scale: 1.0
+
+# ─── Carga en el efector final ───────────────────────────────────────────────
+#
+# spawn_load  : true  → cilindro dorado fijo en end_effector_link (visual + colision + masa)
+#               false → sin carga, no afecta la simulacion (comportamiento por defecto)
+#
+# load_radius   : radio del cilindro [m]   — eje del cilindro a lo largo del eje Y del efector
+# load_height   : altura del cilindro [m]
+# load_mass     : masa del cilindro [kg]
+# load_x_offset : desplazamiento del centro del cilindro en el eje X del efector [m]
+
+spawn_load:    true
+load_radius:   0.03     # [m]
+load_height:   0.025    # [m]
+load_mass:     0.100    # [kg]
+load_x_offset: 0.0      # [m]

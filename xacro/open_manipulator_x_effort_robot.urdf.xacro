@@ -21,6 +21,13 @@
   <xacro:arg name="mass_inertia_scale" default="1.0" />
   <xacro:arg name="damping_scale"      default="1.0" />
 
+  <!-- Carga cilindrica en el efector final: configurables desde sim_init_config.yaml -->
+  <xacro:arg name="spawn_load"    default="false" />
+  <xacro:arg name="load_radius"   default="0.05"  />   <!-- radio         [m] -->
+  <xacro:arg name="load_height"   default="0.02"  />   <!-- altura        [m] -->
+  <xacro:arg name="load_mass"     default="0.1"   />   <!-- masa          [kg] -->
+  <xacro:arg name="load_x_offset" default="0.0"   />   <!-- offset en X   [m] -->
+
   <!-- Recursos graficos: colores Rviz y materiales Gazebo del paquete original -->
   <xacro:include filename="$(find open_manipulator_x_description)/gazebo/materials.xacro" />
 
@@ -155,5 +162,64 @@
     <parent link="world"/>
     <child link="$(arg prefix)link1"/>
   </joint>
+
+  <!-- ── Carga cilindrica en el efector final ──────────────────────────────────
+       Cilindro solido cuyo eje coincide con el eje Y de end_effector_link.
+       Las caras circulares apuntan en +Y / -Y (rpy pi/2 0 0 alinea eje Z→Y).
+       Inercia de cilindro solido con eje a lo largo de Y:
+         Ixx = Izz = m*(3r^2 + h^2)/12
+         Iyy = m*r^2/2
+       Solo se instancia si spawn_load:=true; en caso contrario no existe en
+       el arbol cinematico y no afecta la simulacion. -->
+  <xacro:if value="$(arg spawn_load)">
+    <xacro:property name="_load_r" value="$(arg load_radius)"/>
+    <xacro:property name="_load_h" value="$(arg load_height)"/>
+    <xacro:property name="_load_m" value="$(arg load_mass)"/>
+    <xacro:property name="_load_x" value="$(arg load_x_offset)"/>
+
+    <link name="$(arg prefix)load_link">
+      <visual>
+        <origin xyz="0 0 0" rpy="${pi/2} 0 0"/>
+        <geometry>
+          <cylinder radius="${_load_r}" length="${_load_h}"/>
+        </geometry>
+        <material name="gold">
+          <color rgba="1.0 0.843 0.0 1.0"/>
+        </material>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="${pi/2} 0 0"/>
+        <geometry>
+          <cylinder radius="${_load_r}" length="${_load_h}"/>
+        </geometry>
+      </collision>
+      <inertial>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <mass value="${_load_m}"/>
+        <inertia
+          ixx="${_load_m * (3*_load_r*_load_r + _load_h*_load_h) / 12}"
+          iyy="${_load_m * _load_r * _load_r / 2}"
+          izz="${_load_m * (3*_load_r*_load_r + _load_h*_load_h) / 12}"
+          ixy="0" ixz="0" iyz="0"/>
+      </inertial>
+    </link>
+
+    <joint name="$(arg prefix)load_joint" type="fixed">
+      <parent link="$(arg prefix)end_effector_link"/>
+      <child  link="$(arg prefix)load_link"/>
+      <origin xyz="${_load_x} 0 0" rpy="0 0 0"/>
+    </joint>
+
+    <!-- Color dorado Ogre2 para Gazebo Fortress -->
+    <gazebo reference="$(arg prefix)load_link">
+      <visual>
+        <material>
+          <ambient>1.0 0.843 0.0 1</ambient>
+          <diffuse>1.0 0.843 0.0 1</diffuse>
+          <specular>0.5 0.420 0.0 1</specular>
+        </material>
+      </visual>
+    </gazebo>
+  </xacro:if>
 
 </robot>
