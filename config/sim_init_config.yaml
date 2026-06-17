@@ -10,15 +10,12 @@
 #
 # ─── Configuraciones de referencia ───────────────────────────────────────────
 #   Equilibrio gravedad : use_fixed_init: false   (q_init ignorado)
-#   x0 Lab 5 Act. 1    : use_fixed_init: true    q_init: [1.5708, 0.0, 0.5236, 1.0472]
 #   Home (todos cero)  : use_fixed_init: true    q_init: [0.0, 0.0, 0.0, 0.0]
 
 use_fixed_init: false
-#q_init: [0.0, 0.0, 0.0, 0.0]           # x0 = [0, 0, 0, 0]
-#q_init: [1.5708, 0.0, 0.5236, 1.0472]   # x0 = [pi/2, 0, pi/6, pi/3]
-q_init: [0.0, -0.5, 0.3, 0.785]         # Lab6 Act1 SMC articular: q_d(0) = [0,-0.5,0.3,pi/4]
-#q_init: [0.0, -0.785, 0.0, 0.0]          # Lab6 Act2 SMC cart: eq. gravedad→[0,-1.3,1.4,0.69]→phi≈+0.78
-#q_init: [0.0, -0.50, 0.25, 0.85]
+#q_init: [0.0, 0.0, 0.0, 0.0]             # x0 = [0, 0, 0, 0]
+#q_init: [1.5708, 0.0, 0.5236, 1.0472]    # x0 = [pi/2, 0, pi/6, pi/3]
+q_init: [0.0, -0.5, 0.3, 0.785]           # Lab6 Act1 SMC articular: q_d(0) = [0,-0.5,0.3,pi/4]
 
 # ─── Obstáculo MDF ───────────────────────────────────────────────────────────
 #
@@ -58,7 +55,7 @@ obstacle_pose: [0.1125, 0.0, 0.0, 0.0, 0.0, 1.5708]
 
 mass_inertia_scale: 1.0
 damping_scale: 1.0
-friction_scale: 1.0
+friction_scale: 0.0
 
 # ─── Carga en el efector final ───────────────────────────────────────────────
 #
@@ -70,7 +67,7 @@ friction_scale: 1.0
 # load_mass     : masa del cilindro [kg]
 # load_x_offset : desplazamiento del centro del cilindro en el eje X del efector [m]
 
-spawn_load:    true
+spawn_load:    false
 load_radius:   0.03     # [m]
 load_height:   0.04    # [m]
 load_mass:     0.100    # [kg]
