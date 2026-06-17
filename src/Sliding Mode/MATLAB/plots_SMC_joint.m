@@ -35,7 +35,7 @@ pkg_dir = '/home/utec/open_manx_ws/src/open_manipulator_x_torque_control';
 switch mode
     case 'sim'
         csv_file   = fullfile(pkg_dir, 'data', 'lab6', 'sim', 'act1', ...
-                              sprintf('gz_smc_art_%s_%d.csv', rho_func, test_num));
+                              sprintf('gz_smc_joint_%s_%d.csv', rho_func, test_num));
         output_dir = fullfile(pkg_dir, 'plots', 'lab6', 'sim', 'act1', ...
                               sprintf('test%d_%s', test_num, rho_func));
         mode_label = 'Simulacion';

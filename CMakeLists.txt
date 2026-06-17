@@ -217,15 +217,15 @@ target_compile_definitions(hw_sinusoidal_torque_node PRIVATE
   "PACKAGE_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\""
   "PACKAGE_CONFIG_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/config\"")
 
-# ── gz_smc_art_node ──────────────────────────────────────────────────────────
-add_executable(gz_smc_art_node "${SMC_INSTR}/gz_SMC_art_node.cpp")
-ament_target_dependencies(gz_smc_art_node rclcpp std_msgs sensor_msgs)
-target_link_libraries(gz_smc_art_node
+# ── gz_smc_joint_node ──────────────────────────────────────────────────────────
+add_executable(gz_smc_joint_node "${SMC_INSTR}/gz_SMC_joint_node.cpp")
+ament_target_dependencies(gz_smc_joint_node rclcpp std_msgs sensor_msgs)
+target_link_libraries(gz_smc_joint_node
   pinocchio::pinocchio_default
   pinocchio::pinocchio_parsers
   Eigen3::Eigen)
-target_compile_features(gz_smc_art_node PUBLIC cxx_std_17)
-target_compile_definitions(gz_smc_art_node PRIVATE
+target_compile_features(gz_smc_joint_node PUBLIC cxx_std_17)
+target_compile_definitions(gz_smc_joint_node PRIVATE
   "PACKAGE_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\""
   "PACKAGE_URDF_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/urdf\""
   COAL_DISABLE_HPP_FCL_WARNINGS)
@@ -243,15 +243,15 @@ target_compile_definitions(gz_smc_cart_node PRIVATE
   "PACKAGE_URDF_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/urdf\""
   COAL_DISABLE_HPP_FCL_WARNINGS)
 
-# ── gz_smc_art_node_base (estudiantes) ───────────────────────────────────────
-add_executable(gz_smc_art_node_base "${SMC_STUD}/gz_SMC_art_node_base.cpp")
-ament_target_dependencies(gz_smc_art_node_base rclcpp std_msgs sensor_msgs)
-target_link_libraries(gz_smc_art_node_base
+# ── gz_smc_joint_node_base (estudiantes) ───────────────────────────────────────
+add_executable(gz_smc_joint_node_base "${SMC_STUD}/gz_SMC_joint_node_base.cpp")
+ament_target_dependencies(gz_smc_joint_node_base rclcpp std_msgs sensor_msgs)
+target_link_libraries(gz_smc_joint_node_base
   pinocchio::pinocchio_default
   pinocchio::pinocchio_parsers
   Eigen3::Eigen)
-target_compile_features(gz_smc_art_node_base PUBLIC cxx_std_17)
-target_compile_definitions(gz_smc_art_node_base PRIVATE
+target_compile_features(gz_smc_joint_node_base PUBLIC cxx_std_17)
+target_compile_definitions(gz_smc_joint_node_base PRIVATE
   "PACKAGE_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\""
   "PACKAGE_URDF_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/urdf\""
   COAL_DISABLE_HPP_FCL_WARNINGS)
@@ -322,8 +322,8 @@ install(TARGETS
     hw_sinusoidal_torque_node
     hw_torque_probe_node
     hw_identify_node
-    gz_smc_art_node gz_smc_cart_node gz_SMCI_cart_node
-    gz_smc_art_node_base gz_smc_cart_node_base
+    gz_smc_joint_node gz_smc_cart_node gz_SMCI_cart_node
+    gz_smc_joint_node_base gz_smc_cart_node_base
   DESTINATION lib/${PROJECT_NAME})
 
 install(DIRECTORY xacro config launch scripts data urdf meshes worlds

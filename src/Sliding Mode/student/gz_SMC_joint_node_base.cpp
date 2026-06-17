@@ -1,5 +1,5 @@
 // ============================================================================
-//  gz_SMC_art_node_base.cpp
+//  gz_SMC_joint_node_base.cpp
 //  Control por Modo Deslizante en espacio articular — OpenMANIPULATOR-X (Gazebo)
 //  [Archivo base para estudiantes — Lab 6, Actividad 1]
 //
@@ -21,7 +21,7 @@
 //    rho_func  [string]  "sign"  — funcion de conmutacion: "sign" | "sat"
 //    phi       [double]  0.05    — capa limite para sat(s/phi)  [rad/s]
 //
-//  CSV generado: data/lab6/sim/act1/gz_smc_art_<rho_func>_<test_num>.csv
+//  CSV generado: data/lab6/sim/act1/gz_smc_joint_<rho_func>_<test_num>.csv
 //  Columnas: t, q1..q4, dq1..dq4, q1_des..q4_des, dq1_des..dq4_des,
 //            s1..s4, tau1..tau4, sat1..sat4
 //
@@ -30,10 +30,10 @@
 //
 //  Ejemplos de uso:
 //
-//    ros2 run open_manipulator_x_torque_control gz_smc_art_node
+//    ros2 run open_manipulator_x_torque_control gz_smc_joint_node
 //      --ros-args -p rho_func:=sign -p test_num:=1 -p t_sim:=30.0
 //
-//    ros2 run open_manipulator_x_torque_control gz_smc_art_node
+//    ros2 run open_manipulator_x_torque_control gz_smc_joint_node
 //      --ros-args -p rho_func:=sat -p phi:=0.05 -p test_num:=2 -p t_sim:=30.0
 //
 //  ──────────────────────────────────────────────────────────────────────────
@@ -176,7 +176,7 @@ class SMCJointSimNode : public rclcpp::Node
 {
 public:
   SMCJointSimNode()
-  : Node("gz_smc_art_node"), t_(0.0)
+  : Node("gz_smc_joint_node"), t_(0.0)
   {
     // ── Parametros ────────────────────────────────────────────────────────────
     this->declare_parameter<int>        ("test_num", 1);
@@ -258,7 +258,7 @@ private:
     std::filesystem::create_directories(
       std::string(PACKAGE_DATA_DIR) + "/lab6/sim/act1");
 
-    csv_path_ = std::string(PACKAGE_DATA_DIR) + "/lab6/sim/act1/gz_smc_art_"
+    csv_path_ = std::string(PACKAGE_DATA_DIR) + "/lab6/sim/act1/gz_smc_joint_"
                 + rho_str_ + "_" + std::to_string(test_num) + ".csv";
     csv_.open(csv_path_);
     if (!csv_.is_open()) {
@@ -418,7 +418,7 @@ int main(int argc, char * argv[])
   try {
     rclcpp::spin(std::make_shared<SMCJointSimNode>());
   } catch (const std::exception & e) {
-    RCLCPP_FATAL(rclcpp::get_logger("gz_smc_art_node"), "Excepcion: %s", e.what());
+    RCLCPP_FATAL(rclcpp::get_logger("gz_smc_joint_node"), "Excepcion: %s", e.what());
     rclcpp::shutdown();
     return 1;
   }
