@@ -59,8 +59,8 @@ def _load_init_config():
     spawn_obs          = cfg.get('spawn_obstacle', False)
     obs_pose           = cfg.get('obstacle_pose', [0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
     mass_inertia_scale = cfg.get('mass_inertia_scale', 1.0)
-    friction_scale     = cfg.get('friction_scale', 1.0)
-    return use_fixed, q_init, spawn_obs, obs_pose, mass_inertia_scale, friction_scale
+    damping_scale      = cfg.get('damping_scale', 1.0)
+    return use_fixed, q_init, spawn_obs, obs_pose, mass_inertia_scale, damping_scale
 
 
 def generate_launch_description():
@@ -69,7 +69,7 @@ def generate_launch_description():
     start_rviz = LaunchConfiguration('start_rviz')
 
     # Leer configuracion de posicion inicial, obstáculo y escalas de dinamica desde YAML
-    use_fixed_init, q_init, spawn_obs, obs_pose, mass_inertia_scale, friction_scale = _load_init_config()
+    use_fixed_init, q_init, spawn_obs, obs_pose, mass_inertia_scale, damping_scale = _load_init_config()
 
     world = PathJoinSubstitution([
         FindPackageShare('open_manipulator_x_torque_control'),
@@ -102,7 +102,7 @@ def generate_launch_description():
             ' q3_init:=',            str(q_init[2]),
             ' q4_init:=',            str(q_init[3]),
             ' mass_inertia_scale:=', str(mass_inertia_scale),
-            ' friction_scale:=',     str(friction_scale),
+            ' damping_scale:=',      str(damping_scale),
         ]),
         value_type=str,
     )

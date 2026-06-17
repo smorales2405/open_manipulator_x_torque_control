@@ -41,15 +41,15 @@ obstacle_pose: [0.1125, 0.0, 0.0, 0.0, 0.0, 1.5708]
 #                      1.0 = valores nominales calibrados.
 #                      >1  = robot mas pesado/lento  |  <1 = mas ligero.
 #
-# friction_scale     : factor multiplicativo aplicado al parametro friction
-#                      de joint1..joint4 (damping no se modifica).
-#                      1.0 = friccion nominal identificada.
-#                      0.0 = sin friccion  |  >1 = mayor friccion.
+# damping_scale      : factor multiplicativo aplicado al parametro damping
+#                      de joint1..joint4 (friction permanece fijo).
+#                      1.0 = damping nominal identificado.
+#                      0.0 = sin damping  |  >1 = mayor amortiguamiento.
 #
 # Rango tipico de uso:
-#   Identificacion sin friccion : friction_scale: 0.0
-#   Modelo nominal              : mass_inertia_scale: 1.0  friction_scale: 1.0
+#   Sin amortiguamiento viscoso : damping_scale: 0.0
+#   Modelo nominal              : mass_inertia_scale: 1.0  damping_scale: 1.0
 #   Perturbacion de masa        : mass_inertia_scale: 1.5
 
 mass_inertia_scale: 1.0
-friction_scale: 1.0
+damping_scale: 1.0
