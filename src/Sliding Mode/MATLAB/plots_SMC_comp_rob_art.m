@@ -11,7 +11,7 @@
 %   Figura 3 — Torques de control                     tau1..tau4
 %
 %   Metricas comparativas reportadas en consola por articulacion:
-%     e_max [rad]  |  e_RMS [rad]  |  max|tau| [N·m]  |  Sat [%]  |  TV(tau)
+%     e_max [rad]  |  e_RMS [rad]  |  max|tau| [N·m]  |  tau_RMS [N·m]  |  Sat [%]  |  TV(tau)
 %
 %   Solo se usa rho = 'sat'.
 %
@@ -95,17 +95,18 @@ fprintf(' Robustez SMC Articular — %s  [%s]\n', rob_disp, mode_label);
 fprintf('%s\n', repmat('═', 1, 82));
 for k = 1:2
     fprintf('\n  Caso: %s  (test=%d)\n', case_labels{k}, test_nums(k));
-    fprintf('  %-6s  %-12s  %-12s  %-14s  %-8s  %-10s\n', ...
-            'Joint','e_max[rad]','e_RMS[rad]','max|tau|[N·m]','Sat[%]','TV(tau)');
-    fprintf('  %s\n', repmat('-', 1, 68));
+    fprintf('  %-6s  %-12s  %-12s  %-14s  %-14s  %-8s  %-10s\n', ...
+            'Joint','e_max[rad]','e_RMS[rad]','max|tau|[N·m]','tau_RMS[N·m]','Sat[%]','TV(tau)');
+    fprintf('  %s\n', repmat('-', 1, 84));
     for i = 1:4
         e_max_i   = max(abs(data(k).e_q(:,i)));
         e_rms_i   = sqrt(mean(data(k).e_q(:,i).^2));
         tau_max_i = max(abs(data(k).tau(:,i)));
+        tau_rms_i = sqrt(mean(data(k).tau(:,i).^2));
         sat_pct_i = 100 * mean(data(k).sat(:,i));
         tv_i      = sum(abs(diff(data(k).tau(:,i))));
-        fprintf('  q%-5d  %12.5f  %12.5f  %14.4f  %8.2f  %10.4f\n', ...
-                i, e_max_i, e_rms_i, tau_max_i, sat_pct_i, tv_i);
+        fprintf('  q%-5d  %12.5f  %12.5f  %14.4f  %14.4f  %8.2f  %10.4f\n', ...
+                i, e_max_i, e_rms_i, tau_max_i, tau_rms_i, sat_pct_i, tv_i);
     end
 end
 fprintf('%s\n\n', repmat('═', 1, 82));

@@ -11,7 +11,7 @@
 %
 %   Metricas reportadas en consola (Tabla 5 de la guia):
 %     Por salida cartesiana: e_max [m o rad]  |  e_RMS [m o rad]
-%     Por articulacion:      max|tau| [N·m]   |  Sat [%]  |  TV(tau)
+%     Por articulacion:      max|tau| [N·m]   |  tau_RMS [N·m]  |  Sat [%]  |  TV(tau)
 %     Global:                max kappa(J_y)
 %
 % Configurar la seccion "Configuracion" y ejecutar.
@@ -105,13 +105,14 @@ for i = 1:4
 end
 
 fprintf('\n  Metricas de torque articular:\n');
-fprintf('  %-6s  %-14s  %-10s  %-10s\n', 'Joint', 'max|tau|[N·m]', 'Sat[%]', 'TV(tau)');
-fprintf('  %s\n', repmat('-', 1, 46));
+fprintf('  %-6s  %-14s  %-14s  %-10s  %-10s\n', 'Joint', 'max|tau|[N·m]', 'tau_RMS[N·m]', 'Sat[%]', 'TV(tau)');
+fprintf('  %s\n', repmat('-', 1, 62));
 for i = 1:4
     tau_max_i = max(abs(tau(:,i)));
+    tau_rms_i = sqrt(mean(tau(:,i).^2));
     sat_pct_i = 100 * mean(sat(:,i));
     tv_i      = sum(abs(diff(tau(:,i))));
-    fprintf('  tau%-3d  %14.4f  %10.2f  %10.4f\n', i, tau_max_i, sat_pct_i, tv_i);
+    fprintf('  tau%-3d  %14.4f  %14.4f  %10.2f  %10.4f\n', i, tau_max_i, tau_rms_i, sat_pct_i, tv_i);
 end
 
 fprintf('\n  Condicionamiento del Jacobiano:\n');

@@ -9,7 +9,7 @@
 %   Figura 5 — Torques de control                     tau1..tau4
 %
 %   Metricas reportadas en consola (Tabla 3 de la guia, por articulacion):
-%     e_q,max [rad]  |  e_q,RMS [rad]  |  max|tau| [N·m]  |  Sat [%]  |  TV(tau)
+%     e_q,max [rad]  |  e_q,RMS [rad]  |  max|tau| [N·m]  |  tau_RMS [N·m]  |  Sat [%]  |  TV(tau)
 %
 % Configurar la seccion "Configuracion" y ejecutar.
 
@@ -73,23 +73,24 @@ sat    = [T.sat1,    T.sat2,    T.sat3,    T.sat4   ];   % 0/1 por muestra
 e_q    = q - q_des;
 
 %% ── Metricas (Tabla 3 de la guia) ───────────────────────────────────────────
-fprintf('\n%s\n', repmat('═', 1, 72));
+fprintf('\n%s\n', repmat('═', 1, 88));
 fprintf(' Metricas SMC articular  [%s | rho=%s | test=%d]\n', ...
         mode_label, rho_func, test_num);
-fprintf('%s\n', repmat('═', 1, 72));
-fprintf('%-6s  %-12s  %-12s  %-14s  %-10s  %-10s\n', ...
-        'Joint', 'e_max[rad]', 'e_RMS[rad]', 'max|tau|[N·m]', 'Sat[%]', 'TV(tau)');
-fprintf('%s\n', repmat('-', 1, 72));
+fprintf('%s\n', repmat('═', 1, 88));
+fprintf('%-6s  %-12s  %-12s  %-14s  %-14s  %-10s  %-10s\n', ...
+        'Joint', 'e_max[rad]', 'e_RMS[rad]', 'max|tau|[N·m]', 'tau_RMS[N·m]', 'Sat[%]', 'TV(tau)');
+fprintf('%s\n', repmat('-', 1, 88));
 for i = 1:4
     e_max_i   = max(abs(e_q(:,i)));
     e_rms_i   = sqrt(mean(e_q(:,i).^2));
     tau_max_i = max(abs(tau(:,i)));
+    tau_rms_i = sqrt(mean(tau(:,i).^2));
     sat_pct_i = 100 * mean(sat(:,i));
     tv_i      = sum(abs(diff(tau(:,i))));
-    fprintf('q%-5d  %12.5f  %12.5f  %14.4f  %10.2f  %10.4f\n', ...
-            i, e_max_i, e_rms_i, tau_max_i, sat_pct_i, tv_i);
+    fprintf('q%-5d  %12.5f  %12.5f  %14.4f  %14.4f  %10.2f  %10.4f\n', ...
+            i, e_max_i, e_rms_i, tau_max_i, tau_rms_i, sat_pct_i, tv_i);
 end
-fprintf('%s\n\n', repmat('═', 1, 72));
+fprintf('%s\n\n', repmat('═', 1, 88));
 
 %% ── Estilo comun ─────────────────────────────────────────────────────────────
 lw         = 1.6;

@@ -12,7 +12,7 @@
 %
 %   Metricas comparativas reportadas en consola:
 %     Por salida cartesiana: e_max [m/rad]  |  e_RMS [m/rad]
-%     Por articulacion:      max|tau| [N·m] |  Sat [%]  |  TV(tau)
+%     Por articulacion:      max|tau| [N·m] |  tau_RMS [N·m]  |  Sat [%]  |  TV(tau)
 %
 %   Solo se usa rho = 'sat'.
 %
@@ -106,13 +106,14 @@ for k = 1:2
         fprintf('  %-12s  %14.6f  %14.6f\n', cartNames{i}, e_max_i, e_rms_i);
     end
     fprintf('  Torques:\n');
-    fprintf('  %-6s  %-14s  %-8s  %-10s\n', 'Joint','max|tau|[N·m]','Sat[%]','TV(tau)');
-    fprintf('  %s\n', repmat('-', 1, 44));
+    fprintf('  %-6s  %-14s  %-14s  %-8s  %-10s\n', 'Joint','max|tau|[N·m]','tau_RMS[N·m]','Sat[%]','TV(tau)');
+    fprintf('  %s\n', repmat('-', 1, 60));
     for i = 1:4
         tau_max_i = max(abs(data(k).tau(:,i)));
+        tau_rms_i = sqrt(mean(data(k).tau(:,i).^2));
         sat_pct_i = 100 * mean(data(k).sat(:,i));
         tv_i      = sum(abs(diff(data(k).tau(:,i))));
-        fprintf('  tau%-3d  %14.4f  %8.2f  %10.4f\n', i, tau_max_i, sat_pct_i, tv_i);
+        fprintf('  tau%-3d  %14.4f  %14.4f  %8.2f  %10.4f\n', i, tau_max_i, tau_rms_i, sat_pct_i, tv_i);
     end
 end
 fprintf('%s\n\n', repmat('═', 1, 86));
