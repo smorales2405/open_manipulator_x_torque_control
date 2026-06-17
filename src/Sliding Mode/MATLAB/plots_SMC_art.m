@@ -19,7 +19,7 @@ clear; clc; close all;
 mode        = 'sim';    % 'sim'  = simulacion Gazebo (gz_SMC_q_node)
                         % 'real' = implementacion hardware (hw_smc_q_node)
 
-rho_func    = 'sign';   % Funcion de conmutacion usada: 'sign' | 'sat' | 'tanh'
+rho_func    = 'sign';   % Funcion de conmutacion usada: 'sign' | 'sat'
 
 test_num    = 1;        % Identificador del ensayo (test_num usado al lanzar el nodo)
 
@@ -104,7 +104,7 @@ jointNames = {'Articulacion 1', 'Articulacion 2', ...
 xlims      = [t(1), t(end)];
 
 % Etiqueta de la funcion de conmutacion para los titulos (texto plano)
-rho_tex = struct('sign', 'sign(s)', 'sat', 'sat(s/phi)', 'tanh', 'tanh(a*s)');
+rho_tex = struct('sign', 'sign(s)', 'sat', 'sat(s/phi)');
 if isfield(rho_tex, rho_func)
     rho_label = rho_tex.(rho_func);
 else

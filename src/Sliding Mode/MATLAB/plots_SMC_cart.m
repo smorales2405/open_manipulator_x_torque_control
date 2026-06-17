@@ -22,7 +22,7 @@ clear; clc; close all;
 mode        = 'sim';    % 'sim'  = simulacion Gazebo (gz_smc_cart_node)
                         % 'real' = implementacion hardware (hw_smc_cart_node)
 
-rho_func    = 'sign';   % Funcion de conmutacion: 'sign' | 'sat' | 'tanh'
+rho_func    = 'sign';   % Funcion de conmutacion: 'sign' | 'sat'
 
 test_num    = 1;        % Identificador del ensayo (test_num usado al lanzar el nodo)
 
@@ -135,7 +135,7 @@ ylabels_cart = {'$x$ [m]', '$y$ [m]', '$z$ [m]', '$\phi$ [rad]'};
 titles_cart  = {'Posicion $x$', 'Posicion $y$', 'Posicion $z$', 'Orientacion $\phi$'};
 
 % Etiqueta de la funcion de conmutacion para los titulos
-rho_tex = struct('sign', 'sign(s)', 'sat', 'sat(s/\phi)', 'tanh', 'tanh(\alpha s)');
+rho_tex = struct('sign', 'sign(s)', 'sat', 'sat(s/\phi)');
 if isfield(rho_tex, rho_func)
     rho_label = rho_tex.(rho_func);
 else

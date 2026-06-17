@@ -1,5 +1,5 @@
 %% plots_SMC_comp_cart.m
-% Graficas COMPARATIVAS — Control SMC Cartesiano (sign vs sat vs tanh)
+% Graficas COMPARATIVAS — Control SMC Cartesiano (sign vs sat)
 % OpenMANIPULATOR-X, Laboratorio 6 — Actividad 2
 %
 %   Figura 1 — Seguimiento cartesiano: x, y, z, phi  vs referencia
@@ -20,7 +20,6 @@ mode = 'sim';   % 'sim' = simulacion Gazebo | 'real' = hardware
 % test_num independiente por funcion de conmutacion
 test_num_sign = 1;
 test_num_sat  = 1;
-test_num_tanh = 1;
 
 EXPORT_FIGS = false;    % true = guardar PNG (300 dpi) y EPS vectorial (600 dpi)
 
@@ -45,11 +44,11 @@ switch mode
 end
 
 %% ── Carga de datos ───────────────────────────────────────────────────────────
-rho_names = {'sign', 'sat', 'tanh'};
-test_nums = [test_num_sign, test_num_sat, test_num_tanh];
+rho_names = {'sign', 'sat'};
+test_nums = [test_num_sign, test_num_sat];
 
 data = struct();
-for k = 1:3
+for k = 1:2
     rho  = rho_names{k};
     tnum = test_nums(k);
     fpath = fullfile(data_dir, sprintf('%s_%s_%d.csv', prefix, rho, tnum));
@@ -75,7 +74,7 @@ cartNames = {'x [m]', 'y [m]', 'z [m]', 'phi [rad]'};
 fprintf('\n%s\n', repmat('═', 1, 86));
 fprintf(' Metricas comparativas SMC Cartesiano  [%s]\n', mode_label);
 fprintf('%s\n', repmat('═', 1, 86));
-for k = 1:3
+for k = 1:2
     fprintf('\n  rho = %s  (test=%d)\n', rho_names{k}, test_nums(k));
     fprintf('  %-12s  %-14s  %-14s\n', 'Salida', 'e_max[m/rad]', 'e_RMS[m/rad]');
     fprintf('  %s\n', repmat('-', 1, 44));
@@ -102,11 +101,10 @@ fs       = 11;
 fs_title = 14;
 
 colors = [0.0000 0.4470 0.7410;   % azul    — sign
-          0.8500 0.3250 0.0980;   % naranja  — sat
-          0.4660 0.6740 0.1880];  % verde    — tanh
+          0.8500 0.3250 0.0980];  % naranja  — sat
 
-lstyles  = {'-', '--', ':'};
-rho_disp = {'sign(s)', 'sat(s/\phi)', 'tanh(\alpha s)'};
+lstyles  = {'-', '--'};
+rho_disp = {'sign(s)', 'sat(s/\phi)'};
 
 color_ref    = [0.4 0.4 0.4];   % gris — referencia
 ylabels_cart = {'$x$ [m]', '$y$ [m]', '$z$ [m]', '$\phi$ [rad]'};
@@ -114,19 +112,19 @@ titles_cart  = {'$x$', '$y$', '$z$', '$\phi$'};
 ylabels_err  = {'$e_x$ [m]', '$e_y$ [m]', '$e_z$ [m]', '$e_\phi$ [rad]'};
 ylabels_s    = {'$s_x$ [m/s]', '$s_y$ [m/s]', '$s_z$ [m/s]', '$s_\phi$ [rad/s]'};
 
-sgtitle_str = sprintf('SMC Cartesiano — Comparacion [%s]  sign | sat | tanh', mode_label);
+sgtitle_str = sprintf('SMC Cartesiano — Comparacion [%s]  sign | sat', mode_label);
 
 %% ── Figura 1 — Seguimiento cartesiano ───────────────────────────────────────
 figure(1); clf;
 set(gcf, 'Color', 'w', 'Position', [50 620 1100 580]);
 tl1 = tiledlayout(2, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
 
-h_leg1 = gobjects(1, 4);
+h_leg1 = gobjects(1, 3);
 for i = 1:4
     nexttile(tl1);
     hr = plot(data(1).t, data(1).y_des(:,i), '-', ...
               'Color', color_ref, 'LineWidth', 1.2); hold on;
-    for k = 1:3
+    for k = 1:2
         hk = plot(data(k).t, data(k).y(:,i), lstyles{k}, ...
                   'Color', colors(k,:), 'LineWidth', lw);
         if i == 1; h_leg1(k+1) = hk; end
@@ -150,11 +148,11 @@ figure(2); clf;
 set(gcf, 'Color', 'w', 'Position', [70 390 1100 580]);
 tl2 = tiledlayout(2, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
 
-h_leg2 = gobjects(1, 3);
+h_leg2 = gobjects(1, 2);
 for i = 1:4
     nexttile(tl2);
     yline(0, ':', 'LineWidth', 0.9, 'Color', [0.5 0.5 0.5]); hold on;
-    for k = 1:3
+    for k = 1:2
         hk = plot(data(k).t, data(k).e_y(:,i), lstyles{k}, ...
                   'Color', colors(k,:), 'LineWidth', lw);
         if i == 1; h_leg2(k) = hk; end
@@ -178,11 +176,11 @@ figure(3); clf;
 set(gcf, 'Color', 'w', 'Position', [90 160 1100 580]);
 tl3 = tiledlayout(2, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
 
-h_leg3 = gobjects(1, 3);
+h_leg3 = gobjects(1, 2);
 for i = 1:4
     nexttile(tl3);
     yline(0, ':', 'LineWidth', 0.9, 'Color', [0.5 0.5 0.5]); hold on;
-    for k = 1:3
+    for k = 1:2
         hk = plot(data(k).t, data(k).s_y(:,i), lstyles{k}, ...
                   'Color', colors(k,:), 'LineWidth', lw);
         if i == 1; h_leg3(k) = hk; end
@@ -206,14 +204,14 @@ figure(4); clf;
 set(gcf, 'Color', 'w', 'Position', [110 -80 1100 580]);
 tl4 = tiledlayout(2, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
 
-h_leg4 = gobjects(1, 3);
+h_leg4 = gobjects(1, 2);
 jointNames = {'Articulacion 1','Articulacion 2','Articulacion 3','Articulacion 4'};
 for i = 1:4
     nexttile(tl4);
     yline( 0,       ':',   'LineWidth', 0.9, 'Color', [0.5 0.5 0.5]); hold on;
     yline( TAU_MAX, '--k', 'LineWidth', 1.0, 'Label', sprintf('+%.1f N·m', TAU_MAX));
     yline(-TAU_MAX, '--k', 'LineWidth', 1.0, 'Label', sprintf('\x2212%.1f N·m', TAU_MAX));
-    for k = 1:3
+    for k = 1:2
         hk = plot(data(k).t, data(k).tau(:,i), lstyles{k}, ...
                   'Color', colors(k,:), 'LineWidth', lw);
         if i == 1; h_leg4(k) = hk; end
