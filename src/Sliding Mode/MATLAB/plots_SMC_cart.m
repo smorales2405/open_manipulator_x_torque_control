@@ -6,7 +6,8 @@
 %   Figura 2 — Errores de seguimiento cartesiano e_x, e_y, e_z, e_phi
 %   Figura 3 — Seguimiento de velocidades cartesianas: xdot, ydot, zdot, phidot
 %   Figura 4 — Posiciones articulares q1..q4
-%   Figura 5 — Torques de control tau1..tau4
+%   Figura 5 — Superficies deslizantes s1..s4
+%   Figura 6 — Torques de control tau1..tau4
 %
 %   Metricas reportadas en consola (Tabla 5 de la guia):
 %     Por salida cartesiana: e_max [m o rad]  |  e_RMS [m o rad]
@@ -23,7 +24,7 @@ mode        = 'sim';    % 'sim'  = simulacion Gazebo (gz_smc_cart_node)
 
 rho_func    = 'sign';   % Funcion de conmutacion: 'sign' | 'sat' | 'tanh'
 
-test_num    = 21;        % Identificador del ensayo (test_num usado al lanzar el nodo)
+test_num    = 1;        % Identificador del ensayo (test_num usado al lanzar el nodo)
 
 EXPORT_FIGS = false;    % true  = guardar PNG (300 dpi) y EPS vectorial (600 dpi)
                         % false = solo visualizar
@@ -240,13 +241,37 @@ end
 title(tl4, sprintf('SMC Cartesiano — Posiciones Articulares  %s', sub_label), ...
       'FontSize', fs_title, 'FontWeight', 'bold', 'Interpreter', 'tex');
 
-%% ── Figura 5 — Torques de control tau1..tau4 ────────────────────────────────
+%% ── Figura 5 — Superficies deslizantes s1..s4 ───────────────────────────────
+ylabels_s = {'$s_x$ [m/s]', '$s_y$ [m/s]', '$s_z$ [m/s]', '$s_\phi$ [rad/s]'};
+titles_s  = {'Superficie $s_x$', 'Superficie $s_y$', ...
+             'Superficie $s_z$', 'Superficie $s_\phi$'};
+
 figure(5); clf;
-set(gcf, 'Color', 'w', 'Position', [130 -840 1100 520]);
+set(gcf, 'Color', 'w', 'Position', [130 -680 1100 520]);
 tl5 = tiledlayout(2, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
 
 for i = 1:4
     nexttile(tl5);
+    plot(t, s_y(:,i), '-', 'Color', c_tau(i,:), 'LineWidth', lw); hold on;
+    yline(0, ':', 'LineWidth', 0.9, 'Color', [0.5 0.5 0.5]);
+    xlabel('Tiempo [s]', 'FontSize', fs);
+    ylabel(ylabels_s{i}, 'Interpreter', 'latex', 'FontSize', fs);
+    title(titles_s{i}, 'FontSize', fs, 'Interpreter', 'latex');
+    grid on; box on;
+    set(gca, 'FontSize', fs);
+    xlim(xlims);
+end
+
+title(tl5, sprintf('SMC Cartesiano — Superficies Deslizantes  %s', sub_label), ...
+      'FontSize', fs_title, 'FontWeight', 'bold', 'Interpreter', 'tex');
+
+%% ── Figura 6 — Torques de control tau1..tau4 ────────────────────────────────
+figure(6); clf;
+set(gcf, 'Color', 'w', 'Position', [130 -840 1100 520]);
+tl6 = tiledlayout(2, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
+
+for i = 1:4
+    nexttile(tl6);
     plot(t, tau(:,i), '-', 'Color', c_tau(i,:), 'LineWidth', lw); hold on;
     yline(0,          ':',   'LineWidth', 0.9, 'Color', [0.5 0.5 0.5]);
     yline( TAU_MAX, '--k',   'LineWidth', 1.0, 'Label', sprintf('+%.1f N·m', TAU_MAX));
@@ -261,7 +286,7 @@ for i = 1:4
     xlim(xlims);
 end
 
-title(tl5, sprintf('SMC Cartesiano — Torques de Control  %s', sub_label), ...
+title(tl6, sprintf('SMC Cartesiano — Torques de Control  %s', sub_label), ...
       'FontSize', fs_title, 'FontWeight', 'bold', 'Interpreter', 'tex');
 
 %% ── Exportacion ──────────────────────────────────────────────────────────────
@@ -275,14 +300,16 @@ if EXPORT_FIGS
     exportgraphics(figure(2), fullfile(output_dir, 'plot_cart_error.png'),     'Resolution', 300);
     exportgraphics(figure(3), fullfile(output_dir, 'plot_cart_velocity.png'),  'Resolution', 300);
     exportgraphics(figure(4), fullfile(output_dir, 'plot_q.png'),              'Resolution', 300);
-    exportgraphics(figure(5), fullfile(output_dir, 'plot_torques.png'),        'Resolution', 300);
+    exportgraphics(figure(5), fullfile(output_dir, 'plot_sliding_surfaces.png'), 'Resolution', 300);
+    exportgraphics(figure(6), fullfile(output_dir, 'plot_torques.png'),        'Resolution', 300);
 
     % EPS (vectorial, 600 dpi)
     exportgraphics(figure(1), fullfile(output_dir, 'plot_cart_tracking.eps'),  'ContentType', 'vector', 'Resolution', 600);
     exportgraphics(figure(2), fullfile(output_dir, 'plot_cart_error.eps'),     'ContentType', 'vector', 'Resolution', 600);
     exportgraphics(figure(3), fullfile(output_dir, 'plot_cart_velocity.eps'),  'ContentType', 'vector', 'Resolution', 600);
     exportgraphics(figure(4), fullfile(output_dir, 'plot_q.eps'),              'ContentType', 'vector', 'Resolution', 600);
-    exportgraphics(figure(5), fullfile(output_dir, 'plot_torques.eps'),        'ContentType', 'vector', 'Resolution', 600);
+    exportgraphics(figure(5), fullfile(output_dir, 'plot_sliding_surfaces.eps'), 'ContentType', 'vector', 'Resolution', 600);
+    exportgraphics(figure(6), fullfile(output_dir, 'plot_torques.eps'),        'ContentType', 'vector', 'Resolution', 600);
 
     fprintf('Graficas guardadas en:\n  %s\n', output_dir);
 end
