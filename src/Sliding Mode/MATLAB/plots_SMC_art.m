@@ -19,9 +19,9 @@ clear; clc; close all;
 mode        = 'sim';    % 'sim'  = simulacion Gazebo (gz_SMC_q_node)
                         % 'real' = implementacion hardware (hw_smc_q_node)
 
-rho_func    = 'sat';   % Funcion de conmutacion usada: 'sign' | 'sat' | 'tanh'
+rho_func    = 'sign';   % Funcion de conmutacion usada: 'sign' | 'sat' | 'tanh'
 
-test_num    = 13;        % Identificador del ensayo (test_num usado al lanzar el nodo)
+test_num    = 18;        % Identificador del ensayo (test_num usado al lanzar el nodo)
 
 EXPORT_FIGS = false;    % true  = guardar PNG (300 dpi) y EPS vectorial (600 dpi)
                         % false = solo visualizar
@@ -35,13 +35,13 @@ pkg_dir = '/home/utec/open_manx_ws/src/open_manipulator_x_torque_control';
 switch mode
     case 'sim'
         csv_file   = fullfile(pkg_dir, 'data', 'lab6', 'sim', 'act1', ...
-                              sprintf('gz_smc_q_%s_%d.csv', rho_func, test_num));
+                              sprintf('gz_smc_art_%s_%d.csv', rho_func, test_num));
         output_dir = fullfile(pkg_dir, 'plots', 'lab6', 'sim', 'act1', ...
                               sprintf('test%d_%s', test_num, rho_func));
         mode_label = 'Simulacion';
     case 'real'
         csv_file   = fullfile(pkg_dir, 'data', 'lab6', 'real', 'act1', ...
-                              sprintf('hw_smc_q_%s_%d.csv', rho_func, test_num));
+                              sprintf('hw_smc_art_%s_%d.csv', rho_func, test_num));
         output_dir = fullfile(pkg_dir, 'plots', 'lab6', 'real', 'act1', ...
                               sprintf('test%d_%s', test_num, rho_func));
         mode_label = 'Implementacion';

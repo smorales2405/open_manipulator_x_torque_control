@@ -11,8 +11,8 @@
 //    e_dq = dq - dq_d              (error de velocidad)
 //    s_q  = e_dq + Lambda_q * e_q
 //
-//  Ley de control SMC:
-//    v_q  = ddq_d - Lambda_q*e_dq - K_q*rho(s_q)
+//  Ley de control SMC (ley de alcance exponencial + conmutacion):
+//    v_q  = ddq_d - Lambda_q*e_dq - K_v*s_q - K_s*rho(s_q)
 //    tau  = M(q)*v_q + Phi(q,dq) + tau_fric(dq)
 //    tau_sat = clamp(tau, -TAU_MAX, TAU_MAX)
 //
@@ -96,8 +96,9 @@ static constexpr double B_FRIC  = 0.001;  // [N·m·s/rad] friccion viscosa nomi
 //  GANANCIAS SMC — ajustar aqui para cada articulacion
 //  Indice: [joint1, joint2, joint3, joint4]
 // ═══════════════════════════════════════════════════════════════════════════
-static const Eigen::Vector4d LAMBDA_Q = {5.0, 5.0, 5.0, 100.0};  // superficie [1/s]
-static const Eigen::Vector4d K_Q      = {50.0, 30.0, 50.0, 500.0};  // ganancia conmutacion
+static const Eigen::Vector4d LAMBDA_Q = {5.0,  5.0,  10.0,  25.0};   // superficie [1/s]
+static const Eigen::Vector4d K_V      = {5.0,  5.0,  10.0,  25.0};   // alcance exponencial (proporcional a s)
+static const Eigen::Vector4d K_S      = {50.0, 30.0, 100.0, 200.0};  // ganancia conmutacion rho(s)
 // ═══════════════════════════════════════════════════════════════════════════
 
 // ── Trayectoria de referencia articular ──────────────────────────────────────
@@ -111,22 +112,22 @@ static Reference desiredTrajectory(double t)
   const double w = 1.0;  // [rad/s] 
 
   ref.q <<
-       0.35 * std::sin(w * t),
-      -0.45 + 0.25 * std::sin(w * t),
-       0.35 - 0.25 * std::sin(w * t),
-      (PI/4.0) + 0.4*std::sin(w * t);
+       (PI/4.0) * std::sin(w * t),
+      -0.45 + 0.5 * std::sin(w * t),
+       0.35 - 0.5 * std::sin(w * t),
+      (PI/4.0) + 0.25*std::sin(w * t);
        
   ref.dq <<
-       0.35 * w * std::cos(w * t),
-       0.25 * w * std::cos(w * t),
-      -0.25 * w * std::cos(w * t),
-      0.4 * w * std::cos(w * t);
+       (PI/4.0) * w * std::cos(w * t),
+       0.5 * w * std::cos(w * t),
+      -0.5 * w * std::cos(w * t),
+      0.25 * w * std::cos(w * t);
 
   ref.ddq <<
-      -0.35 * w * w * std::sin(w * t),
-      -0.25 * w * w * std::sin(w * t),
-       0.25 * w * w * std::sin(w * t),
-      -0.4 * w * w * std::sin(w * t);
+      -(PI/4.0) * w * w * std::sin(w * t),
+      -0.5 * w * w * std::sin(w * t),
+       0.5 * w * w * std::sin(w * t),
+      -0.25 * w * w * std::sin(w * t);
 
   return ref;
 }
@@ -208,9 +209,10 @@ public:
       "SMC articular — rho=%s  phi=%.3f  alpha=%.1f  tau_max=%.2f N·m",
       rho_str_.c_str(), phi_, alpha_, TAU_MAX);
     RCLCPP_INFO(this->get_logger(),
-      "Lambda=[%.1f %.1f %.1f %.1f]  K=[%.1f %.1f %.1f %.1f]",
+      "Lambda=[%.1f %.1f %.1f %.1f]  Kv=[%.1f %.1f %.1f %.1f]  Ks=[%.1f %.1f %.1f %.1f]",
       LAMBDA_Q[0], LAMBDA_Q[1], LAMBDA_Q[2], LAMBDA_Q[3],
-      K_Q[0],      K_Q[1],      K_Q[2],      K_Q[3]);
+      K_V[0],      K_V[1],      K_V[2],      K_V[3],
+      K_S[0],      K_S[1],      K_S[2],      K_S[3]);
     RCLCPP_INFO(this->get_logger(),
       "B_fric=%.4f N·m·s/rad  (modelo nominal)",  B_FRIC);
     if (t_sim_ > 0.0) {
@@ -322,7 +324,8 @@ private:
     const Eigen::Vector4d rho  = rho_vec(s_q, rho_func_, phi_, alpha_);
     const Eigen::Vector4d v_q  = ref.ddq
                                 - LAMBDA_Q.asDiagonal() * e_dq
-                                - K_Q.asDiagonal() * rho;
+                                - K_V.asDiagonal() * s_q
+                                - K_S.asDiagonal() * rho;
 
     const Eigen::Vector4d tau     = M * v_q + phi_nle + tau_fric;
     const Eigen::Vector4d tau_sat = tau.cwiseMin(TAU_MAX).cwiseMax(-TAU_MAX);
