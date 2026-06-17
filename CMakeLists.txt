@@ -22,6 +22,7 @@ set(TO_INSTR   "src/Trajectory Optimization TV-LQR/instructor")
 set(GC_SRC     "src/Gravity Compensation")
 set(IDENT_SRC  "src/Identification")
 set(SMC_INSTR  "src/Sliding Mode/instructor")
+set(SMC_STUD   "src/Sliding Mode/student")
 
 # ── gz_fl_control_node ───────────────────────────────────────────────────────
 add_executable(gz_fl_control_node "${FL_INSTR}/gz_fl_control_node.cpp")
@@ -242,6 +243,32 @@ target_compile_definitions(gz_smc_cart_node PRIVATE
   "PACKAGE_URDF_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/urdf\""
   COAL_DISABLE_HPP_FCL_WARNINGS)
 
+# ── gz_smc_art_node_base (estudiantes) ───────────────────────────────────────
+add_executable(gz_smc_art_node_base "${SMC_STUD}/gz_SMC_art_node_base.cpp")
+ament_target_dependencies(gz_smc_art_node_base rclcpp std_msgs sensor_msgs)
+target_link_libraries(gz_smc_art_node_base
+  pinocchio::pinocchio_default
+  pinocchio::pinocchio_parsers
+  Eigen3::Eigen)
+target_compile_features(gz_smc_art_node_base PUBLIC cxx_std_17)
+target_compile_definitions(gz_smc_art_node_base PRIVATE
+  "PACKAGE_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\""
+  "PACKAGE_URDF_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/urdf\""
+  COAL_DISABLE_HPP_FCL_WARNINGS)
+
+# ── gz_smc_cart_node_base (estudiantes) ──────────────────────────────────────
+add_executable(gz_smc_cart_node_base "${SMC_STUD}/gz_SMC_cart_node_base.cpp")
+ament_target_dependencies(gz_smc_cart_node_base rclcpp std_msgs sensor_msgs)
+target_link_libraries(gz_smc_cart_node_base
+  pinocchio::pinocchio_default
+  pinocchio::pinocchio_parsers
+  Eigen3::Eigen)
+target_compile_features(gz_smc_cart_node_base PUBLIC cxx_std_17)
+target_compile_definitions(gz_smc_cart_node_base PRIVATE
+  "PACKAGE_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\""
+  "PACKAGE_URDF_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/urdf\""
+  COAL_DISABLE_HPP_FCL_WARNINGS)
+
 # ── gz_SMCI_cart_node ────────────────────────────────────────────────────────
 add_executable(gz_SMCI_cart_node "${SMC_INSTR}/gz_SMCI_cart_node.cpp")
 ament_target_dependencies(gz_SMCI_cart_node rclcpp std_msgs sensor_msgs)
@@ -296,6 +323,7 @@ install(TARGETS
     hw_torque_probe_node
     hw_identify_node
     gz_smc_art_node gz_smc_cart_node gz_SMCI_cart_node
+    gz_smc_art_node_base gz_smc_cart_node_base
   DESTINATION lib/${PROJECT_NAME})
 
 install(DIRECTORY xacro config launch scripts data urdf meshes worlds
