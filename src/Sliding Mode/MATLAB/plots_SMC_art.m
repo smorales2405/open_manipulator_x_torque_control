@@ -19,7 +19,7 @@ clear; clc; close all;
 mode        = 'sim';    % 'sim'  = simulacion Gazebo (gz_SMC_q_node)
                         % 'real' = implementacion hardware (hw_smc_q_node)
 
-rho_func    = 'sign';   % Funcion de conmutacion usada: 'sign' | 'sat'
+rho_func    = 'sat';   % Funcion de conmutacion usada: 'sign' | 'sat'
 
 test_num    = 1;        % Identificador del ensayo (test_num usado al lanzar el nodo)
 
