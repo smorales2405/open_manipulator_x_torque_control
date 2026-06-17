@@ -1,0 +1,62 @@
+hw_sinusoidal_torque_node:
+  ros__parameters:
+
+    # ── Seguridad ────────────────────────────────────────────────────────────
+    open_port:               true   # true: abre /dev/ttyUSB0
+    enable_torque:           true   # true: activa torque en los servos
+    enable_current_commands: true   # true: envía Goal Current / Goal Position
+
+    # ── Configuración de sesión ───────────────────────────────────────────────
+    port_name:   "/dev/ttyUSB0"
+    log_id:      1               # sufijo del CSV: hw_sin_torque_<log_id>.csv
+    t_settle:    1.5             # [s] tiempo de asentamiento en pos_rad antes de iniciar control
+    t_ramp:      1.0             # [s] rampa lineal del DC después del settling (solo current mode)
+    duration_s:  15.0            # [s] duración total incluyendo settling (0 = indefinido)
+
+    # ── Modo por articulación ─────────────────────────────────────────────────
+    # "current"  → torque sinusoidal: A_i + B_i*sin(w_i*t')  via modelo OLS
+    # "position" → trayectoria sinusoidal: q_ref_i(t') = A_pos_i + B_pos_i*sin(w_pos_i*t')
+    #              enviada al controlador interno de posición del servo
+    #
+    # Durante t_settle, TODOS los joints van a pos_rad (en position mode),
+    # independientemente del modo configurado. Esto asegura la posición inicial.
+    # Al terminar t_settle, los joints "current" cambian a Current Control Mode.
+    # NOTA: para evitar saltos al inicio del control, A_pos_i = pos_rad_i (sin(0)=0).
+    #
+    # Ejemplo — todos en trayectoria sinusoidal de posición:
+    #   mode: ["position", "position", "position", "position"]
+    # Ejemplo — J2 torque sinusoidal, resto posición:
+    #   mode: ["position", "current", "position", "position"]
+    mode: ["position", "position", "position", "position"]
+
+    # ── Señal de torque (solo joints en mode="current") ──────────────────────
+    # tau_i(t') = A_i + B_i * sin(w_i * t')
+    # t' = max(t_ctrl - t_ramp, 0); durante t_ramp solo se aplica (t_ctrl/t_ramp)*A_i
+    # Límite: |A_i| + |B_i| ≤ TAU_MAX = 1.2 N·m
+    A: [0.0,  0.0,  0.0, 0.0]    # [N·m] offset DC
+    B: [0.0,  0.0,  0.0, 0.0]    # [N·m] amplitud sinusoidal
+    w: [1.0,  1.0,  1.0, 1.0]    # [rad/s] frecuencia angular
+
+    # ── Trayectoria de posición (solo joints en mode="position") ─────────────
+    # q_ref_i(t') = A_pos_i + B_pos_i * sin(w_pos_i * t')
+    # t' = tiempo desde el fin del settling (t_ctrl)
+    # Para continuidad: A_pos_i = pos_rad_i  (la referencia parte desde el setpoint de settling)
+    # Si B_pos_i = 0 → setpoint constante en A_pos_i
+    A_pos: [0.0,  -0.5,  0.3, 0.785]   # [rad] offset DC (= pos_rad para continuidad)
+    B_pos: [0.785,  0.5,  -0.5,   0.4]   # [rad] amplitud de la sinusoide
+    w_pos: [1.5,  1.0,  1.0,   0.8]   # [rad/s] frecuencia angular
+
+    # ── Posición inicial de settling ──────────────────────────────────────────
+    # pos_rad define la posición a la que van TODOS los joints durante t_settle.
+    # Debe coincidir con A_pos para evitar saltos al iniciar el control.
+    pos_rad: [0.0, -0.5, 0.3, 0.785]     # [rad] posición inicial (settling)
+    pos_profile_vel: 50                # [ticks]  1 tick = 0.229 rpm → 50 ≈ 11.5 RPM
+    pos_profile_acc: 20                # [ticks]  0 = aceleración máxima (sin suavizado)
+
+    # ── Los parámetros de motor se cargan desde motor_params.yaml ────────────
+    # Para cargar motor_params.yaml adicionalmente:
+    #   ros2 run ... hw_sinusoidal_torque_node --ros-args \
+    #     --params-file .../motor_params.yaml -p log_id:=2
+    # Sin motor_params.yaml se usan los defaults nominales (sin fricción ni offset):
+    #   motor_alpha: [208.5, 208.5, 208.5, 208.5]
+    #   motor_Fv / motor_Fc / motor_I_offset: [0, 0, 0, 0]
