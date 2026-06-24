@@ -5,6 +5,9 @@
  * Cada articulación puede configurarse independientemente en:
  *   "current"  — envía τ_i(t') = A_i + B_i·sin(w_i·t')  [N·m → corriente via modelo OLS]
  *   "position" — sigue q_ref_i(t') = A_pos_i + B_pos_i·sin(w_pos_i·t') [rad] via Position Control Mode
+ *   "velocity" — barrido de velocidades constantes (Velocity Control Mode) para
+ *                identificar fricción: recorre vel_list[] (rad/s), rebotando dentro
+ *                de A_pos_i ± vel_band. Con ddq=0 la corriente aísla la fricción.
  *
  * Secuencia de fases:
  *   SETTLING (t < t_settle):
@@ -71,18 +74,21 @@ static constexpr uint16_t ADDR_OPERATING_MODE   = 11;
 static constexpr uint16_t ADDR_CURRENT_LIMIT    = 38;
 static constexpr uint16_t ADDR_TORQUE_ENABLE    = 64;
 static constexpr uint16_t ADDR_GOAL_CURRENT     = 102;
+static constexpr uint16_t ADDR_GOAL_VELOCITY    = 104;
 static constexpr uint16_t ADDR_GOAL_POSITION    = 116;
 static constexpr uint16_t ADDR_PRESENT_CURRENT  = 126;
 static constexpr uint16_t ADDR_PRESENT_VELOCITY = 128;
 static constexpr uint16_t ADDR_PRESENT_POSITION = 132;
 
 static constexpr uint16_t LEN_GOAL_CURRENT      = 2;
+static constexpr uint16_t LEN_GOAL_VELOCITY     = 4;
 static constexpr uint16_t LEN_GOAL_POSITION      = 4;
 static constexpr uint16_t LEN_PRESENT_CURRENT   = 2;
 static constexpr uint16_t LEN_PRESENT_VELOCITY  = 4;
 static constexpr uint16_t LEN_PRESENT_POSITION  = 4;
 
 static constexpr uint8_t CURRENT_CONTROL_MODE   = 0;
+static constexpr uint8_t VELOCITY_CONTROL_MODE  = 1;
 static constexpr uint8_t POSITION_CONTROL_MODE  = 3;
 static constexpr uint8_t TORQUE_ENABLE_VAL      = 1;
 static constexpr uint8_t TORQUE_DISABLE_VAL     = 0;
@@ -158,6 +164,16 @@ static void positionToBytes(int32_t ticks, uint8_t p[4])
   p[3] = DXL_HIBYTE(DXL_HIWORD(u));
 }
 
+// Goal Velocity es un entero con signo de 4 bytes (complemento a dos)
+static void velocityToBytes(int32_t ticks, uint8_t p[4])
+{
+  const uint32_t u = static_cast<uint32_t>(ticks);
+  p[0] = DXL_LOBYTE(DXL_LOWORD(u));
+  p[1] = DXL_HIBYTE(DXL_LOWORD(u));
+  p[2] = DXL_LOBYTE(DXL_HIWORD(u));
+  p[3] = DXL_HIBYTE(DXL_HIWORD(u));
+}
+
 static int16_t clampCurrent(double x, int16_t lim)
 {
   return static_cast<int16_t>(std::lround(
@@ -199,6 +215,11 @@ public:
     this->declare_parameter<int> ("pos_profile_vel", 50);
     this->declare_parameter<int> ("pos_profile_acc", 20);
 
+    // ── Barrido de velocidad constante (mode="velocity") ──────────────────────
+    this->declare_parameter<dvec>  ("vel_list",         dvec{0.05,0.10,0.15,0.20,0.25,0.30});
+    this->declare_parameter<double>("vel_seg_duration", 4.0);   // [s] por magnitud
+    this->declare_parameter<double>("vel_band",         0.5);   // [rad] semirango alrededor de A_pos
+
     this->declare_parameter<dvec>  ("motor_alpha",            dvec{208.5,208.5,208.5,208.5});
     this->declare_parameter<dvec>  ("motor_Fv",               dvec{0.0,  0.0,  0.0,  0.0 });
     this->declare_parameter<dvec>  ("motor_Fc",               dvec{0.0,  0.0,  0.0,  0.0 });
@@ -219,8 +240,8 @@ public:
     if ((int)joint_mode_.size() != NUM_JOINTS)
       throw std::runtime_error("Parámetro 'mode' debe tener 4 elementos");
     for (const auto& m : joint_mode_) {
-      if (m != "current" && m != "position")
-        throw std::runtime_error("Modo inválido '" + m + "'; usar 'current' o 'position'");
+      if (m != "current" && m != "position" && m != "velocity")
+        throw std::runtime_error("Modo inválido '" + m + "'; usar 'current', 'position' o 'velocity'");
     }
 
     auto load_vec4 = [this](const std::string& name) {
@@ -238,6 +259,12 @@ public:
     pos_rad_        = load_vec4("pos_rad");
     pos_profile_vel_ = get_parameter("pos_profile_vel").as_int();
     pos_profile_acc_ = get_parameter("pos_profile_acc").as_int();
+
+    vel_list_         = get_parameter("vel_list").as_double_array();
+    vel_seg_duration_ = get_parameter("vel_seg_duration").as_double();
+    vel_band_         = get_parameter("vel_band").as_double();
+    if (vel_list_.empty()) vel_list_ = {0.1};
+    vel_dir_.fill(+1.0);
 
     motor_alpha_    = load_vec4("motor_alpha");
     motor_Fv_       = load_vec4("motor_Fv");
@@ -262,6 +289,12 @@ public:
         if (tau_pk > TAU_MAX)
           RCLCPP_WARN(get_logger(),
             "J%d: |A|+|B|=%.3f N·m > TAU_MAX=%.3f N·m → se saturará", i+1, tau_pk, TAU_MAX);
+      } else if (joint_mode_[i] == "velocity") {
+        std::string vl;
+        for (double v : vel_list_) vl += std::to_string(v).substr(0, 4) + " ";
+        RCLCPP_INFO(get_logger(),
+          "J%d [velocity] barrido=[%s] rad/s  %.1fs c/u  banda=±%.2f rad alrededor de %.3f",
+          i+1, vl.c_str(), vel_seg_duration_, vel_band_, A_pos_(i));
       } else {
         if (std::abs(B_pos_(i)) > 1e-9) {
           RCLCPP_INFO(get_logger(),
@@ -397,6 +430,29 @@ private:
   }
 
   // ─────────────────────────────────────────────────────────────────────────
+  //  Barrido de velocidad constante (mode="velocity")
+  //  La magnitud avanza por vel_list_ cada vel_seg_duration_ segundos.
+  //  El signo rebota dentro de [A_pos_i - vel_band_, A_pos_i + vel_band_] para
+  //  permanecer cerca de una configuración conocida (gravedad acotada) sin chocar.
+  //  Devuelve la velocidad objetivo [rad/s] por joint y actualiza vel_dir_.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  Vec4 compute_vel_sweep(double t_ctrl, const Vec4& q)
+  {
+    Vec4 v = Vec4::Zero();
+    const std::size_t idx = static_cast<std::size_t>(std::floor(t_ctrl / vel_seg_duration_));
+    if (idx >= vel_list_.size()) return v;          // barrido terminado → 0
+    const double mag = std::abs(vel_list_[idx]);
+    for (int i = 0; i < NUM_JOINTS; ++i) {
+      if (joint_mode_[i] != "velocity") continue;
+      if (q(i) >= A_pos_(i) + vel_band_) vel_dir_[i] = -1.0;
+      if (q(i) <= A_pos_(i) - vel_band_) vel_dir_[i] = +1.0;
+      v(i) = vel_dir_[i] * mag;
+    }
+    return v;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
   //  Conversión torque → corriente (modelo OLS identificado)
   // ─────────────────────────────────────────────────────────────────────────
 
@@ -482,6 +538,8 @@ private:
       port_handler_, packet_handler_, ADDR_GOAL_CURRENT,  LEN_GOAL_CURRENT);
     grp_wpos_ = std::make_unique<dynamixel::GroupSyncWrite>(
       port_handler_, packet_handler_, ADDR_GOAL_POSITION, LEN_GOAL_POSITION);
+    grp_wvel_ = std::make_unique<dynamixel::GroupSyncWrite>(
+      port_handler_, packet_handler_, ADDR_GOAL_VELOCITY, LEN_GOAL_VELOCITY);
 
     hw_active_ = true;
     RCLCPP_INFO(get_logger(), "Hardware inicializado en %s", port_name_.c_str());
@@ -496,15 +554,22 @@ private:
   void switch_to_run_modes()
   {
     for (int i = 0; i < NUM_JOINTS; ++i) {
-      if (joint_mode_[i] != "current") continue;
       const uint8_t id = DXL_ID[i];
-      dxl_write1(id, ADDR_TORQUE_ENABLE,  TORQUE_DISABLE_VAL,     "mode-switch disable");
-      dxl_write1(id, ADDR_OPERATING_MODE, CURRENT_CONTROL_MODE,   "set current mode");
-      dxl_write2(id, ADDR_CURRENT_LIMIT,  CURRENT_LIMIT_REGISTER, "set limit");
-      dxl_write1(id, ADDR_TORQUE_ENABLE,  TORQUE_ENABLE_VAL,      "mode-switch enable");
-      RCLCPP_INFO(get_logger(), "DXL ID %d → CURRENT mode", static_cast<int>(id));
+      if (joint_mode_[i] == "current") {
+        dxl_write1(id, ADDR_TORQUE_ENABLE,  TORQUE_DISABLE_VAL,     "mode-switch disable");
+        dxl_write1(id, ADDR_OPERATING_MODE, CURRENT_CONTROL_MODE,   "set current mode");
+        dxl_write2(id, ADDR_CURRENT_LIMIT,  CURRENT_LIMIT_REGISTER, "set limit");
+        dxl_write1(id, ADDR_TORQUE_ENABLE,  TORQUE_ENABLE_VAL,      "mode-switch enable");
+        RCLCPP_INFO(get_logger(), "DXL ID %d → CURRENT mode", static_cast<int>(id));
+      } else if (joint_mode_[i] == "velocity") {
+        dxl_write1(id, ADDR_TORQUE_ENABLE,  TORQUE_DISABLE_VAL,     "mode-switch disable");
+        dxl_write1(id, ADDR_OPERATING_MODE, VELOCITY_CONTROL_MODE,  "set velocity mode");
+        dxl_write2(id, ADDR_CURRENT_LIMIT,  CURRENT_LIMIT_REGISTER, "set limit");
+        dxl_write1(id, ADDR_TORQUE_ENABLE,  TORQUE_ENABLE_VAL,      "mode-switch enable");
+        RCLCPP_INFO(get_logger(), "DXL ID %d → VELOCITY mode", static_cast<int>(id));
+      }
     }
-    RCLCPP_INFO(get_logger(), "Settling completado → iniciando control sinusoidal.");
+    RCLCPP_INFO(get_logger(), "Settling completado → iniciando fase de control.");
   }
 
   void shutdown_hardware()
@@ -512,9 +577,10 @@ private:
     if (!hw_active_) return;
     hw_active_ = false;
 
-    if (grp_wcur_ && phase_ != Phase::SETTLING) {
+    if (phase_ != Phase::SETTLING) {
       const std::array<int16_t, NUM_JOINTS> zero{};
-      send_currents(zero);
+      if (grp_wcur_) send_currents(zero);
+      if (grp_wvel_) send_velocities(Vec4::Zero());   // frenar joints en velocidad
       rclcpp::sleep_for(std::chrono::milliseconds(20));
     }
     for (const auto id : DXL_ID)
@@ -631,6 +697,29 @@ private:
     return true;
   }
 
+  // Envía goal velocity solo a joints en modo "velocity"  (vel_cmd en rad/s)
+  bool send_velocities(const Vec4& vel_cmd)
+  {
+    uint8_t p[NUM_JOINTS][4];
+    bool any = false;
+    for (int i = 0; i < NUM_JOINTS; ++i) {
+      if (joint_mode_[i] != "velocity") continue;
+      const int32_t ticks = static_cast<int32_t>(std::lround(
+        ENCODER_SIGN[i] * vel_cmd(i) / VEL_UNIT_RAD_S));
+      velocityToBytes(ticks, p[i]);
+      grp_wvel_->addParam(DXL_ID[i], p[i]);
+      any = true;
+    }
+    if (!any) return true;
+    const int r = grp_wvel_->txPacket();
+    grp_wvel_->clearParam();
+    if (r != COMM_SUCCESS) {
+      RCLCPP_ERROR(get_logger(), "SyncWrite (velocity) fallo");
+      return false;
+    }
+    return true;
+  }
+
   // Envía corriente solo a joints en modo "current"
   bool send_currents(const std::array<int16_t, NUM_JOINTS>& cmd)
   {
@@ -723,9 +812,17 @@ private:
       ddq_ref     = compute_acc_ref(t_ctrl);
       cur_cmd     = torque_to_current(tau_ref, dq);
 
+      // Barrido de velocidad constante (joints en mode="velocity").
+      // Se registra la velocidad comandada en dq_ref y ddq_ref=0 (constante).
+      const Vec4 vel_cmd = compute_vel_sweep(t_ctrl, q);
+      for (int i = 0; i < NUM_JOINTS; ++i) {
+        if (joint_mode_[i] == "velocity") { dq_ref(i) = vel_cmd(i); ddq_ref(i) = 0.0; }
+      }
+
       if (hw_active_ && enable_current_commands_) {
         if (!send_currents(cur_cmd))        { emergency_stop("SyncWrite current fallo"); return; }
         if (!send_positions(pos_cmd_rad))   { emergency_stop("SyncWrite position fallo"); return; }
+        if (!send_velocities(vel_cmd))      { emergency_stop("SyncWrite velocity fallo"); return; }
       }
     }
 
@@ -793,13 +890,17 @@ private:
   Vec4 pos_rad_;                           // posición inicial de settling (todos los joints)
   int  pos_profile_vel_, pos_profile_acc_;
 
+  std::vector<double> vel_list_;                       // magnitudes de velocidad a barrer
+  double vel_seg_duration_, vel_band_;                 // duración por magnitud / semirango
+  std::array<double, NUM_JOINTS> vel_dir_{};           // signo actual del rebote por joint
+
   Vec4   motor_alpha_, motor_Fv_, motor_Fc_, motor_I_offset_;
   double motor_epsilon_;
 
   dynamixel::PortHandler*   port_handler_{nullptr};
   dynamixel::PacketHandler* packet_handler_{nullptr};
   std::unique_ptr<dynamixel::GroupSyncRead>  grp_pos_, grp_vel_, grp_cur_;
-  std::unique_ptr<dynamixel::GroupSyncWrite> grp_wcur_, grp_wpos_;
+  std::unique_ptr<dynamixel::GroupSyncWrite> grp_wcur_, grp_wpos_, grp_wvel_;
 
   bool  hw_active_;
   Phase phase_;

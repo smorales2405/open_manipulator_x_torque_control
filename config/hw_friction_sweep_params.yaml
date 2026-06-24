@@ -1,0 +1,57 @@
+hw_sinusoidal_torque_node:
+  ros__parameters:
+
+    # ════════════════════════════════════════════════════════════════════════
+    #  Experimento de identificación de FRICCIÓN por velocidad constante
+    #  Un joint en mode="velocity" recorre vel_list[] (rad/s) a velocidad
+    #  constante (ddq=0), rebotando dentro de A_pos ± vel_band. Los demás se
+    #  mantienen fijos en position mode. La corriente a velocidad constante
+    #  aísla la fricción:  I = α·τ_grav(q) + Fv·dq + Fc·sign(dq) + I_offset.
+    #  Analizar con: src/Identification/identify_friction.py
+    #
+    #  Para identificar cada joint, repetir el ensayo moviendo el "mode" a
+    #  "velocity" en la articulación deseada (J1 es la más limpia: eje vertical,
+    #  sin gravedad → corriente = fricción pura). Cambiar log_id en cada corrida.
+    # ════════════════════════════════════════════════════════════════════════
+
+    # ── Seguridad ────────────────────────────────────────────────────────────
+    open_port:               true
+    enable_torque:           true
+    enable_current_commands: true
+
+    # ── Sesión ────────────────────────────────────────────────────────────────
+    port_name:   "/dev/ttyUSB0"
+    log_id:      20              # hw_sin_torque_<log_id>.csv
+    t_settle:    2.0             # [s] asentamiento en pos_rad antes del barrido
+    t_ramp:      1.0             # [s] (no afecta al barrido de velocidad)
+    duration_s:  43.0            # [s] = t_settle + n_vel*vel_seg_duration  (2 + 8*5 = 42)
+
+    # ── Modo por articulación ─────────────────────────────────────────────────
+    # J1 en velocity (sin gravedad → fricción pura); resto fijo en position.
+    # Para J2/J3/J4: poner "velocity" en el joint deseado (la fricción se obtiene
+    # restando α·τ_grav(q) con el modelo URDF en identify_friction.py).
+    mode: ["velocity", "position", "position", "position"]
+
+    # ── Barrido de velocidad constante (joints en mode="velocity") ───────────
+    # La magnitud avanza por vel_list cada vel_seg_duration s; el signo rebota
+    # dentro de [A_pos - vel_band, A_pos + vel_band]. Velocidades en ambos
+    # sentidos permiten separar Fc (impar) de la gravedad (par).
+    vel_list:         [0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.40, 0.50]  # [rad/s]
+    vel_seg_duration: 5.0     # [s] por magnitud
+    vel_band:         0.5     # [rad] semirango de oscilación alrededor de A_pos
+
+    # ── Configuración mantenida (position mode) y centro del barrido ─────────
+    # A_pos del joint en velocity = centro del rebote. Los demás se mantienen ahí.
+    A_pos:  [0.0,  -0.6,  0.4,  0.0]   # [rad]
+    B_pos:  [0.0,   0.0,  0.0,  0.0]   # sin sinusoide (setpoint fijo)
+    w_pos:  [0.0,   0.0,  0.0,  0.0]
+    B_pos2: [0.0,   0.0,  0.0,  0.0]
+    w_pos2: [0.0,   0.0,  0.0,  0.0]
+    pos_rad: [0.0, -0.6,  0.4,  0.0]   # = A_pos (continuidad en settling)
+    pos_profile_vel: 50
+    pos_profile_acc: 20
+
+    # Señal de torque (sin uso aquí: ningún joint en current mode)
+    A: [0.0, 0.0, 0.0, 0.0]
+    B: [0.0, 0.0, 0.0, 0.0]
+    w: [1.0, 1.0, 1.0, 1.0]

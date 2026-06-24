@@ -1,23 +1,40 @@
 /**:
   ros__parameters:
 
-    # ── Modelo torque→corriente Dynamixel XM430-W350-T (OpenMANIPULATOR-X) ──
-    # identify_motor_model.py — 2026-06-24  (alpha compartida + Fv,Fc>=0)
-    # Fuente: data/diagnostics/sinusoidal/hw_sin_torque_11.csv
-    # tau por RNEA (Pinocchio + open_manipulator_x.urdf); vel='sg' acc='ref'
-    # Modelo: I[i] = alpha[i]·tau[i] + Fv[i]·dq[i] + Fc[i]·tanh(dq[i]/eps) + I_offset[i]
-    # R² por joint: J1=0.799, J2=0.835, J3=0.811, J4=0.781
-    # corr(tau,I): J1=-0.10, J2=0.75, J3=0.10, J4=0.44   (|corr|<0.3 → alpha poco fiable, se apoya en la compartida)
+    # ════════════════════════════════════════════════════════════════════════
+    #  Modelo torque→corriente Dynamixel XM430-W350-T (OpenMANIPULATOR-X)
+    #  ENSAMBLADO FINAL — 2026-06-24
     #
-    # Unidades:
-    #   motor_alpha            [ticks/N·m]
-    #   motor_Fv               [ticks/(rad/s)]
-    #   motor_Fc               [ticks]
-    #   motor_I_offset         [ticks]
-    #   motor_epsilon_friction [rad/s]
-
-    motor_alpha:             [152.3076, 152.3076, 152.3076, 152.3076]    # J1 J2 J3 J4
-    motor_Fv:                [6.7797, 0.0000, 0.0000, 0.0000]
-    motor_Fc:                [4.1414, 22.3124, 28.3844, 9.4338]
-    motor_I_offset:          [-3.9806, -1.3883, -4.7173, -0.0710]
-    motor_epsilon_friction:   0.0500
+    #  Modelo (por articulación):
+    #    I[i] = alpha[i]·tau[i] + Fv[i]·dq[i] + Fc[i]·tanh(dq[i]/eps) + I_offset[i]
+    #
+    #  Cada parámetro proviene del método MÁS ADECUADO para identificarlo:
+    #
+    #   · alpha, I_offset  → modo CORRIENTE con torque conocido (hw_fl_data_17,
+    #                        OLS). alpha = 1/(kt·Iu); kt_efectivo ≈ 1.65 N·m/A.
+    #                        Más fiable que el modo posición (el PID sesga la corriente).
+    #
+    #   · Fv, Fc           → barrido de VELOCIDAD CONSTANTE + reversión emparejada
+    #                        por posición (identify_friction.py, logs 21/25/23/24).
+    #                        La gravedad se cancela EXACTO por reversión (sin alpha),
+    #                        evitando la colinealidad Fv↔Fc del caso sinusoidal y el
+    #                        Fv negativo espurio. Fricción dominada por Coulomb:
+    #                        J1 viscoso (Fv=8.2); J2/J3/J4 Coulomb (Fc=18.7/25.6/9.3).
+    #
+    #  NOTA: este archivo se ENSAMBLA a mano combinando dos identificaciones.
+    #        identify_motor_model.py escribe motorXM430W350T_params_posmode.yaml
+    #        (referencia de modo posición); NO regenera este archivo.
+    #
+    #  Unidades:
+    #    motor_alpha            [ticks/N·m]
+    #    motor_Fv               [ticks/(rad/s)]
+    #    motor_Fc               [ticks]
+    #    motor_I_offset         [ticks]
+    #    motor_epsilon_friction [rad/s]
+    # ════════════════════════════════════════════════════════════════════════
+    #                              J1        J2        J3        J4
+    motor_alpha:             [224.800,  225.700,  223.890,  224.800]   # modo corriente
+    motor_Fv:                [  8.239,    0.000,    0.000,    1.124]   # barrido velocidad
+    motor_Fc:                [  3.290,   18.725,   25.600,    9.280]   # barrido velocidad
+    motor_I_offset:          [ -0.422,  -17.206,  -21.957,   -9.602]   # modo corriente
+    motor_epsilon_friction:    0.0500
