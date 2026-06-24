@@ -4,31 +4,39 @@
  * Via Dynamixel SDK directo, sin ros2_control.
  *
  * Modelo dinamico: urdf/open_manipulator_x.urdf
- *   Masas y centros de gravedad actualizados desde el e-Manual oficial de
- *   ROBOTIS (Section 2.3 Inertia), incluyendo masa del ensamble motor+eslabon
- *   para cada joint. Los torques G(q) resultantes son mas precisos que con
- *   el modelo CAD anterior (openmani.urdf).
+ *   Masas e inercias medidas (balanza + CAD) con origenes en el centro de cada
+ *   joint, escaladas a las masas reales. Los torques G(q) son mas precisos que
+ *   con el modelo CAD anterior (openmani.urdf).
  *
  * Ley de control:
- *   tau = gravity_scale * G(q)
+ *   tau = gravity_scale * G(q)                                   [N·m]
+ * Conversion torque -> corriente con el modelo identificado (por joint):
+ *   I = alpha*tau + Fv*dq + Fc*tanh(dq/eps) + I_offset           [ticks]
+ *   Los terminos Fv/Fc compensan la friccion del motor (backdrivable).
  *
  * El robot comienza quieto en la posicion actual al arrancar el nodo.
  * Al moverlo manualmente a cualquier posicion, la nueva G(q) se calcula
  * en el siguiente tick y lo mantiene en esa nueva posicion.
  *
- * Parametros ROS 2 (--ros-args -p nombre:=valor o via YAML):
+ * Parametros del MOTOR (alpha, Fv, Fc, I_offset, epsilon):
+ *   Auto-cargados desde config/motorXM430W350T_params.yaml; son FIJOS
+ *   (no se pueden sobreescribir por CLI — el YAML tiene prioridad).
+ *
+ * Parametros propios del nodo (ros2 run ... --ros-args -p nombre:=valor):
  *   port_name       [string]  "/dev/ttyUSB0"
- *   gravity_scale   [double]  1.0   (ajuste fino: 0.9 si cae lentamente)
- *   deadzone_ticks  [double]  5.0   (compensacion de zona muerta estatica)
- *   viscous_comp    [double]  0.0   (0 = totalmente backdrivable)
+ *   gravity_scale   [double]  1.0   (ajuste fino: <1 si cae, >1 si sube)
  *   duration_s      [double]  0.0   (0 = sin limite de tiempo)
  *   log_id          [int]     1     (CSV: hw_gc_data_<log_id>.csv)
+ *
+ * Ejemplo de uso (no requiere launch; el motor se auto-carga del YAML):
+ *   ros2 run open_manipulator_x_torque_control hw_gravity_comp_node \
+ *     --ros-args -p gravity_scale:=0.95 -p log_id:=3
  *
  * Publisher:  /hw/joint_states (sensor_msgs/JointState) — monitoreo
  * CSV output: data/gravity_comp/hw_gc_data_<log_id>.csv
  *
- * ADVERTENCIA: No ejecutar junto a hardware.launch.py ni cualquier proceso
- * que acceda a /dev/ttyUSB0.
+ * ADVERTENCIA: No ejecutar junto a otro proceso que acceda a /dev/ttyUSB0
+ * (ros2_control_node, dynamixel_hardware_interface, etc.).
  */
 
 #include <array>
