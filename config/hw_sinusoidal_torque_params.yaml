@@ -9,9 +9,9 @@ hw_sinusoidal_torque_node:
     # ── Configuración de sesión ───────────────────────────────────────────────
     port_name:   "/dev/ttyUSB0"
     log_id:      1               # sufijo del CSV: hw_sin_torque_<log_id>.csv
-    t_settle:    1.5             # [s] tiempo de asentamiento en pos_rad antes de iniciar control
+    t_settle:    2.0             # [s] tiempo de asentamiento en pos_rad antes de iniciar control
     t_ramp:      1.0             # [s] rampa lineal del DC después del settling (solo current mode)
-    duration_s:  15.0            # [s] duración total incluyendo settling (0 = indefinido)
+    duration_s:  65.0            # [s] duración total incluyendo settling (≈ 5 ciclos para w=0.5 rad/s)
 
     # ── Modo por articulación ─────────────────────────────────────────────────
     # "current"  → torque sinusoidal: A_i + B_i*sin(w_i*t')  via modelo OLS
@@ -44,7 +44,13 @@ hw_sinusoidal_torque_node:
     # Si B_pos_i = 0 → setpoint constante en A_pos_i
     A_pos: [0.0,  -0.5,  0.3, 0.785]   # [rad] offset DC (= pos_rad para continuidad)
     B_pos: [0.785,  0.5,  -0.5,   0.4]   # [rad] amplitud de la sinusoide
-    w_pos: [1.5,  1.0,  1.0,   0.8]   # [rad/s] frecuencia angular
+    # Frecuencias reducidas para que dq_ref_max << pos_profile_vel (11.5 RPM ≈ 1.2 rad/s):
+    #   J1: dq_max = 0.785*0.5 = 0.393 rad/s  (antes 1.178 rad/s, casi al límite → tracking 26% RMSE)
+    #   J2: dq_max = 0.500*0.5 = 0.250 rad/s  (antes 0.500 rad/s)
+    #   J3: dq_max = 0.500*0.5 = 0.250 rad/s  (antes 0.500 rad/s)
+    #   J4: dq_max = 0.400*0.4 = 0.160 rad/s  (antes 0.320 rad/s)
+    # Objetivo: RMSE_q < 5% de la amplitud para validar uso de ddq_ref analítico en identificación.
+    w_pos: [0.5,  0.5,  0.5,   0.4]   # [rad/s] frecuencia angular (reducida)
 
     # ── Posición inicial de settling ──────────────────────────────────────────
     # pos_rad define la posición a la que van TODOS los joints durante t_settle.

@@ -22,7 +22,7 @@
  *       --ros-args -p log_id:=3
  *
  * CSV de salida: data/diagnostics/sinusoidal/hw_sin_torque_<log_id>.csv
- *   t, q1..4, dq1..4, tau_ref1..4, pos_ref1..4, curr_cmd1..4, curr_meas1..4
+ *   t, q1..4, dq1..4, dq_ref1..4, ddq_ref1..4, tau_ref1..4, pos_ref1..4, curr_cmd1..4, curr_meas1..4
  */
 
 #include <algorithm>
@@ -285,6 +285,8 @@ public:
     csv_.open(csv_path_);
     if (csv_.is_open()) {
       csv_ << "t,q1,q2,q3,q4,dq1,dq2,dq3,dq4,"
+              "dq_ref1,dq_ref2,dq_ref3,dq_ref4,"
+              "ddq_ref1,ddq_ref2,ddq_ref3,ddq_ref4,"
               "tau_ref1,tau_ref2,tau_ref3,tau_ref4,"
               "pos_ref1,pos_ref2,pos_ref3,pos_ref4,"
               "curr_cmd1,curr_cmd2,curr_cmd3,curr_cmd4,"
@@ -357,6 +359,28 @@ private:
     for (int i = 0; i < NUM_JOINTS; ++i) {
       if (joint_mode_[i] != "position") continue;
       ref(i) = A_pos_(i) + B_pos_(i) * std::sin(w_pos_(i) * t_ctrl);
+    }
+    return ref;
+  }
+
+  // dq_ref_i = B_pos_i · w_pos_i · cos(w_pos_i · t_ctrl)
+  Vec4 compute_vel_ref(double t_ctrl) const
+  {
+    Vec4 ref = Vec4::Zero();
+    for (int i = 0; i < NUM_JOINTS; ++i) {
+      if (joint_mode_[i] != "position") continue;
+      ref(i) = B_pos_(i) * w_pos_(i) * std::cos(w_pos_(i) * t_ctrl);
+    }
+    return ref;
+  }
+
+  // ddq_ref_i = -B_pos_i · w_pos_i² · sin(w_pos_i · t_ctrl)
+  Vec4 compute_acc_ref(double t_ctrl) const
+  {
+    Vec4 ref = Vec4::Zero();
+    for (int i = 0; i < NUM_JOINTS; ++i) {
+      if (joint_mode_[i] != "position") continue;
+      ref(i) = -B_pos_(i) * w_pos_(i) * w_pos_(i) * std::sin(w_pos_(i) * t_ctrl);
     }
     return ref;
   }
@@ -661,6 +685,7 @@ private:
     Vec4 tau_ref = Vec4::Zero();
     std::array<int16_t, NUM_JOINTS> cur_cmd{};
     Vec4 pos_cmd_rad = Vec4::Zero();
+    Vec4 dq_ref = Vec4::Zero(), ddq_ref = Vec4::Zero();
 
     if (phase_ == Phase::SETTLING) {
       // Enviar posición a TODOS los joints
@@ -683,6 +708,8 @@ private:
 
       tau_ref     = compute_tau_ref(t_ctrl);
       pos_cmd_rad = compute_pos_ref(t_ctrl);
+      dq_ref      = compute_vel_ref(t_ctrl);
+      ddq_ref     = compute_acc_ref(t_ctrl);
       cur_cmd     = torque_to_current(tau_ref, dq);
 
       if (hw_active_ && enable_current_commands_) {
@@ -718,6 +745,8 @@ private:
       csv_ << std::fixed << std::setprecision(6) << t
            << ',' << q(0)           << ',' << q(1)           << ',' << q(2)           << ',' << q(3)
            << ',' << dq(0)          << ',' << dq(1)          << ',' << dq(2)          << ',' << dq(3)
+           << ',' << dq_ref(0)      << ',' << dq_ref(1)      << ',' << dq_ref(2)      << ',' << dq_ref(3)
+           << ',' << ddq_ref(0)     << ',' << ddq_ref(1)     << ',' << ddq_ref(2)     << ',' << ddq_ref(3)
            << ',' << tau_ref(0)     << ',' << tau_ref(1)     << ',' << tau_ref(2)     << ',' << tau_ref(3)
            << ',' << pos_cmd_rad(0) << ',' << pos_cmd_rad(1) << ',' << pos_cmd_rad(2) << ',' << pos_cmd_rad(3)  // pos_ref
            << ',' << cur_cmd[0]     << ',' << cur_cmd[1]     << ',' << cur_cmd[2]     << ',' << cur_cmd[3]
