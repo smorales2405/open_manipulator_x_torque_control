@@ -63,7 +63,7 @@
       <origin xyz="0.012 0.0 0.017" rpy="0 0 0"/>
       <axis xyz="0 0 1"/>
       <limit velocity="4.8" effort="1.5" lower="${-3*pi/4}" upper="${3*pi/4}" />
-      <dynamics damping="${0.0230 * damping_scale}" friction="${0.0168 * friction_scale}"/>
+      <dynamics damping="${0.0367 * damping_scale}" friction="${0.0146 * friction_scale}"/>
     </joint>
 
     <link name="${prefix}link2">
@@ -98,7 +98,7 @@
       <origin xyz="0.0 0.0 0.0595" rpy="0 0 0"/>
       <axis xyz="0 1 0"/>
       <limit velocity="4.8" effort="1.5" lower="${-11*pi/18}" upper="${5*pi/9}" />
-      <dynamics damping="${0.0194 * damping_scale}" friction="${0.0089 * friction_scale}"/>
+      <dynamics damping="${0.0000 * damping_scale}" friction="${0.0830 * friction_scale}"/>
     </joint>
 
     <link name="${prefix}link3">
@@ -133,7 +133,7 @@
       <origin xyz="0.024 0 0.128" rpy="0 0 0"/>
       <axis xyz="0 1 0"/>
       <limit velocity="4.8" effort="1.5" lower="${-11*pi/18}" upper="${pi/2}" />
-      <dynamics damping="${0.0229 * damping_scale}" friction="${0.0094 * friction_scale}"/>
+      <dynamics damping="${0.0000 * damping_scale}" friction="${0.1143 * friction_scale}"/>
     </joint>
 
     <link name="${prefix}link4">
@@ -168,7 +168,7 @@
       <origin xyz="0.124 0.0 0.0" rpy="0 0 0"/>
       <axis xyz="0 1 0"/>
       <limit velocity="4.8" effort="1.5" lower="-1.8" upper="2.1" />
-      <dynamics damping="${0.0158 * damping_scale}" friction="${0.0377 * friction_scale}"/>
+      <dynamics damping="${0.0050 * damping_scale}" friction="${0.0413 * friction_scale}"/>
     </joint>
 
     <link name="${prefix}link5">
