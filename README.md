@@ -214,9 +214,10 @@ open_manipulator_x_torque_control/
 │   ├── sim_init_config.yaml          # Gazebo initial pose, obstacle, and dynamics scales
 │   ├── effort_controllers.yaml       # ros2_control effort controller config
 │   ├── motor_params.yaml             # Dynamixel motor parameters for real HW
+│   ├── motorXM430W350T_params.yaml   # Identified torque→current model (assembled final)
 │   ├── hw_gravity_comp_params.yaml   # Gravity compensation HW parameters
-│   ├── hw_identify_params.yaml       # System identification parameters
-│   ├── hw_sinusoidal_torque_params.yaml
+│   ├── hw_sinusoidal_torque_params.yaml  # Sinusoidal excitation parameters
+│   ├── hw_friction_sweep_params.yaml     # Constant-velocity friction sweep parameters
 │   ├── fkin_params.yaml              # Forward kinematics display parameters
 │   └── fkin_rviz.rviz                # RViz config for FK visualization
 ├── launch/
@@ -224,7 +225,7 @@ open_manipulator_x_torque_control/
 │   ├── gravity_comp_gz.launch.py     # Gravity compensation in simulation
 │   ├── gravity_comp_hw.launch.py     # Gravity compensation on real HW
 │   ├── fkin_rviz.launch.py           # Forward kinematics + RViz display
-│   ├── identify_hw.launch.py         # System identification on real HW
+│   ├── friction_sweep.launch.py      # Constant-velocity friction sweep on real HW
 │   └── tvlqr_hw.launch.py            # TV-LQR on real HW
 ├── src/
 │   ├── Feedback Linearization/
@@ -241,7 +242,7 @@ open_manipulator_x_torque_control/
 │   │   └── MATLAB/                   # Trajectory generation and analysis scripts
 │   ├── Gravity Compensation/         # Gravity compensation nodes (sim and HW)
 │   ├── Forward Kinematics/           # HW FK node and RViz display node
-│   ├── Identification/               # Motor dynamics identification node
+│   ├── Identification/               # Torque→current model ID (excitation node + Python OLS/friction)
 │   └── Diagnostics/                  # Low-level torque diagnostic nodes
 ├── urdf/
 │   └── open_manipulator_x.urdf       # Robot URDF (used by Pinocchio at runtime)

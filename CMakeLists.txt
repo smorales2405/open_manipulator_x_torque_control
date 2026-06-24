@@ -189,24 +189,8 @@ target_compile_definitions(hw_tvlqr_node PRIVATE
   "PACKAGE_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\""
   "PACKAGE_SHARE_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}\"")
 
-# ── hw_identify_node ─────────────────────────────────────────────────────────
-add_executable(hw_identify_node "${IDENT_SRC}/hw_identify_node.cpp")
-ament_target_dependencies(hw_identify_node rclcpp sensor_msgs)
-target_include_directories(hw_identify_node PRIVATE ${dynamixel_sdk_INCLUDE_DIRS})
-target_link_libraries(hw_identify_node
-  ${dynamixel_sdk_LIBRARIES}
-  pinocchio::pinocchio_default
-  pinocchio::pinocchio_parsers
-  Eigen3::Eigen)
-target_compile_features(hw_identify_node PUBLIC cxx_std_17)
-target_compile_definitions(hw_identify_node PRIVATE
-  "PACKAGE_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\""
-  "PACKAGE_URDF_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/urdf\""
-  COAL_DISABLE_HPP_FCL_WARNINGS)
-
-
-# ── hw_sinusoidal_torque_node (diagnostico: torques sinusoidales por joint) ──
-add_executable(hw_sinusoidal_torque_node "src/Diagnostics/hw_sinusoidal_torque_node.cpp")
+# ── hw_sinusoidal_torque_node (barrido sinusoidal / velocidad por joint) ──
+add_executable(hw_sinusoidal_torque_node "${IDENT_SRC}/hw_sinusoidal_torque_node.cpp")
 ament_target_dependencies(hw_sinusoidal_torque_node rclcpp sensor_msgs)
 target_include_directories(hw_sinusoidal_torque_node PRIVATE ${dynamixel_sdk_INCLUDE_DIRS})
 target_link_libraries(hw_sinusoidal_torque_node
@@ -321,7 +305,6 @@ install(TARGETS
     hw_fkin_node
     hw_sinusoidal_torque_node
     hw_torque_probe_node
-    hw_identify_node
     gz_smc_joint_node gz_smc_cart_node gz_SMCI_cart_node
     gz_smc_joint_node_base gz_smc_cart_node_base
   DESTINATION lib/${PROJECT_NAME})
