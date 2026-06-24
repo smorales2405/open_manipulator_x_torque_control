@@ -100,8 +100,10 @@ static constexpr double TORQUE_PER_CURRENT_TICK = TORQUE_CONSTANT_NM_A * CURRENT
 // Posicion de cero del encoder (ticks) para cada joint
 static const std::array<int32_t, NUM_JOINTS> JOINT_ZERO_TICK = {2048, 2048, 2048, 2048};
 
-// Signos para corregir orientacion fisica del encoder y corriente
-static const std::array<double, NUM_JOINTS> ENCODER_SIGN = {+1.0, -1.0, -1.0, -1.0};
+// Signos para corregir orientacion fisica del encoder y corriente.
+// J4 (ID 14, muneca): motor montado en orientacion opuesta a J1-J3;
+// corriente positiva produce torque NEGATIVO en convencion URDF → CURRENT_SIGN[3]=-1.
+static const std::array<double, NUM_JOINTS> ENCODER_SIGN = {+1.0, +1.0, +1.0, +1.0};
 static const std::array<double, NUM_JOINTS> CURRENT_SIGN = {+1.0, +1.0, +1.0, +1.0};
 
 // Limites articulares [rad] — coinciden con open_manipulator_x.urdf
@@ -113,10 +115,10 @@ static const std::array<double, NUM_JOINTS> JOINT_UPPER = {
 };
 
 // Limites de corriente de seguridad
-static constexpr uint16_t CURRENT_LIMIT_REGISTER = 300;   // [ticks] limite en HW
-static constexpr int16_t  CURRENT_CMD_LIMIT_J123 = 190;   // [ticks] ~ 0.85 N.m
-static constexpr int16_t  CURRENT_CMD_LIMIT_J4   = 152;   // [ticks] ~ 0.68 N.m
-static constexpr int16_t  CURRENT_MEASURED_PEAK  = 220;   // parada de emergencia
+static constexpr uint16_t CURRENT_LIMIT_REGISTER = 350;
+static constexpr int16_t  CURRENT_CMD_LIMIT_J123 = 257;
+static constexpr int16_t  CURRENT_CMD_LIMIT_J4   = 257;
+static constexpr int16_t  CURRENT_MEASURED_PEAK  = 313;
 
 using Vec4 = Eigen::Matrix<double, NUM_JOINTS, 1>;
 
@@ -166,29 +168,47 @@ static int16_t clampCurrent(double x, int16_t lim)
 class HWGravityCompNode : public rclcpp::Node
 {
 public:
-  HWGravityCompNode()
-  : Node("hw_gravity_comp_node"),
+  explicit HWGravityCompNode(const rclcpp::NodeOptions & opts = rclcpp::NodeOptions())
+  : Node("hw_gravity_comp_node", opts),
     hw_active_(false), init_logged_(false)
   {
-    // ── Parametros ──────────────────────────────────────────────────────────
+    // ── Parametros propios del nodo (ros2 run ... -p para sobrescribir) ──────
     this->declare_parameter<std::string>("port_name",      "/dev/ttyUSB0");
     this->declare_parameter<double>     ("gravity_scale",   1.0);
-    this->declare_parameter<double>     ("deadzone_ticks",  5.0);
-    this->declare_parameter<double>     ("viscous_comp",    0.0);
     this->declare_parameter<double>     ("duration_s",      0.0);
     this->declare_parameter<int>        ("log_id",          1);
 
+    // ── Modelo identificado del motor (config/motorXM430W350T_params.yaml) ──
+    // I = alpha·tau + Fv·dq + Fc·tanh(dq/eps) + I_offset
+    // Defaults: alpha = gain previo (1/TORQUE_PER_CURRENT_TICK), friccion nula
+    // → sin YAML, gravity comp = alpha·tau puro (totalmente backdrivable).
+    using dvec = std::vector<double>;
+    const double alpha_def = 1.0 / TORQUE_PER_CURRENT_TICK;
+    this->declare_parameter<dvec>("motor_alpha",    dvec{alpha_def, alpha_def, alpha_def, alpha_def});
+    this->declare_parameter<dvec>("motor_Fv",       dvec{0.0, 0.0, 0.0, 0.0});
+    this->declare_parameter<dvec>("motor_Fc",       dvec{0.0, 0.0, 0.0, 0.0});
+    this->declare_parameter<dvec>("motor_I_offset", dvec{0.0, 0.0, 0.0, 0.0});
+    this->declare_parameter<double>("motor_epsilon_friction", 0.05);
+
     port_name_      = this->get_parameter("port_name").as_string();
     gravity_scale_  = this->get_parameter("gravity_scale").as_double();
-    deadzone_ticks_ = this->get_parameter("deadzone_ticks").as_double();
-    viscous_comp_   = this->get_parameter("viscous_comp").as_double();
     duration_s_     = this->get_parameter("duration_s").as_double();
     const int log_id = this->get_parameter("log_id").as_int();
 
+    auto load_vec4 = [this](const std::string & name) {
+      const auto v = this->get_parameter(name).as_double_array();
+      Vec4 out; for (int i = 0; i < NUM_JOINTS; ++i) out(i) = v[i]; return out;
+    };
+    motor_alpha_    = load_vec4("motor_alpha");
+    motor_Fv_       = load_vec4("motor_Fv");
+    motor_Fc_       = load_vec4("motor_Fc");
+    motor_I_offset_ = load_vec4("motor_I_offset");
+    motor_epsilon_  = this->get_parameter("motor_epsilon_friction").as_double();
+
     RCLCPP_INFO(get_logger(),
-      "puerto=%s  scale=%.2f  dz=%.1f  visc=%.2f  dur=%.1fs  id=%d",
-      port_name_.c_str(), gravity_scale_, deadzone_ticks_,
-      viscous_comp_, duration_s_, log_id);
+      "puerto=%s  scale=%.2f  dur=%.1fs  id=%d  alpha=[%.0f %.0f %.0f %.0f]",
+      port_name_.c_str(), gravity_scale_, duration_s_, log_id,
+      motor_alpha_(0), motor_alpha_(1), motor_alpha_(2), motor_alpha_(3));
 
     // ── Pinocchio ────────────────────────────────────────────────────────────
     const std::string urdf = std::string(PACKAGE_URDF_DIR) + "/open_manipulator_x.urdf";
@@ -421,20 +441,19 @@ private:
 
   std::array<int16_t, NUM_JOINTS> torque_to_current(const Vec4 & tau, const Vec4 & dq)
   {
-    static const std::array<double,  NUM_JOINTS> dz_gain = {0.8, 0.9, 0.9, 1.0};
     static const std::array<int16_t, NUM_JOINTS> cur_lim = {
       CURRENT_CMD_LIMIT_J123, CURRENT_CMD_LIMIT_J123,
       CURRENT_CMD_LIMIT_J123, CURRENT_CMD_LIMIT_J4
     };
     std::array<int16_t, NUM_JOINTS> cmd{};
     for (int i = 0; i < NUM_JOINTS; ++i) {
-      double c = CURRENT_SIGN[i] * ENCODER_SIGN[i] * tau(i) / TORQUE_PER_CURRENT_TICK;
-      // Compensacion viscosa (0 por defecto = totalmente backdrivable)
-      c += CURRENT_SIGN[i] * ENCODER_SIGN[i] * viscous_comp_ * dq(i);
-      // Compensacion de zona muerta estatica del motor
-      if (deadzone_ticks_ > 0.0)
-        c += dz_gain[i] * deadzone_ticks_ * std::tanh(30.0 * c * CURRENT_UNIT_A);
-      cmd[i] = clampCurrent(c, cur_lim[i]);
+      // Modelo identificado: I = alpha·tau + Fv·dq + Fc·tanh(dq/eps) + I_offset
+      // Los terminos de friccion compensan la friccion del motor (backdrivable).
+      const double I = motor_alpha_(i)    * tau(i)
+                     + motor_Fv_(i)       * dq(i)
+                     + motor_Fc_(i)       * std::tanh(dq(i) / motor_epsilon_)
+                     + motor_I_offset_(i);
+      cmd[i] = clampCurrent(CURRENT_SIGN[i] * ENCODER_SIGN[i] * I, cur_lim[i]);
     }
     return cmd;
   }
@@ -519,10 +538,10 @@ private:
       js.position     = {q(0),  q(1),  q(2),  q(3)};
       js.velocity     = {dq(0), dq(1), dq(2), dq(3)};
       js.effort = {
-        static_cast<double>(cur_meas[0]) * TORQUE_PER_CURRENT_TICK,
-        static_cast<double>(cur_meas[1]) * TORQUE_PER_CURRENT_TICK,
-        static_cast<double>(cur_meas[2]) * TORQUE_PER_CURRENT_TICK,
-        static_cast<double>(cur_meas[3]) * TORQUE_PER_CURRENT_TICK
+        static_cast<double>(cur_meas[0]) / motor_alpha_(0),
+        static_cast<double>(cur_meas[1]) / motor_alpha_(1),
+        static_cast<double>(cur_meas[2]) / motor_alpha_(2),
+        static_cast<double>(cur_meas[3]) / motor_alpha_(3)
       };
       js_pub_->publish(js);
     }
@@ -561,9 +580,10 @@ private:
 
   std::string port_name_;
   double gravity_scale_;
-  double deadzone_ticks_;
-  double viscous_comp_;
   double duration_s_;
+  // Modelo identificado del motor (config/motorXM430W350T_params.yaml)
+  Vec4   motor_alpha_, motor_Fv_, motor_Fc_, motor_I_offset_;
+  double motor_epsilon_;
 
   dynamixel::PortHandler *  port_handler_{nullptr};
   dynamixel::PacketHandler * packet_handler_{nullptr};
@@ -589,8 +609,35 @@ private:
 int main(int argc, char * argv[])
 {
   rclcpp::init(argc, argv);
+
+  // Auto-carga config/motorXM430W350T_params.yaml; los -p de la línea de comandos
+  // (gravity_scale, duration_s, log_id, port_name) lo sobrescriben → no requiere launch.
+  rclcpp::NodeOptions opts;
+  const std::string cfg = std::string(PACKAGE_CONFIG_DIR) + "/motorXM430W350T_params.yaml";
+  if (std::filesystem::exists(cfg)) {
+    std::vector<std::string> args = {"--ros-args"};
+    bool in_ros_args = false;
+    for (int i = 1; i < argc; ++i) {
+      const std::string a(argv[i]);
+      if (a == "--ros-args") { in_ros_args = true; continue; }
+      if (in_ros_args) args.push_back(a);
+    }
+    // params-file AL FINAL → el YAML del motor tiene prioridad sobre los -p del CLI:
+    // los parámetros del motor NO se pueden sobreescribir; los params propios del
+    // nodo (no presentes en el YAML) sí se ajustan con -p.
+    args.push_back("--params-file");
+    args.push_back(cfg);
+    opts.arguments(args);
+    opts.use_global_arguments(false);
+    RCLCPP_INFO(rclcpp::get_logger("hw_gravity_comp_node"),
+      "motorXM430W350T_params auto-cargado: %s", cfg.c_str());
+  } else {
+    RCLCPP_WARN(rclcpp::get_logger("hw_gravity_comp_node"),
+      "motorXM430W350T_params no encontrado: %s — usando defaults.", cfg.c_str());
+  }
+
   try {
-    rclcpp::spin(std::make_shared<HWGravityCompNode>());
+    rclcpp::spin(std::make_shared<HWGravityCompNode>(opts));
   } catch (const std::exception & e) {
     RCLCPP_FATAL(rclcpp::get_logger("hw_gravity_comp_node"),
       "Excepcion: %s", e.what());

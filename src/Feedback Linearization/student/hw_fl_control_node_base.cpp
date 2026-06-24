@@ -17,7 +17,7 @@
  *   - Lectura de estado (q, dq, corriente medida) a 100 Hz
  *   - Filtro EMA de velocidad articular (vel_cutoff_hz)
  *   - Calculo de M(q) y nle(q,dq) mediante Pinocchio (en compute_torque)
- *   - Conversion torque -> corriente via modelo OLS identificado (motor_params.yaml)
+ *   - Conversion torque -> corriente via modelo OLS identificado (motorXM430W350T_params.yaml)
  *   - Transicion quintica de 5 s desde la posicion inicial hasta el inicio de la trayectoria
  *   - Verificacion de limites articulares y de corriente medida (parada de emergencia)
  *   - Publicador /hw/joint_states y escritura de CSV
@@ -29,7 +29,7 @@
  *   log_id                 [int]      1
  *   vel_cutoff_hz          [double]   2.0    (filtro EMA; 0 = desactivado)
  *
- * Parametros del modelo identificado (config/motor_params.yaml):
+ * Parametros del modelo identificado (config/motorXM430W350T_params.yaml):
  *   motor_alpha            [double[4]]   ticks/N·m
  *   motor_Fv               [double[4]]   ticks/(rad/s)
  *   motor_Fc               [double[4]]   ticks
@@ -108,7 +108,7 @@ static constexpr double TORQUE_PER_CURRENT_TICK = TORQUE_CONSTANT_NM_A * CURRENT
 
 // JOINT_ZERO_TICK, ENCODER_SIGN, CURRENT_SIGN, JOINT_LOWER/UPPER,
 // CURRENT_LIMIT_REGISTER, CURRENT_CMD_LIMIT, CURRENT_MEASURED_PEAK
-// → cargados desde config/motor_params.yaml como parametros ROS 2.
+// → cargados desde config/motorXM430W350T_params.yaml como parametros ROS 2.
 
 static constexpr double RAMP_TIME_S = 3.0;   // duracion de la transicion inicial [s]
 
@@ -234,7 +234,7 @@ static Reference quinticTransition(double t, double T, const Vec4& q0)
 // ═══════════════════════════════════════════════════════════════════════════
 static const Eigen::Vector4d KP = {0.0 /* kp1 */, 0.0 /* kp2 */, 0.0 /* kp3 */, 0.0 /* kp4 */};   // COMPLETAR
 static const Eigen::Vector4d KD = {0.0 /* kd1 */, 0.0 /* kd2 */, 0.0 /* kd3 */, 0.0 /* kd4 */};   // COMPLETAR
-// TAU_MAX disponible como tau_max_ (cargado desde motor_params.yaml, default 1.2 N·m)
+// TAU_MAX disponible como tau_max_ (cargado desde motorXM430W350T_params.yaml, default 1.2 N·m)
 // ═══════════════════════════════════════════════════════════════════════════
 
 // ============================================================
@@ -766,19 +766,24 @@ int main(int argc, char* argv[])
   rclcpp::init(argc, argv);
 
   rclcpp::NodeOptions opts;
-  const std::string cfg = std::string(PACKAGE_CONFIG_DIR) + "/motor_params.yaml";
+  const std::string cfg = std::string(PACKAGE_CONFIG_DIR) + "/motorXM430W350T_params.yaml";
   if (std::filesystem::exists(cfg)) {
-    std::vector<std::string> args = {"--ros-args", "--params-file", cfg};
+    std::vector<std::string> args = {"--ros-args"};
     bool in_ros_args = false;
     for (int i = 1; i < argc; ++i) {
       const std::string a(argv[i]);
       if (a == "--ros-args") { in_ros_args = true; continue; }
       if (in_ros_args) args.push_back(a);
     }
+    // params-file AL FINAL → el YAML del motor tiene prioridad sobre los -p del CLI:
+    // los parámetros del motor NO se pueden sobreescribir; los params propios del
+    // nodo (no presentes en el YAML) sí se ajustan con -p.
+    args.push_back("--params-file");
+    args.push_back(cfg);
     opts.arguments(args);
     opts.use_global_arguments(false);
     RCLCPP_INFO(rclcpp::get_logger("hw_fl_control_node"),
-      "motor_params auto-cargado: %s", cfg.c_str());
+      "motorXM430W350T_params auto-cargado: %s", cfg.c_str());
   }
 
   try {

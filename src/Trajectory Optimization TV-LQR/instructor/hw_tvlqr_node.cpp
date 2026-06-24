@@ -19,17 +19,15 @@
  *
  * Parametros ROS 2 (--ros-args -p nombre:=valor):
  *   port_name              [string]    "/dev/ttyUSB0"
- *   t_warmup               [double]    2.0   (warmup con tau_gravity antes de TV-LQR, 0 = sin warmup)
+ *   t_warmup               [double]    0.0   (warmup con tau_gravity antes de TV-LQR, 0 = sin warmup)
  *   torque_scale           [double]    1.0   (escala de seguridad, rango 0..1)
  *   t_run                  [double]    1.5   (duracion en segundos, 0 = sin limite)
  *   test_num               [int]       1     (identificador del CSV)
  *   reference_dir          [string]    "src/Trajectory Optimization TV-LQR/references"
- *   vel_cutoff_hz          [double]    2.0   (filtro EMA velocidad; 0 = desactivado)
- *   motor_alpha            [double[4]] ticks/N·m
- *   motor_Fv               [double[4]] ticks/(rad/s)
- *   motor_Fc               [double[4]] ticks
- *   motor_I_offset         [double[4]] ticks
- *   motor_epsilon_friction [double]    rad/s
+ *   vel_cutoff_hz          [double]    0.0   (filtro EMA velocidad; 0 = desactivado)
+ *
+ * USO TIPICO:
+ *   ros2 run open_manipulator_x_torque_control hw_tvlqr_node --ros-args -p t_run:=1.5 -p test_num:=1
  *
  * Publisher: /hw/joint_states (sensor_msgs/JointState) — monitoreo
  *
@@ -99,7 +97,7 @@ static constexpr uint8_t TORQUE_DISABLE_VAL   = 0;
 static constexpr double POS_UNIT_RAD            = 2.0 * PI / 4096.0;
 static constexpr double VEL_UNIT_RAD_S          = 0.229 * 2.0 * PI / 60.0;
 static constexpr double CURRENT_UNIT_A          = 0.00269;
-static constexpr double TORQUE_CONSTANT_NM_A    = 1.7826;
+static constexpr double TORQUE_CONSTANT_NM_A    = 1.654;
 static constexpr double TORQUE_PER_CURRENT_TICK = TORQUE_CONSTANT_NM_A * CURRENT_UNIT_A;
 
 static const std::array<int32_t, NUM_JOINTS> JOINT_ZERO_TICK = {2048, 2048, 2048, 2048};
@@ -180,14 +178,14 @@ static bool load_matrix(const std::string & path, int cols,
 class HWTVLQRNode : public rclcpp::Node
 {
 public:
-  HWTVLQRNode()
-  : Node("hw_tvlqr_node"),
+  explicit HWTVLQRNode(const rclcpp::NodeOptions & opts = rclcpp::NodeOptions())
+  : Node("hw_tvlqr_node", opts),
     hw_active_(false), refs_loaded_(false), N_(0), Ts_(0.05),
     tau_gravity_(Vec4::Zero()), warmup_ticks_(0), warmup_active_(false)
   {
     // ── Parametros ──────────────────────────────────────────────────────────
     this->declare_parameter<std::string>("port_name",     "/dev/ttyUSB0");
-    this->declare_parameter<double>     ("t_warmup",       2.0);
+    this->declare_parameter<double>     ("t_warmup",       0.0);
     this->declare_parameter<double>     ("torque_scale",   1.0);
     this->declare_parameter<double>     ("t_run",          1.5);
     this->declare_parameter<int>        ("test_num",        1);
@@ -200,7 +198,7 @@ public:
     this->declare_parameter<dvec>("motor_Fc",               dvec{0.0,   0.0,   0.0,   0.0  });
     this->declare_parameter<dvec>("motor_I_offset",         dvec{0.0,   0.0,   0.0,   0.0  });
     this->declare_parameter<double>("motor_epsilon_friction", 0.05);
-    this->declare_parameter<double>("vel_cutoff_hz",          2.0);
+    this->declare_parameter<double>("vel_cutoff_hz",          0.0);
 
     port_name_        = this->get_parameter("port_name").as_string();
     const double t_warmup_sec = this->get_parameter("t_warmup").as_double();
@@ -718,8 +716,35 @@ private:
 int main(int argc, char * argv[])
 {
   rclcpp::init(argc, argv);
+
+  // Auto-carga config/motorXM430W350T_params.yaml; los -p de la línea de comandos
+  // (test_num, torque_scale, t_run, etc.) lo sobrescriben → no requiere launch.
+  rclcpp::NodeOptions opts;
+  const std::string cfg = std::string(PACKAGE_CONFIG_DIR) + "/motorXM430W350T_params.yaml";
+  if (std::filesystem::exists(cfg)) {
+    std::vector<std::string> args = {"--ros-args"};
+    bool in_ros_args = false;
+    for (int i = 1; i < argc; ++i) {
+      const std::string a(argv[i]);
+      if (a == "--ros-args") { in_ros_args = true; continue; }
+      if (in_ros_args) args.push_back(a);
+    }
+    // params-file AL FINAL → el YAML del motor tiene prioridad sobre los -p del CLI:
+    // los parámetros del motor NO se pueden sobreescribir; los params propios del
+    // nodo (no presentes en el YAML) sí se ajustan con -p.
+    args.push_back("--params-file");
+    args.push_back(cfg);
+    opts.arguments(args);
+    opts.use_global_arguments(false);
+    RCLCPP_INFO(rclcpp::get_logger("hw_tvlqr_node"),
+      "motorXM430W350T_params auto-cargado: %s", cfg.c_str());
+  } else {
+    RCLCPP_WARN(rclcpp::get_logger("hw_tvlqr_node"),
+      "motorXM430W350T_params no encontrado: %s — usando defaults.", cfg.c_str());
+  }
+
   try {
-    rclcpp::spin(std::make_shared<HWTVLQRNode>());
+    rclcpp::spin(std::make_shared<HWTVLQRNode>(opts));
   } catch (const std::exception & e) {
     RCLCPP_FATAL(rclcpp::get_logger("hw_tvlqr_node"), "Excepcion: %s", e.what());
     rclcpp::shutdown();

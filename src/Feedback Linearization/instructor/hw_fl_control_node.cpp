@@ -11,9 +11,10 @@
  *   gain_scale             [double]          1.0   (escala lineal de Kp; Kd escala con sqrt)
  *   t_imp                  [double]          20.0   (tiempo de implementacion)
  *   log_id                 [int]             1      (nombre del CSV: hw_fl_data_<log_id>.csv)
-*   vel_cutoff_hz          [double]          2.0   (filtro EMA velocidad; 0 = desactivado)
+*   ab_alpha               [double]          0.4   (filtro α-β: ganancia de posición)
+ *   ab_beta                [double]          0.08  (filtro α-β: ganancia de velocidad)
  *
- * Parámetros del modelo identificado (cargar desde config/motor_params.yaml):
+ * Parámetros del modelo identificado (cargar desde config/motorXM430W350T_params.yaml):
  *   motor_alpha            [double[4]]   ticks/N·m       — ganancia de torque por joint
  *   motor_Fv               [double[4]]   ticks/(rad/s)   — fricción viscosa
  *   motor_Fc               [double[4]]   ticks           — fricción de Coulomb
@@ -96,7 +97,7 @@ static constexpr double TORQUE_PER_CURRENT_TICK = TORQUE_CONSTANT_NM_A * CURRENT
 
 // JOINT_ZERO_TICK, ENCODER_SIGN, CURRENT_SIGN, JOINT_LOWER/UPPER,
 // CURRENT_LIMIT_REGISTER, CURRENT_CMD_LIMIT, CURRENT_MEASURED_PEAK, TAU_MAX
-// → cargados desde config/motor_params.yaml como parámetros ROS 2.
+// → cargados desde config/motorXM430W350T_params.yaml como parámetros ROS 2.
 
 static constexpr double RAMP_TIME_S = 3.0;
 
@@ -204,7 +205,8 @@ public:
     this->declare_parameter<dvec>("motor_Fc",               dvec{0.0,   0.0,   0.0,   0.0  });
     this->declare_parameter<dvec>("motor_I_offset",         dvec{0.0,   0.0,   0.0,   0.0  });
     this->declare_parameter<double>("motor_epsilon_friction", 0.05);
-    this->declare_parameter<double>("vel_cutoff_hz",         2.0);
+    this->declare_parameter<double>("ab_alpha", 0.4);
+    this->declare_parameter<double>("ab_beta",  0.08);
 
     using ivec = std::vector<int64_t>;
     this->declare_parameter<ivec>  ("joint_zero_tick",        ivec{2048, 2048, 2048, 2048});
@@ -232,11 +234,8 @@ public:
     motor_I_offset_ = load_vec4("motor_I_offset");
     motor_epsilon_  = get_parameter("motor_epsilon_friction").as_double();
 
-    vel_cutoff_hz_ = get_parameter("vel_cutoff_hz").as_double();
-    // α = exp(-2π·fc·dt);  α=0 → sin filtro (pass-through)
-    vel_filter_alpha_ = (vel_cutoff_hz_ > 0.0)
-        ? std::exp(-2.0 * PI * vel_cutoff_hz_ * 0.01)
-        : 0.0;
+    ab_alpha_ = get_parameter("ab_alpha").as_double();
+    ab_beta_  = get_parameter("ab_beta").as_double();
 
     {
       const auto zt = get_parameter("joint_zero_tick").as_integer_array();
@@ -270,13 +269,7 @@ public:
       tau_max_, current_cmd_limit_[0], current_cmd_limit_[1],
       current_cmd_limit_[2], current_cmd_limit_[3],
       static_cast<int>(current_measured_peak_), static_cast<int>(current_limit_register_));
-    if (vel_cutoff_hz_ > 0.0)
-      RCLCPP_INFO(get_logger(),
-        "Filtro velocidad: fc=%.1f Hz  α=%.4f  (lag@0.2Hz≈%.1f°)",
-        vel_cutoff_hz_, vel_filter_alpha_,
-        std::atan(0.2 / vel_cutoff_hz_) * 180.0 / PI);
-    else
-      RCLCPP_WARN(get_logger(), "Filtro velocidad DESACTIVADO (vel_cutoff_hz=0) — riesgo de chattering.");
+    RCLCPP_INFO(get_logger(), "Filtro α-β: α=%.3f  β=%.4f", ab_alpha_, ab_beta_);
 
     // ── Pinocchio ────────────────────────────────────────────────────────────
     const std::string urdf = std::string(PACKAGE_URDF_DIR) + "/open_manipulator_x.urdf";
@@ -557,14 +550,21 @@ private:
       return;
     }
 
-    // 1b. Filtro EMA sobre velocidad medida
-    //   dq_filtered = α·dq_filtered_prev + (1-α)·dq_raw
-    //   α=0 → sin filtro; α≈0.73 (fc=5 Hz) → atenúa ruido ~4-8 Hz
-    if (!dq_filter_initialized_) {
-      dq_filtered_        = dq;
-      dq_filter_initialized_ = true;
+    // 1b. Filtro α-β: estimación conjunta de posición y velocidad
+    //   predicción: q_pred = q_hat + Ts*dq_hat,  dq_pred = dq_hat
+    //   residuo:    r      = q_meas - q_pred
+    //   corrección: q_hat  = q_pred + α·r,        dq_hat = dq_pred + (β/Ts)·r
+    static constexpr double Ts = 0.01;
+    if (!ab_initialized_) {
+      q_hat_       = q;
+      dq_hat_      = dq;
+      ab_initialized_ = true;
     } else {
-      dq_filtered_ = vel_filter_alpha_ * dq_filtered_ + (1.0 - vel_filter_alpha_) * dq;
+      const Vec4 q_pred  = q_hat_ + Ts * dq_hat_;
+      const Vec4 dq_pred = dq_hat_;
+      const Vec4 r       = q - q_pred;
+      q_hat_  = q_pred  + ab_alpha_ * r;
+      dq_hat_ = dq_pred + (ab_beta_ / Ts) * r;
     }
 
     // 2. Captura posición inicial (primer tick)
@@ -588,10 +588,10 @@ private:
       }
     }
 
-    // 5. Ley de control — usa dq_filtered_ para reducir chattering por ruido de encoder
-    const Vec4 tau_unsat = compute_torque(q, dq_filtered_, ref);
+    // 5. Ley de control — usa dq_hat_ para reducir chattering por ruido de encoder
+    const Vec4 tau_unsat = compute_torque(q, dq_hat_, ref);
     const Vec4 tau = tau_unsat.cwiseMin(tau_max_).cwiseMax(-tau_max_);
-    const auto cur_cmd = torque_to_current(tau, dq_filtered_);
+    const auto cur_cmd = torque_to_current(tau, dq_hat_);
 
     // 6. Escribir corriente
     if (!send_currents(cur_cmd)) {
@@ -629,7 +629,7 @@ private:
       csv_ << std::fixed << std::setprecision(6) << t
            << ',' << q(0)       << ',' << q(1)       << ',' << q(2)       << ',' << q(3)
            << ',' << dq(0)           << ',' << dq(1)           << ',' << dq(2)           << ',' << dq(3)
-           << ',' << dq_filtered_(0) << ',' << dq_filtered_(1) << ',' << dq_filtered_(2) << ',' << dq_filtered_(3)
+           << ',' << dq_hat_(0) << ',' << dq_hat_(1) << ',' << dq_hat_(2) << ',' << dq_hat_(3)
            << ',' << ref.q(0)   << ',' << ref.q(1)   << ',' << ref.q(2)   << ',' << ref.q(3)
            << ',' << ref.dq(0)  << ',' << ref.dq(1)  << ',' << ref.dq(2)  << ',' << ref.dq(3)
            << ',' << tau(0)     << ',' << tau(1)      << ',' << tau(2)     << ',' << tau(3)
@@ -668,10 +668,9 @@ private:
   int16_t  current_measured_peak_;
   double   tau_max_;
 
-  double vel_cutoff_hz_;
-  double vel_filter_alpha_;
-  Vec4   dq_filtered_;
-  bool   dq_filter_initialized_{false};
+  double ab_alpha_, ab_beta_;
+  Vec4   q_hat_, dq_hat_;
+  bool   ab_initialized_{false};
 
   dynamixel::PortHandler*   port_handler_{nullptr};
   dynamixel::PacketHandler* packet_handler_{nullptr};
@@ -700,23 +699,28 @@ int main(int argc, char* argv[])
   rclcpp::init(argc, argv);
 
   rclcpp::NodeOptions opts;
-  const std::string cfg = std::string(PACKAGE_CONFIG_DIR) + "/motor_params.yaml";
+  const std::string cfg = std::string(PACKAGE_CONFIG_DIR) + "/motorXM430W350T_params.yaml";
 
   if (std::filesystem::exists(cfg)) {
-    std::vector<std::string> args = {"--ros-args", "--params-file", cfg};
+    std::vector<std::string> args = {"--ros-args"};
     bool in_ros_args = false;
     for (int i = 1; i < argc; ++i) {
       const std::string a(argv[i]);
       if (a == "--ros-args") { in_ros_args = true; continue; }
       if (in_ros_args) args.push_back(a);
     }
+    // params-file AL FINAL → el YAML del motor tiene prioridad sobre los -p del CLI:
+    // los parámetros del motor NO se pueden sobreescribir; los params propios del
+    // nodo (no presentes en el YAML) sí se ajustan con -p.
+    args.push_back("--params-file");
+    args.push_back(cfg);
     opts.arguments(args);
     opts.use_global_arguments(false);
     RCLCPP_INFO(rclcpp::get_logger("hw_fl_control_node"),
-      "motor_params auto-cargado: %s", cfg.c_str());
+      "motorXM430W350T_params auto-cargado: %s", cfg.c_str());
   } else {
     RCLCPP_WARN(rclcpp::get_logger("hw_fl_control_node"),
-      "motor_params no encontrado: %s — usando defaults del código.", cfg.c_str());
+      "motorXM430W350T_params no encontrado: %s — usando defaults del código.", cfg.c_str());
   }
 
   try {

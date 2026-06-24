@@ -38,3 +38,21 @@
     motor_Fc:                [  3.290,   18.725,   25.600,    9.280]   # barrido velocidad
     motor_I_offset:          [ -0.422,  -17.206,  -21.957,   -9.602]   # modo corriente
     motor_epsilon_friction:    0.0500
+
+    # ── Configuración de hardware (señales, encoder, límites) ────────────────
+    # joint_zero_tick  : posición cero del encoder [ticks] por joint
+    # encoder_sign     : dirección positiva del encoder (+1 o -1)
+    # current_sign     : polaridad de la corriente respecto al encoder (+1 o -1)
+    # joint_lower/upper: límites articulares [rad]
+    # current_limit_register : registro Current Limit de Dynamixel (addr 38)
+    # current_cmd_limit      : corriente comandada máxima por joint [ticks]
+    # current_measured_peak  : umbral de parada de emergencia [ticks]
+    # NOTA: tau_max NO se define aquí; cada nodo lo fija internamente (1.2 N·m).
+    joint_zero_tick:          [2048, 2048, 2048, 2048]
+    encoder_sign:             [1.0,  1.0,  1.0,  1.0]
+    current_sign:             [1.0,  1.0,  1.0,  1.0]
+    joint_lower:              [-2.356194, -1.919862, -1.919862, -1.8]
+    joint_upper:              [ 2.356194,  1.745329,  1.570796,  2.1]
+    current_limit_register:   350
+    current_cmd_limit:        [257, 257, 257, 257]
+    current_measured_peak:    313

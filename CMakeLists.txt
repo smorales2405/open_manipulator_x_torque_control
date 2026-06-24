@@ -166,6 +166,7 @@ target_compile_features(hw_gravity_comp_node PUBLIC cxx_std_17)
 target_compile_definitions(hw_gravity_comp_node PRIVATE
   "PACKAGE_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\""
   "PACKAGE_URDF_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/urdf\""
+  "PACKAGE_CONFIG_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/config\""
   COAL_DISABLE_HPP_FCL_WARNINGS)
 
 # ── gz_tvlqr_node ────────────────────────────────────────────────────────────
@@ -187,7 +188,8 @@ target_link_libraries(hw_tvlqr_node
 target_compile_features(hw_tvlqr_node PUBLIC cxx_std_17)
 target_compile_definitions(hw_tvlqr_node PRIVATE
   "PACKAGE_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\""
-  "PACKAGE_SHARE_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}\"")
+  "PACKAGE_SHARE_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}\""
+  "PACKAGE_CONFIG_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/config\"")
 
 # ── hw_sinusoidal_torque_node (barrido sinusoidal / velocidad por joint) ──
 add_executable(hw_sinusoidal_torque_node "${IDENT_SRC}/hw_sinusoidal_torque_node.cpp")

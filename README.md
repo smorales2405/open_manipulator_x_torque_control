@@ -215,7 +215,6 @@ open_manipulator_x_torque_control/
 │   ├── effort_controllers.yaml       # ros2_control effort controller config
 │   ├── motor_params.yaml             # Dynamixel motor parameters for real HW
 │   ├── motorXM430W350T_params.yaml   # Identified torque→current model (assembled final)
-│   ├── hw_gravity_comp_params.yaml   # Gravity compensation HW parameters
 │   ├── hw_sinusoidal_torque_params.yaml  # Sinusoidal excitation parameters
 │   ├── hw_friction_sweep_params.yaml     # Constant-velocity friction sweep parameters
 │   ├── fkin_params.yaml              # Forward kinematics display parameters
@@ -223,10 +222,9 @@ open_manipulator_x_torque_control/
 ├── launch/
 │   ├── torque_sim.launch.py          # Main Gazebo simulation launcher
 │   ├── gravity_comp_gz.launch.py     # Gravity compensation in simulation
-│   ├── gravity_comp_hw.launch.py     # Gravity compensation on real HW
 │   ├── fkin_rviz.launch.py           # Forward kinematics + RViz display
-│   ├── friction_sweep.launch.py      # Constant-velocity friction sweep on real HW
-│   └── tvlqr_hw.launch.py            # TV-LQR on real HW
+│   └── friction_sweep.launch.py      # Constant-velocity friction sweep on real HW
+│   # (HW gravity comp y TV-LQR se corren con `ros2 run`; auto-cargan motorXM430W350T_params.yaml)
 ├── src/
 │   ├── Feedback Linearization/
 │   │   ├── instructor/               # Complete implementations (reference)
