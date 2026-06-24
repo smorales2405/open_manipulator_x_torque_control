@@ -7,14 +7,19 @@
 % Figuras:
 %   Fig 1 — Posiciones articulares:    pos_ref vs q
 %   Fig 2 — Velocidades articulares:   dq_ref  vs dq  (analítico vs medido)
-%   Fig 3 — Aceleraciones articulares: ddq_ref vs ddq (analítico vs diferencias de dq)
+%   Fig 3 — Aceleraciones articulares: ddq_ref vs ddq (3 estimaciones)
 %   Fig 4 — Torques de referencia (current mode) / error de seguimiento (position mode)
 %   Fig 5 — Corriente medida vs corriente comandada
 %
 %   dq_ref  y ddq_ref  se leen del CSV (derivadas analíticas de la trayectoria sinusoidal).
-%   ddq     se calcula por diferencias finitas centradas de dq  (gradient).
-%   Figs 2 y 3 permiten evaluar si el tracking es bueno y si ddq por diferencias
-%   tiene demasiado ruido para ser útil en identificación.
+%   En la Fig 3 se comparan tres estimaciones de la aceleración:
+%     · ddq_diff : diferencias finitas centradas de dq (gradient) — ruidosa, amplifica
+%                  la cuantización del registro PRESENT_VELOCITY (0.024 rad/s).
+%     · ddq_sg   : Savitzky-Golay sobre la POSICIÓN q (resolución 0.0015 rad, 16x más fina)
+%                  con doble derivación — recupera ddq con SNR mucho mayor.
+%     · ddq_ref  : derivada analítica de la trayectoria de referencia.
+%   Figs 2 y 3 permiten evaluar si el tracking es bueno y qué estimador de ddq usar
+%   para la identificación.
 %
 %   Compatibilidad con CSV de versiones anteriores (sin dq_ref/ddq_ref).
 %
@@ -25,6 +30,10 @@ clear; clc; close all;
 %% ── Configuración ────────────────────────────────────────────────────────
 log_id      = 10;            % hw_sin_torque_<log_id>.csv
 EXPORT_FIGS = true;        % true = guardar PNG + EPS
+
+% Filtro Savitzky-Golay para ddq por doble derivación de la posición (Fig 3)
+SG_ORDER    = 3;            % grado del polinomio (>= 2)
+SG_WINDOW   = 31;          % longitud de ventana (impar);  31 @ 100 Hz ≈ 0.31 s
 
 pkg_dir = '/home/utec/open_manx_ws/src/open_manipulator_x_torque_control';
 
@@ -66,10 +75,17 @@ else
              'Figs 2 y 3 solo muestran datos medidos.']);
 end
 
-% ddq medido: diferencias finitas centradas (gradient) sobre dq
+% ddq por diferencias finitas centradas (gradient) sobre dq  → ruidosa
 ddq = zeros(size(dq));
 for i = 1:4
     ddq(:,i) = gradient(dq(:,i), Ts);
+end
+
+% ddq por Savitzky-Golay sobre la posición q (doble derivación)  → limpia
+% Aprovecha que q tiene 16x mejor resolución que el registro de velocidad.
+ddq_sg = zeros(size(q));
+for i = 1:4
+    ddq_sg(:,i) = sg_deriv2(q(:,i), SG_WINDOW, SG_ORDER, Ts);
 end
 
 % Detectar modo de cada joint
@@ -164,15 +180,17 @@ figure(3); clf;
 set(gcf,'Color','w','Position',[80 80 1100 700]);
 tl3  = tiledlayout(2, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
 axs3 = gobjects(1, 4);
-h_ref3 = []; h_mea3 = [];
+h_diff3 = []; h_sg3 = []; h_ref3 = [];
 
 for i = 1:4
     axs3(i) = nexttile(tl3);
-    h2 = plot(t, ddq(:,i), '-', 'Color', c_meas, 'LineWidth', lw); hold on;
+    hd = plot(t, ddq(:,i),    '-', 'Color', [c_meas 0.35], 'LineWidth', 1.0); hold on;
+    hs = plot(t, ddq_sg(:,i), '-', 'Color', c_cmd,  'LineWidth', lw);
     if is_pos_mode(i) && has_vel_ref
-        h1 = plot(t, ddq_ref(:,i), '--', 'Color', c_ref, 'LineWidth', lw);
-        if isempty(h_ref3); h_ref3 = h1; h_mea3 = h2; end
+        hr = plot(t, ddq_ref(:,i), '--', 'Color', c_ref, 'LineWidth', lw);
+        if isempty(h_ref3); h_ref3 = hr; end
     end
+    if isempty(h_diff3); h_diff3 = hd; h_sg3 = hs; end
     yline(0, ':', 'LineWidth', 0.8);
     xlabel('Tiempo [s]', 'FontSize', fs);
     ylabel(sprintf('$\\ddot{q}_%d$ [rad/s$^2$]', i), 'Interpreter', 'latex', 'FontSize', fs);
@@ -181,15 +199,17 @@ for i = 1:4
     set(gca, 'FontSize', fs);
 end
 
+leg_h = [h_diff3, h_sg3];
+leg_s = {'Diferencias ($\ddot{q}_{diff}$, de $\dot{q}$)', ...
+         sprintf('Savitzky-Golay (de $q$, orden %d, ventana %d)', SG_ORDER, SG_WINDOW)};
 if ~isempty(h_ref3)
-    lgd3 = legend(axs3(find(is_pos_mode, 1)), [h_ref3, h_mea3], ...
-                  {'Referencia ($\ddot{q}_{ref}$, analítica)', ...
-                   'Diferencias ($\ddot{q}_{diff}$, de $\dot{q}$)'}, ...
-                  'Interpreter', 'latex', ...
-                  'Orientation', 'horizontal', 'FontSize', fs, 'Location', 'northoutside');
-    lgd3.Layout.Tile = 'north';
+    leg_h(end+1) = h_ref3;
+    leg_s{end+1} = 'Referencia ($\ddot{q}_{ref}$, analítica)';
 end
-title(tl3, 'Fig 3 — Seguimiento de aceleraciones articulares  (ddq: gradient de dq)', ...
+lgd3 = legend(axs3(1), leg_h, leg_s, 'Interpreter', 'latex', ...
+              'Orientation', 'horizontal', 'FontSize', fs-1, 'Location', 'northoutside');
+lgd3.Layout.Tile = 'north';
+title(tl3, 'Fig 3 — Seguimiento de aceleraciones articulares', ...
       'FontSize', 14, 'FontWeight', 'bold');
 
 %% ── Figura 4 — Torques (current mode) / Error de seguimiento (position mode)
@@ -263,6 +283,23 @@ for i = 1:4
 end
 fprintf('──────────────────────────────────────────────────────────────────────\n');
 
+% Calidad del estimador de aceleración (solo joints en position mode con ddq_ref)
+if has_vel_ref && any(is_pos_mode)
+    fprintf('\n── Estimación de ddq vs referencia analítica ──────────────────────────\n');
+    fprintf('%-9s  %-12s  %-12s  %-12s  %-10s\n', ...
+            'Joint', 'amp_ref', 'RMS(diff)', 'RMS(SG)', 'mejora');
+    for i = 1:4
+        if ~is_pos_mode(i); continue; end
+        amp_ref  = max(abs(ddq_ref(:,i)));
+        rms_diff = sqrt(mean((ddq(:,i)    - ddq_ref(:,i)).^2));
+        rms_sg   = sqrt(mean((ddq_sg(:,i) - ddq_ref(:,i)).^2));
+        fprintf('J%-8d  %-12.4f  %-12.4f  %-12.4f  %.1fx\n', ...
+                i, amp_ref, rms_diff, rms_sg, rms_diff / max(rms_sg, eps));
+    end
+    fprintf('   (amp_ref, RMS en rad/s²; mejora = RMS_diff / RMS_SG)\n');
+    fprintf('──────────────────────────────────────────────────────────────────────\n');
+end
+
 %% ── Exportación ─────────────────────────────────────────────────────────
 if EXPORT_FIGS
     out_dir = fullfile(pkg_dir, 'plots', 'diagnostics', 'sinusoidal', ...
@@ -277,7 +314,33 @@ if EXPORT_FIGS
     fprintf('Guardado en: %s\n', out_dir);
 end
 
-%% ── Utilidad ─────────────────────────────────────────────────────────────
+%% ── Utilidades ────────────────────────────────────────────────────────────
 function out = ternary(cond, a, b)
     if cond; out = a; else; out = b; end
+end
+
+function d2 = sg_deriv2(y, framelen, order, dt)
+% Segunda derivada por Savitzky-Golay (autocontenida, sin Signal Processing Toolbox).
+%   y        : señal (vector)
+%   framelen : longitud de ventana (impar, >= order+1)
+%   order    : grado del polinomio (>= 2)
+%   dt       : paso de muestreo [s]
+% Ajusta localmente un polinomio de grado 'order' por mínimos cuadrados sobre
+% cada ventana centrada y evalúa la 2da derivada analítica en el punto central:
+%   ddq = 2*a2 / dt^2,  donde a2 es el coef. del término cuadrático del ajuste.
+    y = y(:);
+    n = numel(y);
+    if mod(framelen, 2) == 0, framelen = framelen + 1; end          % forzar impar
+    framelen = min(framelen, n - mod(n+1, 2));                       % no exceder n
+    m  = (framelen - 1) / 2;
+    j  = (-m:m)';                                                    % abscisas (muestras)
+    A  = j .^ (0:order);                                             % Vandermonde
+    H  = (A' * A) \ A';                                              % coef. del ajuste
+    c  = (2 / dt^2) * H(3, :);                                       % fila de a2 → ddq
+    d2 = zeros(n, 1);
+    for k = m+1 : n-m
+        d2(k) = c * y(k-m : k+m);                                    % correlación central
+    end
+    d2(1:m)         = d2(m+1);                                       % bordes: replicar
+    d2(end-m+1:end) = d2(end-m);
 end

@@ -193,6 +193,8 @@ public:
     this->declare_parameter<dvec>("A_pos",   dvec{0.0, 0.0, 0.0, 0.0});
     this->declare_parameter<dvec>("B_pos",   dvec{0.0, 0.0, 0.0, 0.0});
     this->declare_parameter<dvec>("w_pos",   dvec{0.0, 0.0, 0.0, 0.0});
+    this->declare_parameter<dvec>("B_pos2",  dvec{0.0, 0.0, 0.0, 0.0});
+    this->declare_parameter<dvec>("w_pos2",  dvec{0.0, 0.0, 0.0, 0.0});
     this->declare_parameter<dvec>("pos_rad", dvec{0.0, 0.0, 0.0, 0.0});
     this->declare_parameter<int> ("pos_profile_vel", 50);
     this->declare_parameter<int> ("pos_profile_acc", 20);
@@ -231,6 +233,8 @@ public:
     A_pos_          = load_vec4("A_pos");
     B_pos_          = load_vec4("B_pos");
     w_pos_          = load_vec4("w_pos");
+    B_pos2_         = load_vec4("B_pos2");
+    w_pos2_         = load_vec4("w_pos2");
     pos_rad_        = load_vec4("pos_rad");
     pos_profile_vel_ = get_parameter("pos_profile_vel").as_int();
     pos_profile_acc_ = get_parameter("pos_profile_acc").as_int();
@@ -353,34 +357,41 @@ private:
   //  q_ref_i(t_ctrl) = A_pos_i + B_pos_i * sin(w_pos_i * t_ctrl)
   // ─────────────────────────────────────────────────────────────────────────
 
+  //  q_ref_i = A_pos_i + B_pos_i·sin(w_pos_i·t) + B_pos2_i·sin(w_pos2_i·t)
+  //  El segundo armónico enriquece la distribución de velocidades (separa
+  //  fricción viscosa de Coulomb en la identificación) y añade aceleración.
   Vec4 compute_pos_ref(double t_ctrl) const
   {
     Vec4 ref = Vec4::Zero();
     for (int i = 0; i < NUM_JOINTS; ++i) {
       if (joint_mode_[i] != "position") continue;
-      ref(i) = A_pos_(i) + B_pos_(i) * std::sin(w_pos_(i) * t_ctrl);
+      ref(i) = A_pos_(i)
+             + B_pos_(i)  * std::sin(w_pos_(i)  * t_ctrl)
+             + B_pos2_(i) * std::sin(w_pos2_(i) * t_ctrl);
     }
     return ref;
   }
 
-  // dq_ref_i = B_pos_i · w_pos_i · cos(w_pos_i · t_ctrl)
+  // dq_ref_i = B·w·cos(w·t) + B2·w2·cos(w2·t)
   Vec4 compute_vel_ref(double t_ctrl) const
   {
     Vec4 ref = Vec4::Zero();
     for (int i = 0; i < NUM_JOINTS; ++i) {
       if (joint_mode_[i] != "position") continue;
-      ref(i) = B_pos_(i) * w_pos_(i) * std::cos(w_pos_(i) * t_ctrl);
+      ref(i) = B_pos_(i)  * w_pos_(i)  * std::cos(w_pos_(i)  * t_ctrl)
+             + B_pos2_(i) * w_pos2_(i) * std::cos(w_pos2_(i) * t_ctrl);
     }
     return ref;
   }
 
-  // ddq_ref_i = -B_pos_i · w_pos_i² · sin(w_pos_i · t_ctrl)
+  // ddq_ref_i = -B·w²·sin(w·t) - B2·w2²·sin(w2·t)
   Vec4 compute_acc_ref(double t_ctrl) const
   {
     Vec4 ref = Vec4::Zero();
     for (int i = 0; i < NUM_JOINTS; ++i) {
       if (joint_mode_[i] != "position") continue;
-      ref(i) = -B_pos_(i) * w_pos_(i) * w_pos_(i) * std::sin(w_pos_(i) * t_ctrl);
+      ref(i) = -B_pos_(i)  * w_pos_(i)  * w_pos_(i)  * std::sin(w_pos_(i)  * t_ctrl)
+               -B_pos2_(i) * w_pos2_(i) * w_pos2_(i) * std::sin(w_pos2_(i) * t_ctrl);
     }
     return ref;
   }
@@ -778,6 +789,7 @@ private:
   std::vector<std::string> joint_mode_;
   Vec4 A_dc_, B_amp_, w_freq_;             // parámetros señal de torque (current mode)
   Vec4 A_pos_, B_pos_, w_pos_;             // parámetros trayectoria de posición (position mode)
+  Vec4 B_pos2_, w_pos2_;                    // segundo armónico (excitación multi-velocidad)
   Vec4 pos_rad_;                           // posición inicial de settling (todos los joints)
   int  pos_profile_vel_, pos_profile_acc_;
 
