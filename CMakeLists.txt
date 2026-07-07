@@ -283,6 +283,19 @@ target_compile_definitions(gz_mrac_joint_node PRIVATE
   "PACKAGE_URDF_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/urdf\""
   COAL_DISABLE_HPP_FCL_WARNINGS)
 
+# ── gz_mrac_joint_node_base (estudiantes) ─────────────────────────────────────
+add_executable(gz_mrac_joint_node_base "${MRAC_STUD}/gz_MRAC_joint_node_base.cpp")
+ament_target_dependencies(gz_mrac_joint_node_base rclcpp std_msgs sensor_msgs)
+target_link_libraries(gz_mrac_joint_node_base
+  pinocchio::pinocchio_default
+  pinocchio::pinocchio_parsers
+  Eigen3::Eigen)
+target_compile_features(gz_mrac_joint_node_base PUBLIC cxx_std_17)
+target_compile_definitions(gz_mrac_joint_node_base PRIVATE
+  "PACKAGE_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\""
+  "PACKAGE_URDF_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/urdf\""
+  COAL_DISABLE_HPP_FCL_WARNINGS)
+
 # ── hw_torque_probe_node (diagnostico de polaridad torque->corriente) ────────
 add_executable(hw_torque_probe_node "src/Diagnostics/hw_torque_probe_node.cpp")
 ament_target_dependencies(hw_torque_probe_node rclcpp)
@@ -325,6 +338,7 @@ install(TARGETS
     gz_smc_joint_node gz_smc_cart_node gz_SMCI_cart_node
     gz_smc_joint_node_base gz_smc_cart_node_base
     gz_mrac_joint_node
+    gz_mrac_joint_node_base
   DESTINATION lib/${PROJECT_NAME})
 
 install(DIRECTORY xacro config launch scripts data urdf meshes worlds
