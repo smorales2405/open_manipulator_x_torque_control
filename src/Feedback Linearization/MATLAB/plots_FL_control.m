@@ -7,18 +7,28 @@
 %   Figura 3 — Seguimiento de velocidades articulares dq1..dq4
 %   Figura 4 — Torques de control tau1..tau4
 %
+%   Metricas reportadas en consola (por articulacion, sin la rampa quintica):
+%     e_q,max [rad]  |  e_q,RMS [rad]  |  max|tau| [N·m]  |  tau_RMS [N·m]  |  Sat [%]
+%
 % Configurar las dos variables de la seccion "Configuracion" y ejecutar.
 
 clear; clc; close all;
 
 %% ── Configuracion ────────────────────────────────────────────────────────────
-mode        = 'real';   % 'sim'  = simulacion Gazebo
+mode        = 'sim';   % 'sim'  = simulacion Gazebo
                        % 'real' = implementacion hardware real
 
-test_num    = 6;       % Numero de log
+test_num    = 1;       % Numero de log
 
-EXPORT_FIGS = truej;    % true  = guardar PNG (300 dpi) y EPS vectorial (600 dpi)
+EXPORT_FIGS = false;    % true  = guardar PNG (300 dpi) y EPS vectorial (600 dpi)
                        % false = solo visualizar
+
+RAMP_TIME_S = 3.0;     % [s] duracion de la rampa quintica inicial — debe
+                       % coincidir con RAMP_TIME_S de los nodos gz/hw_fl;
+                       % las metricas excluyen t < RAMP_TIME_S
+
+TAU_MAX     = 1.2;     % [N·m] limite de torque (tau_max en los nodos);
+                       % usado para calcular Sat [%]
 
 % Directorio raiz del paquete ROS 2
 pkg_dir = '/home/utec/open_manx_ws/src/open_manipulator_x_torque_control';
@@ -64,6 +74,31 @@ end
 
 tau    = [T.tau1,    T.tau2,    T.tau3,    T.tau4   ];
 
+e_q    = q - q_des;
+
+%% ── Metricas (por articulacion, excluyendo la rampa quintica) ────────────────
+m_reg = t >= RAMP_TIME_S;   % regimen: se descarta la transicion inicial
+if ~any(m_reg)
+    warning('No hay muestras con t >= %.1f s; revisar RAMP_TIME_S.', RAMP_TIME_S);
+end
+
+fprintf('\n%s\n', repmat('═', 1, 76));
+fprintf(' Metricas FL articular  [%s | test=%d]  (t >= %.1f s, sin rampa)\n', ...
+        mode_label, test_num, RAMP_TIME_S);
+fprintf('%s\n', repmat('═', 1, 76));
+fprintf('%-6s  %-12s  %-12s  %-14s  %-14s  %-8s\n', ...
+        'Joint', 'e_max[rad]', 'e_RMS[rad]', 'max|tau|[N·m]', 'tau_RMS[N·m]', 'Sat[%]');
+fprintf('%s\n', repmat('-', 1, 76));
+for i = 1:4
+    e_i   = e_q(m_reg, i);
+    tau_i = tau(m_reg, i);
+    fprintf('q%-5d  %12.5f  %12.5f  %14.4f  %14.4f  %8.2f\n', i, ...
+            max(abs(e_i)), sqrt(mean(e_i.^2)), ...
+            max(abs(tau_i)), sqrt(mean(tau_i.^2)), ...
+            100 * mean(abs(tau_i) >= TAU_MAX - 1e-6));
+end
+fprintf('%s\n\n', repmat('═', 1, 76));
+
 %% ── Estilo ───────────────────────────────────────────────────────────────────
 lw         = 1.6;
 fs         = 11;
@@ -103,8 +138,6 @@ title(tl1, sprintf('[%s] Seguimiento de posiciones articulares', mode_label), ..
       'FontSize', 14, 'FontWeight', 'bold');
 
 %% ── Figura 2 — Errores de seguimiento articular ──────────────────────────────
-e_q = q - q_des;
-
 figure(2); clf;
 set(gcf, 'Color', 'w', 'Position', [120 120 1100 560]);
 tl2  = tiledlayout(2, 2, 'TileSpacing', 'compact', 'Padding', 'compact');

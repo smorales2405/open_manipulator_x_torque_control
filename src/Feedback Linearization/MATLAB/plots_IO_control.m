@@ -8,6 +8,10 @@
 %   Figura 4 — Posiciones articulares q1..q4
 %   Figura 5 — Torques de control tau1..tau4
 %
+%   Metricas reportadas en consola (sin la transicion quintica; fila i =
+%   error cartesiano del eje i + torque de la articulacion i):
+%     e_max [m|rad]  |  e_RMS [m|rad]  |  max|tau| [N·m]  |  tau_RMS [N·m]  |  Sat [%]
+%
 % Configurar las dos variables de la seccion "Configuracion" y ejecutar.
 
 clear; clc; close all;
@@ -16,10 +20,17 @@ clear; clc; close all;
 mode        = 'sim';   % 'sim'  = simulacion Gazebo
                        % 'real' = implementacion hardware real
 
-test_num    = 6;       % Numero de log
+test_num    = 1;       % Numero de log
 
 EXPORT_FIGS = false;    % true  = guardar PNG (300 dpi) y EPS vectorial (600 dpi)
                        % false = solo visualizar
+
+T_TRANS     = 3.0;     % [s] duracion de la transicion quintica inicial — debe
+                       % coincidir con T_TRANS de los nodos gz/hw_io;
+                       % las metricas excluyen t < T_TRANS
+
+TAU_MAX     = 1.2;     % [N·m] limite de torque (tau_max en los nodos);
+                       % usado para calcular Sat [%]
 
 % Directorio raiz del paquete ROS 2
 pkg_dir = '/home/utec/open_manx_ws/src/open_manipulator_x_torque_control';
@@ -67,6 +78,36 @@ ydot_des = [T.xdot_des, T.ydot_des, T.zdot_des, T.phidot_des];
 
 tau = [T.tau1, T.tau2, T.tau3, T.tau4];
 
+e_y = y - y_des;
+
+%% ── Metricas (excluyendo la transicion quintica) ─────────────────────────────
+% Fila i: error cartesiano del eje i (x,y,z en [m]; phi en [rad]) y torque de
+% la articulacion i.
+m_reg = t >= T_TRANS;   % regimen: se descarta la transicion inicial
+if ~any(m_reg)
+    warning('No hay muestras con t >= %.1f s; revisar T_TRANS.', T_TRANS);
+end
+
+axis_lbl = {'x  [m]  ', 'y  [m]  ', 'z  [m]  ', 'phi[rad]'};
+
+fprintf('\n%s\n', repmat('═', 1, 80));
+fprintf(' Metricas IO cartesiano  [%s | test=%d]  (t >= %.1f s, sin transicion)\n', ...
+        mode_label, test_num, T_TRANS);
+fprintf('%s\n', repmat('═', 1, 80));
+fprintf('%-12s  %-12s  %-12s  %-14s  %-14s  %-8s\n', ...
+        'Eje / Joint', 'e_max', 'e_RMS', 'max|tau|[N·m]', 'tau_RMS[N·m]', 'Sat[%]');
+fprintf('%s\n', repmat('-', 1, 80));
+for i = 1:4
+    e_i   = e_y(m_reg, i);
+    tau_i = tau(m_reg, i);
+    fprintf('%s/q%d  %12.5f  %12.5f  %14.4f  %14.4f  %8.2f\n', ...
+            axis_lbl{i}, i, ...
+            max(abs(e_i)), sqrt(mean(e_i.^2)), ...
+            max(abs(tau_i)), sqrt(mean(tau_i.^2)), ...
+            100 * mean(abs(tau_i) >= TAU_MAX - 1e-6));
+end
+fprintf('%s\n\n', repmat('═', 1, 80));
+
 %% ── Estilo ───────────────────────────────────────────────────────────────────
 lw        = 1.6;
 fs        = 11;
@@ -113,7 +154,6 @@ title(tl1, sprintf('[%s] IO Control - Seguimiento Cartesiano', mode_label), ...
       'FontSize', fs_ttl, 'FontWeight', 'bold');
 
 %% ── Figura 2 — Errores de seguimiento cartesiano ─────────────────────────────
-e_y      = y - y_des;
 e_labels = {'$e_x$ [m]', '$e_y$ [m]', '$e_z$ [m]', '$e_\phi$ [rad]'};
 
 figure(2); clf;
