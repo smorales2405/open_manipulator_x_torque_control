@@ -27,10 +27,14 @@
 //                      phi_des = 0.22 rad
 //
 //  Parametros ROS:
-//    test_num — identificador del CSV generado (io_data_<test_num>.csv)
+//    test_num — identificador del CSV generado (gz_io_data_<test_num>.csv)
 //    t_sim    — duracion de la simulacion en segundos (0 = ilimitado)
 //
-//  CSV generado: io_data_<test_num>.csv  en PACKAGE_DATA_DIR/act2/
+//  CSV generado: gz_io_data_<test_num>.csv  en PACKAGE_DATA_DIR/lab4/sim/act2/
+//
+//  Ejemplo de ejecucion (con la simulacion Gazebo ya lanzada):
+//    ros2 launch open_manipulator_x_torque_control torque_sim.launch.py
+//    ros2 run open_manipulator_x_torque_control gz_io_control_node --ros-args -p test_num:=1 -p t_sim:=20.0
 // ============================================================================
 
 #include <chrono>

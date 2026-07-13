@@ -22,7 +22,11 @@
 //    test_num — identificador del CSV generado (gz_fl_data_<test_num>.csv)
 //    t_sim    — duracion de la simulacion en segundos (0 = ilimitado)
 //
-//  CSV generado: gz_fl_data_<test_num>.csv  en PACKAGE_DATA_DIR/sim/act1/
+//  CSV generado: gz_fl_data_<test_num>.csv  en PACKAGE_DATA_DIR/lab4/sim/act1/
+//
+//  Ejemplo de ejecucion (con la simulacion Gazebo ya lanzada):
+//    ros2 launch open_manipulator_x_torque_control torque_sim.launch.py
+//    ros2 run open_manipulator_x_torque_control gz_fl_control_node --ros-args -p test_num:=1 -p t_sim:=20.0
 // ============================================================================
 
 #include <chrono>
