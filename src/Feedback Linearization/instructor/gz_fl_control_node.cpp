@@ -19,14 +19,19 @@
 //  Publicador: /arm_effort_controller/commands  (std_msgs/Float64MultiArray)
 //
 //  Parametros ROS:
-//    test_num — identificador del CSV generado (gz_fl_data_<test_num>.csv)
-//    t_sim    — duracion de la simulacion en segundos (0 = ilimitado)
+//    test_num      — identificador del CSV generado (gz_fl_data_<test_num>.csv)
+//    t_sim         — duracion de la simulacion en segundos (0 = ilimitado)
+//    friction_ffwd — bool (default false): feedforward de la friccion del URDF
+//                    (damping·dq + friction·tanh(dq_des/eps)), replicando la
+//                    compensacion del nodo hw. Pinocchio no incluye <dynamics>
+//                    en M/nle, asi que sin esto la friccion de Gazebo queda
+//                    sin compensar. Valido con damping/friction_scale = 1.0.
 //
 //  CSV generado: gz_fl_data_<test_num>.csv  en PACKAGE_DATA_DIR/lab4/sim/act1/
 //
 //  Ejemplo de ejecucion (con la simulacion Gazebo ya lanzada):
 //    ros2 launch open_manipulator_x_torque_control torque_sim.launch.py
-//    ros2 run open_manipulator_x_torque_control gz_fl_control_node --ros-args -p test_num:=1 -p t_sim:=20.0
+//    ros2 run open_manipulator_x_torque_control gz_fl_control_node --ros-args -p test_num:=1 -p t_sim:=20.0 -p friction_ffwd:=true
 // ============================================================================
 
 #include <chrono>
@@ -76,6 +81,10 @@ static constexpr double TAU_MAX = 1.2;    // [N·m] igual que tau_max del robot 
 
 // Duracion de la rampa quintica inicial [s] — igual que el nodo hw
 static constexpr double RAMP_TIME_S = 3.0;
+
+// Suavizado del tanh en el feedforward de Coulomb [rad/s] — igual que
+// motor_epsilon_friction del nodo hw (seguro: usa la velocidad deseada)
+static constexpr double FRIC_EPS = 0.05;
 
 // ── Trajectory ──────────────────────────────────────────────────────────────
 struct Reference {
@@ -151,6 +160,9 @@ public:
     this->declare_parameter<double>("t_sim", 0.0);   // 0 = sin limite
     t_sim_ = this->get_parameter("t_sim").as_double();
 
+    this->declare_parameter<bool>("friction_ffwd", false);
+    friction_ffwd_ = this->get_parameter("friction_ffwd").as_bool();
+
     const std::string urdf = std::string(PACKAGE_URDF_DIR) + "/open_manipulator_x.urdf";
 
     // Load Pinocchio model
@@ -162,7 +174,22 @@ public:
     }
     data_ = pinocchio::Data(model_);
 
+    // Friccion articular del URDF (<dynamics damping/friction>), parseada por
+    // Pinocchio pero NO incluida en M/nle: se usa para el feedforward opcional.
+    fric_damping_ = model_.damping.head<NARM>();
+    fric_coulomb_ = model_.friction.head<NARM>();
+
     RCLCPP_INFO(this->get_logger(), "Modelo cargado: nv=%d", model_.nv);
+    if (friction_ffwd_) {
+      RCLCPP_INFO(this->get_logger(),
+        "Feedforward de friccion URDF ACTIVO: damping=[%.4f %.4f %.4f %.4f]  "
+        "coulomb=[%.4f %.4f %.4f %.4f]",
+        fric_damping_[0], fric_damping_[1], fric_damping_[2], fric_damping_[3],
+        fric_coulomb_[0], fric_coulomb_[1], fric_coulomb_[2], fric_coulomb_[3]);
+    } else {
+      RCLCPP_INFO(this->get_logger(),
+        "Feedforward de friccion URDF desactivado (-p friction_ffwd:=true para activar).");
+    }
     RCLCPP_INFO(this->get_logger(),
       "Kp=[%.1f %.1f %.1f %.1f]  Kd=[%.1f %.1f %.1f %.1f]",
       KP[0], KP[1], KP[2], KP[3],
@@ -283,7 +310,18 @@ private:
     const Eigen::Vector4d v   = ref.ddq
                                 + KP.asDiagonal() * e
                                 + KD.asDiagonal() * de;
-    const Eigen::Vector4d tau = M * v + nle;
+    Eigen::Vector4d tau = M * v + nle;
+
+    // Feedforward opcional de la friccion del URDF (la que Gazebo simula):
+    // viscosa con la velocidad medida; Coulomb con la velocidad DESEADA
+    // (senal limpia, mismo criterio que el nodo hw).
+    if (friction_ffwd_) {
+      for (int i = 0; i < NARM; ++i) {
+        tau[i] += fric_damping_[i] * dq[i]
+                + fric_coulomb_[i] * std::tanh(ref.dq[i] / FRIC_EPS);
+      }
+    }
+
     const Eigen::Vector4d tau_sat =
       tau.cwiseMin(TAU_MAX).cwiseMax(-TAU_MAX);
 
@@ -327,6 +365,10 @@ private:
   pinocchio::Data   data_;
   double t_;
   double t_sim_;
+
+  bool friction_ffwd_{false};
+  Eigen::Vector4d fric_damping_{Eigen::Vector4d::Zero()};
+  Eigen::Vector4d fric_coulomb_{Eigen::Vector4d::Zero()};
 
   Eigen::Vector4d q_initial_;
   bool q_initial_captured_{false};
