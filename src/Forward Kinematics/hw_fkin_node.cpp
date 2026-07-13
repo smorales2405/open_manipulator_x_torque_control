@@ -72,7 +72,7 @@ static constexpr double POS_UNIT_RAD   = 2.0 * PI / 4096.0;
 static constexpr double VEL_UNIT_RAD_S = 0.229 * 2.0 * PI / 60.0;
 
 static const std::array<int32_t, NUM_JOINTS> JOINT_ZERO_TICK = {2048, 2048, 2048, 2048};
-static const std::array<double,  NUM_JOINTS> ENCODER_SIGN    = {+1.0, -1.0, -1.0, -1.0};
+static const std::array<double,  NUM_JOINTS> ENCODER_SIGN    = {+1.0, +1.0, +1.0, +1.0};
 
 using Vec4 = Eigen::Matrix<double, NUM_JOINTS, 1>;
 
