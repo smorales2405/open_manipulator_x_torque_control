@@ -6,13 +6,13 @@
 //    v   = ddq_des - Kd*(dq - dq_des) - Kp*(q - q_des)
 //    tau = M(q)*v + h(q, dq)           <- RNEA (Pinocchio)
 //
-//  Fases de referencia:
-//    [0, T_TRANS)  — transicion suave con polinomio de 5to orden
-//                    desde la posicion inicial medida hasta el inicio de la trayectoria
-//    [T_TRANS, ∞)  — trayectoria sinusoidal articular (w = 1 rad/s):
-//                      q1_des =  (pi/4)*sin(t')
-//                      q2_des = -0.5 + 0.5*sin(t')
-//                      q3_des =  0.3 - 0.5*sin(t')
+//  Fases de referencia (identicas al nodo hw_fl_control_node):
+//    [0, RAMP_TIME_S) — rampa quintica desde la pose inicial medida hasta
+//                       el punto de la trayectoria en t = RAMP_TIME_S
+//    [RAMP_TIME_S, ∞) — trayectoria sinusoidal articular (w = 1 rad/s):
+//                      q1_des =  (pi/4)*sin(t)
+//                      q2_des = -0.5 + 0.5*sin(t)
+//                      q3_des =  0.3 - 0.5*sin(t)
 //                      q4_des =  pi/4
 //
 //  Suscriptor: /joint_states           (sensor_msgs/JointState)
@@ -62,12 +62,16 @@ static constexpr int    NARM = 4;    // controlled joints (joint1..joint4)
 //  GANANCIAS DEL CONTROLADOR  — editar aqui para cada articulacion
 //  Indice:  [joint1, joint2, joint3, joint4]
 // ═══════════════════════════════════════════════════════════════════════════
-static const Eigen::Vector4d KP = {200.0, 200.0, 200.0, 400.0};
-static const Eigen::Vector4d KD = { 20.0,  20.0,  20.0,  36.0};
-static constexpr double TAU_MAX = 1.5;    // [N·m] limite por articulacion
-// Aumentado de 0.82 a 1.5 para el URDF con inercias oficiales ROBOTIS:
-// max|G_new[joint2]| = 1.18 N.m > 0.82 → saturacion permanente con el limite anterior.
+// Alineadas con hw_fl_control_node (kd = 1.4·sqrt(kp), zeta = 0.7): mismo
+// controlador en sim y en el robot real para que los CSV sean comparables.
+// kp4 alto porque la rigidez de feedback es M44·kp4 y M44 ≈ 0.001 kg·m².
+static const Eigen::Vector4d KP = {400.0, 400.0, 600.0, 3000.0};
+static const Eigen::Vector4d KD = { 28.0,  28.0,  34.0,   77.0};
+static constexpr double TAU_MAX = 1.2;    // [N·m] igual que tau_max del robot real
 // ═══════════════════════════════════════════════════════════════════════════
+
+// Duracion de la rampa quintica inicial [s] — igual que el nodo hw
+static constexpr double RAMP_TIME_S = 3.0;
 
 // ── Trajectory ──────────────────────────────────────────────────────────────
 struct Reference {
@@ -97,6 +101,34 @@ static Reference desiredTrajectory(double t)
      0.5 * w * w * std::sin(w * t),
      0.0;
 
+  return ref;
+}
+
+// ── Rampa quintica inicial (igual que el nodo hw) ───────────────────────────
+// Lleva suavemente desde q0 hasta el punto de la trayectoria en t = T, con
+// velocidad y aceleracion continuas en el empalme.
+static Reference quinticTransition(double t, double T, const Eigen::Vector4d & q0)
+{
+  const Reference target = desiredTrajectory(T);
+  if (T <= 0.0) {return target;}
+
+  const Eigen::Vector4d v0 = Eigen::Vector4d::Zero();
+  const Eigen::Vector4d a0 = Eigen::Vector4d::Zero();
+  const Eigen::Vector4d qf = target.q, vf = target.dq, af = target.ddq;
+
+  const double T2 = T*T, T3 = T2*T, T4 = T3*T, T5 = T4*T;
+  const Eigen::Vector4d c0 = q0;
+  const Eigen::Vector4d c1 = v0;
+  const Eigen::Vector4d c2 = 0.5 * a0;
+  const Eigen::Vector4d c3 = (20.0*(qf-q0) - (8.0*vf+12.0*v0)*T - (3.0*a0-af)*T2) / (2.0*T3);
+  const Eigen::Vector4d c4 = (30.0*(q0-qf) + (14.0*vf+16.0*v0)*T + (3.0*a0-2.0*af)*T2) / (2.0*T4);
+  const Eigen::Vector4d c5 = (12.0*(qf-q0) - (6.0*vf+6.0*v0)*T - (a0-af)*T2) / (2.0*T5);
+
+  const double t2 = t*t, t3 = t2*t, t4 = t3*t, t5 = t4*t;
+  Reference ref;
+  ref.q   = c0 + c1*t  + c2*t2  + c3*t3  + c4*t4  + c5*t5;
+  ref.dq  = c1 + 2.0*c2*t + 3.0*c3*t2 + 4.0*c4*t3 + 5.0*c5*t4;
+  ref.ddq = 2.0*c2 + 6.0*c3*t + 12.0*c4*t2 + 20.0*c5*t3;
   return ref;
 }
 
@@ -148,8 +180,8 @@ public:
         last_js_ = msg;
       });
 
-    // 100 Hz control loop (dt = 10 ms)
-    timer_ = this->create_wall_timer(10ms, [this]() { tick(); });
+    // Lazo de control a 200 Hz (dt = 5 ms), igual que el nodo hw
+    timer_ = this->create_wall_timer(5ms, [this]() { tick(); });
   }
 
   ~FLControlNode()
@@ -210,7 +242,18 @@ private:
     Eigen::Vector4d q, dq;
     read_js(q, dq);
 
-    const Reference ref = desiredTrajectory(t_);
+    // Captura de la pose inicial (primer tick con /joint_states valido)
+    if (!q_initial_captured_) {
+      q_initial_ = q;
+      q_initial_captured_ = true;
+      RCLCPP_INFO(this->get_logger(), "q_inicial=[%.3f %.3f %.3f %.3f] rad",
+        q[0], q[1], q[2], q[3]);
+    }
+
+    // Referencia: rampa quintica inicial + trayectoria sinusoidal (igual que hw)
+    const Reference ref = (t_ < RAMP_TIME_S)
+      ? quinticTransition(t_, RAMP_TIME_S, q_initial_)
+      : desiredTrajectory(t_);
 
     // Full Pinocchio state (nv=6); gripper joints locked at 0
     Eigen::VectorXd q_pin  = Eigen::VectorXd::Zero(model_.nv);
@@ -259,7 +302,7 @@ private:
            << '\n';
     }
 
-    t_ += 0.01;
+    t_ += 0.005;   // Ts del lazo de 200 Hz
 
     if (t_sim_ > 0.0 && t_ >= t_sim_) {
       RCLCPP_INFO(this->get_logger(),
@@ -280,6 +323,9 @@ private:
   pinocchio::Data   data_;
   double t_;
   double t_sim_;
+
+  Eigen::Vector4d q_initial_;
+  bool q_initial_captured_{false};
 
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr torque_pub_;
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr  joint_sub_;

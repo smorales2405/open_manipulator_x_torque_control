@@ -16,12 +16,15 @@
 //    qddot = J4_dls^+ * (v - Jdot*qdot)     <- pseudo-inversa amortiguada DLS
 //    tau = M(q) * qddot + b(q,qdot)
 //
-//  Fases de referencia:
+//  Fases de referencia (identicas al nodo hw_io_control_node):
 //    [0, T_TRANS)  — transicion suave con polinomio de 5to orden
 //                    desde la pose inicial medida hasta el inicio de la trayectoria
-//    [T_TRANS, ∞)  — trayectoria circular cartesiana (w = 1 rad/s):                                                          
-//                      x_des   = 0.20 + 0.05*sin(t')          
-//                      y_des   = 0.05*cos(t')    
+//    [T_TRANS, ∞)  — trayectoria 3D cartesiana (w = 1 rad/s):
+//                      x_des   = 0.20 + 0.05*sin(t')   [extension max. 0.25 m]
+//                      y_des   = 0.05*cos(t')
+//                      z_des   = 0.15 - 0.05*sin(t')   [z ∈ 0.10..0.20 m,
+//                                CONTRAFASE con x: z minimo con brazo extendido]
+//                      phi_des = 0.22 rad
 //
 //  Parametros ROS:
 //    test_num — identificador del CSV generado (io_data_<test_num>.csv)
@@ -72,32 +75,33 @@ static constexpr char EFF_FRAME[] = "end_effector_link";
 // ============================================================================
 
 // Ganancias cartesianas  [x,  y,  z,  phi]
-// phi usa ganancias mas altas (wn≈11 rad/s) para rechazar el acoplamiento                                                    
-// cinematico periodico inducido por la trayectoria circular (w=1 rad/s).                                                     
-// Ajustadas para el URDF con inercias oficiales ROBOTIS (brazo mas pesado:
-// M subio x1.5 en joint2, x2.8 en joint4). Las ganancias previas {40..120}/{13..22}
-// saturaban tau2 -> joint2 a su limite -> divergencia DLS. El canal phi usa KP mayor
-// (200) para rechazar el offset de seguimiento; tau4 tiene amplio headroom (max 0.15 N.m).
-static const Eigen::Vector4d KP = {100.0, 100.0, 100.0, 200.0};
-static const Eigen::Vector4d KD = {10.0, 10.0, 10.0,  20.0};
+// Alineadas con hw_io_control_node (KD = 1.4·sqrt(KP), zeta = 0.7): mismo
+// controlador en sim y en el robot real para que los CSV sean comparables.
+// z y phi van mas altos porque esas direcciones las dominan las munecas
+// (inercia diminuta): en hardware con KP bajos quedaban pegadas por stiction.
+static const Eigen::Vector4d KP = {400.0, 200.0, 800.0, 1500.0};
+static const Eigen::Vector4d KD = { 28.0,  20.0,  40.0,   54.0};
 
-// Saturacion de torque por articulacion [N·m]
-static constexpr double TAU_MAX = 1.5;
+// Saturacion de torque por articulacion [N·m] — igual que tau_max del robot real
+static constexpr double TAU_MAX = 1.2;
 
-// Duracion de la fase de transicion inicial [s]
-static constexpr double T_TRANS = 2.0;
+// Duracion de la fase de transicion inicial [s] — igual que el nodo hw
+static constexpr double T_TRANS = 3.0;
 
 // Factor de amortiguamiento para la pseudo-inversa DLS  (Damped Least Squares)
 // Limita la norma de qddot cerca de singularidades sin afectar la inversion
-// cuando el Jacobiano esta bien condicionado (usar 0.01 - 0.05).
-static constexpr double LAMBDA    = 0.05;
+// cuando el Jacobiano esta bien condicionado. Alineado con el nodo hw (0.01);
+// la trayectoria verificada por IK se mantiene lejos de singularidades.
+static constexpr double LAMBDA    = 0.01;
 static constexpr double LAMBDA_SQ = LAMBDA * LAMBDA;
 
-// Inicio de la trayectoria circular (= valor de la referencia en t'=0)
-// x_c=0.20 y phi=0.0 estan cerca de la pose inicial del robot en Gazebo
-// (x≈0.26, phi≈-0.097), lo que evita errores grandes al arranque y que
-// q4 alcance su limite fisico (~2.0 rad).
-static const Eigen::Vector4d Y_START {0.20, 0.05, 0.10, M_PI/4.0};
+// Inicio de la trayectoria (= valor de la referencia en t'=0), igual que hw
+static const Eigen::Vector4d Y_START {0.20, 0.05, 0.15, 0.22};
+
+// Altura minima del efector sobre la placa de la base [m] — igual que el
+// nodo hw: guarda para la referencia y para el efector medido (durante la
+// transicion solo se exige no descender por debajo de la pose inicial).
+static constexpr double Z_MIN_FLOOR = 0.075;
 
 // ============================================================================
 
@@ -117,19 +121,19 @@ static CartRef circularTrajectory(double tp)
   ref.y <<
      0.20 + 0.05 * std::sin(w * tp),
      0.05 * std::cos(w * tp),
-     0.10,
-     M_PI/4.0;
+     0.15 - 0.05 * std::sin(w * tp),
+     0.22;
 
   ref.ydot <<
      0.05 * w * std::cos(w * tp),
     -0.05 * w * std::sin(w * tp),
-     0.0,
+    -0.05 * w * std::cos(w * tp),
      0.0;
 
   ref.yddot <<
     -0.05 * w * w * std::sin(w * tp),
     -0.05 * w * w * std::cos(w * tp),
-     0.0,
+     0.05 * w * w * std::sin(w * tp),
      0.0;
 
   return ref;
@@ -211,7 +215,8 @@ public:
         last_js_ = msg;
       });
 
-    timer_ = this->create_wall_timer(10ms, [this]() { tick(); });
+    // Lazo de control a 200 Hz (dt = 5 ms), igual que el nodo hw
+    timer_ = this->create_wall_timer(5ms, [this]() { tick(); });
   }
 
   ~IOControlNode()
@@ -265,7 +270,18 @@ private:
     }
   }
 
-  // ── Tick de control a 100 Hz ──────────────────────────────────────────────
+  // ── Parada segura: torque cero y fin del lazo (guardas de seguridad) ──────
+  void stop_control(const std::string & reason)
+  {
+    RCLCPP_ERROR(this->get_logger(), "PARADA: %s", reason.c_str());
+    std_msgs::msg::Float64MultiArray zero;
+    zero.data.assign(NARM, 0.0);
+    torque_pub_->publish(zero);
+    if (csv_.is_open()) { csv_.close(); }
+    timer_->cancel();
+  }
+
+  // ── Tick de control (200 Hz) ──────────────────────────────────────────────
   void tick()
   {
     if (!last_js_) { return; }
@@ -334,8 +350,23 @@ private:
       // Fase de transicion: polinomio 5to orden  y0 → Y_START
       ref = transitionTrajectory(t_, y0_, Y_START, T_TRANS);
     } else {
-      // Fase circular: parametro de tiempo relativo al fin de la transicion
+      // Fase de trayectoria: parametro de tiempo relativo al fin de la transicion
       ref = circularTrajectory(t_ - T_TRANS);
+    }
+
+    // ── 6b. Guardas de altura minima (igual que el nodo hw) ───────────────
+    const double z_floor = (t_ < T_TRANS)
+      ? std::min(Z_MIN_FLOOR, y0_[2] - 0.03)
+      : Z_MIN_FLOOR;
+    if (ref.y[2] < z_floor) {
+      stop_control("Referencia z bajo altura minima: " + std::to_string(ref.y[2])
+                   + " m (piso " + std::to_string(z_floor) + ")");
+      return;
+    }
+    if (y[2] < z_floor) {
+      stop_control("Efector bajo altura minima: z=" + std::to_string(y[2])
+                   + " m (piso " + std::to_string(z_floor) + ")");
+      return;
     }
 
     // ── 7. Errores cartesianos ─────────────────────────────────────────────
@@ -382,7 +413,7 @@ private:
            << '\n';
     }
 
-    t_ += 0.01;
+    t_ += 0.005;   // Ts del lazo de 200 Hz
 
     // ── 13. Parar al cumplirse el tiempo de simulacion ────────────────────
     if (t_sim_ > 0.0 && t_ >= t_sim_) {
