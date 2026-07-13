@@ -92,7 +92,7 @@ static const Eigen::Vector4d B_FRIC =
 //  GANANCIAS SMC — ajustar aqui para cada articulacion
 //  Indice: [joint1, joint2, joint3, joint4]
 // ═══════════════════════════════════════════════════════════════════════════
-static const Eigen::Vector4d LAMBDA_Q = {5.0,  5.0,  10.0,  25.0};   // superficie [1/s]
+static const Eigen::Vector4d LAMBDA_Q = {15.0,  15.0,  15.0,  25.0};   // superficie [1/s]
 static const Eigen::Vector4d K_V      = {5.0,  5.0,  10.0,  25.0};   // alcance exponencial (proporcional a s)
 static const Eigen::Vector4d K_S      = {50.0, 30.0, 100.0, 200.0};  // ganancia conmutacion rho(s)
 // ═══════════════════════════════════════════════════════════════════════════
