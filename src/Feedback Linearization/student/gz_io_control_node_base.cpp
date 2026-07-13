@@ -22,6 +22,10 @@
 //    - Cinematica directa: posicion (x,y,z), angulo phi, Jacobiano J4
 //    - Termino de bias Jdot*qdot via getFrameClassicalAcceleration
 //    - Calculo de M(q) y NLE(q,dq) mediante Pinocchio
+//    - Feedforward de la friccion del URDF (siempre activo, tras la ley de
+//      control): Pinocchio NO incluye <dynamics damping/friction> en M/NLE,
+//      pero Gazebo SI simula esa friccion; el termino de Coulomb usa la
+//      velocidad articular deseada dq_des = J4⁺·ydot_des
 //    - Transicion inicial suave (polinomio de 5to orden): y0 → Y_START
 //    - Captura automatica de la pose inicial del robot
 //    - Suscriptor /joint_states  →  q, dq
@@ -71,6 +75,10 @@ static constexpr double PI   = M_PI;
 static constexpr int    NARM = 4;
 
 static constexpr char EFF_FRAME[] = "end_effector_link";
+
+// Suavizado del tanh en el feedforward de friccion de Coulomb [rad/s]
+// (usa la velocidad DESEADA, senal sin ruido: eps pequeno es seguro)
+static constexpr double FRIC_EPS = 0.05;
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  SECCION 1 — TRAYECTORIA DE REFERENCIA CARTESIANA
@@ -198,6 +206,11 @@ public:
     }
     data_ = pinocchio::Data(model_);
 
+    // Friccion articular del URDF (<dynamics damping/friction>), parseada por
+    // Pinocchio pero NO incluida en M/nle: usada por el feedforward (infra).
+    fric_damping_ = model_.damping.head<NARM>();
+    fric_coulomb_ = model_.friction.head<NARM>();
+
     if (!model_.existFrame(EFF_FRAME)) {
       throw std::runtime_error(std::string("Frame no encontrado: ") + EFF_FRAME);
     }
@@ -206,6 +219,10 @@ public:
     RCLCPP_INFO(this->get_logger(),
       "Modelo cargado: nv=%d  frame='%s' (id=%lu)",
       model_.nv, EFF_FRAME, frame_id_);
+    RCLCPP_INFO(this->get_logger(),
+      "Feedforward friccion URDF: damping=[%.4f %.4f %.4f %.4f]  coulomb=[%.4f %.4f %.4f %.4f]",
+      fric_damping_[0], fric_damping_[1], fric_damping_[2], fric_damping_[3],
+      fric_coulomb_[0], fric_coulomb_[1], fric_coulomb_[2], fric_coulomb_[3]);
     RCLCPP_INFO(this->get_logger(),
       "Kp_y=[%.1f %.1f %.1f %.1f]  Kd_y=[%.1f %.1f %.1f %.1f]  tau_max=%.2f N·m",
       KP_Y[0], KP_Y[1], KP_Y[2], KP_Y[3],
@@ -385,9 +402,27 @@ private:
     //    tau_sat = clamp(tau, -TAU_MAX, TAU_MAX)
     // ══════════════════════════════════════════════════════════════════════
 
+    (void)M4; (void)nle4;   // suprimir warnings mientras la seccion esta incompleta
     Eigen::Vector4d tau_sat = Eigen::Vector4d::Zero();   // <-- reemplazar con implementacion
 
     // ══════════════════════════════════════════════════════════════════════
+
+    // ── Feedforward de friccion del URDF (infraestructura, NO modificar) ───
+    //  Gazebo simula la friccion articular del URDF, pero Pinocchio no la
+    //  incluye en M/nle: se compensa aqui, fuera de la ley de control.
+    //  Viscosa con la velocidad medida; Coulomb con la velocidad articular
+    //  DESEADA dq_des = J4⁺·ydot_des (senal sin ruido). Tras sumarla se
+    //  re-satura a TAU_MAX.
+    {
+      const Eigen::Matrix4d A_fric =
+        J4 * J4.transpose() + LAMBDA * LAMBDA * Eigen::Matrix4d::Identity();
+      const Eigen::Vector4d dq_des = J4.transpose() * A_fric.ldlt().solve(ref.ydot);
+      for (int i = 0; i < NARM; ++i) {
+        tau_sat[i] += fric_damping_[i] * dq[i]
+                    + fric_coulomb_[i] * std::tanh(dq_des[i] / FRIC_EPS);
+      }
+      tau_sat = tau_sat.cwiseMin(TAU_MAX).cwiseMax(-TAU_MAX);
+    }
 
     // ── 7. Publicar torques ────────────────────────────────────────────────
     std_msgs::msg::Float64MultiArray cmd;
@@ -437,6 +472,9 @@ private:
 
   double t_;
   double t_sim_;
+
+  Eigen::Vector4d fric_damping_{Eigen::Vector4d::Zero()};
+  Eigen::Vector4d fric_coulomb_{Eigen::Vector4d::Zero()};
 
   Eigen::Vector4d y0_;           // pose cartesiana inicial capturada
   bool            y0_initialized_;
