@@ -14,12 +14,17 @@
  *
  * Infraestructura proporcionada (NO modificar):
  *   - Inicializacion Dynamixel SDK: apertura del puerto, modos, SyncRead/SyncWrite
- *   - Lectura de estado (q, dq, corriente medida) a 100 Hz
- *   - Filtro EMA de velocidad articular (vel_cutoff_hz)
+ *   - Lectura de estado (q, dq, corriente medida) en UN solo SyncRead del bloque
+ *     contiguo 126-135 (corriente+velocidad+posicion), a loop_rate_hz
+ *   - Filtro alpha-beta de posicion/velocidad articular (ab_alpha, ab_beta)
  *   - Calculo de M(q) y nle(q,dq) mediante Pinocchio (en compute_torque)
- *   - Conversion torque -> corriente via modelo OLS identificado (motorXM430W350T_params.yaml)
- *   - Transicion quintica de 5 s desde la posicion inicial hasta el inicio de la trayectoria
+ *   - Conversion torque -> corriente via modelo OLS identificado
+ *     (motorXM430W350T_params.yaml); el termino de Coulomb usa la velocidad
+ *     DESEADA (senal sin ruido: sin chattering y con empuje de despegue)
+ *   - Saturacion del torque a +/-tau_max antes de enviar corriente
+ *   - Transicion quintica de 3 s desde la posicion inicial hasta el inicio de la trayectoria
  *   - Verificacion de limites articulares y de corriente medida (parada de emergencia)
+ *   - Deteccion de overruns del lazo de control
  *   - Publicador /hw/joint_states y escritura de CSV
  *
  * Parametros ROS 2 (--ros-args -p nombre:=valor):
@@ -27,7 +32,10 @@
  *   gain_scale             [double]   1.0    (escala lineal de Kp; Kd escala con sqrt)
  *   t_imp                  [double]   20.0   (duracion; 0 = sin limite)
  *   log_id                 [int]      1
- *   vel_cutoff_hz          [double]   2.0    (filtro EMA; 0 = desactivado)
+ *   ab_alpha               [double]   0.2    (filtro alpha-beta: ganancia de posicion)
+ *   ab_beta                [double]   0.02   (filtro alpha-beta: ganancia de velocidad)
+ *   friction_fc_scale      [double]   0.95   (fraccion de Fc compensada)
+ *   loop_rate_hz           [double]   200.0  (frecuencia del lazo [Hz], acotada a [50,400])
  *
  * Parametros del modelo identificado (config/motorXM430W350T_params.yaml):
  *   motor_alpha            [double[4]]   ticks/N·m
@@ -96,6 +104,11 @@ static constexpr uint16_t LEN_PRESENT_CURRENT  = 2;
 static constexpr uint16_t LEN_PRESENT_VELOCITY = 4;
 static constexpr uint16_t LEN_PRESENT_POSITION = 4;
 
+// Bloque contiguo current(126,2)+velocity(128,4)+position(132,4): una sola
+// GroupSyncRead por ciclo en vez de tres → latencia de bus ≈ 1/3.
+static constexpr uint16_t ADDR_STATE_BLOCK = ADDR_PRESENT_CURRENT;
+static constexpr uint16_t LEN_STATE_BLOCK  = 10;
+
 static constexpr uint8_t CURRENT_CONTROL_MODE = 0;
 static constexpr uint8_t TORQUE_ENABLE_VAL    = 1;
 static constexpr uint8_t TORQUE_DISABLE_VAL   = 0;
@@ -103,7 +116,7 @@ static constexpr uint8_t TORQUE_DISABLE_VAL   = 0;
 static constexpr double POS_UNIT_RAD            = 2.0 * PI / 4096.0;
 static constexpr double VEL_UNIT_RAD_S          = 0.229 * 2.0 * PI / 60.0;
 static constexpr double CURRENT_UNIT_A          = 0.00269;
-static constexpr double TORQUE_CONSTANT_NM_A    = 1.666;
+static constexpr double TORQUE_CONSTANT_NM_A    = 1.654;
 static constexpr double TORQUE_PER_CURRENT_TICK = TORQUE_CONSTANT_NM_A * CURRENT_UNIT_A;
 
 // JOINT_ZERO_TICK, ENCODER_SIGN, CURRENT_SIGN, JOINT_LOWER/UPPER,
@@ -231,6 +244,12 @@ static Reference quinticTransition(double t, double T, const Vec4& q0)
 //    KD — ganancias derivativas     [adim]
 //
 //  gain_scale_ escala KP linealmente y KD con su raiz cuadrada
+//
+//  Sugerencia: con FL exacto, la dinamica del error por joint es
+//    e'' + kd*e' + kp*e = 0   →   amortiguamiento zeta = kd/(2*sqrt(kp))
+//  Mantener kd ≈ 1.4*sqrt(kp) (zeta ≈ 0.7) evita oscilaciones subamortiguadas.
+//  Recordar ademas que el torque de feedback es M(q)*v: articulaciones con
+//  inercia pequena (munecas) necesitan kp mayores para vencer la friccion.
 // ═══════════════════════════════════════════════════════════════════════════
 static const Eigen::Vector4d KP = {0.0 /* kp1 */, 0.0 /* kp2 */, 0.0 /* kp3 */, 0.0 /* kp4 */};   // COMPLETAR
 static const Eigen::Vector4d KD = {0.0 /* kd1 */, 0.0 /* kd2 */, 0.0 /* kd3 */, 0.0 /* kd4 */};   // COMPLETAR
@@ -260,7 +279,10 @@ public:
     this->declare_parameter<dvec>("motor_Fc",               dvec{0.0,   0.0,   0.0,   0.0  });
     this->declare_parameter<dvec>("motor_I_offset",         dvec{0.0,   0.0,   0.0,   0.0  });
     this->declare_parameter<double>("motor_epsilon_friction", 0.05);
-    this->declare_parameter<double>("vel_cutoff_hz",          2.0);
+    this->declare_parameter<double>("friction_fc_scale",      0.95);
+    this->declare_parameter<double>("ab_alpha", 0.2);
+    this->declare_parameter<double>("ab_beta",  0.02);
+    this->declare_parameter<double>("loop_rate_hz", 200.0);
 
     using ivec = std::vector<int64_t>;
     this->declare_parameter<ivec>  ("joint_zero_tick",        ivec{2048, 2048, 2048, 2048});
@@ -287,11 +309,12 @@ public:
     motor_Fc_       = load_vec4("motor_Fc");
     motor_I_offset_ = load_vec4("motor_I_offset");
     motor_epsilon_  = get_parameter("motor_epsilon_friction").as_double();
+    fc_scale_       = get_parameter("friction_fc_scale").as_double();
 
-    vel_cutoff_hz_ = get_parameter("vel_cutoff_hz").as_double();
-    vel_filter_alpha_ = (vel_cutoff_hz_ > 0.0)
-        ? std::exp(-2.0 * PI * vel_cutoff_hz_ * 0.01)
-        : 0.0;
+    ab_alpha_ = get_parameter("ab_alpha").as_double();
+    ab_beta_  = get_parameter("ab_beta").as_double();
+    loop_rate_hz_ = std::min(std::max(get_parameter("loop_rate_hz").as_double(), 50.0), 400.0);
+    Ts_ = 1.0 / loop_rate_hz_;
 
     {
       const auto zt = get_parameter("joint_zero_tick").as_integer_array();
@@ -315,11 +338,9 @@ public:
       "motor alpha=[%.1f %.1f %.1f %.1f]  Fv=[%.2f %.2f %.2f %.2f]  epsilon=%.3f",
       motor_alpha_(0), motor_alpha_(1), motor_alpha_(2), motor_alpha_(3),
       motor_Fv_(0), motor_Fv_(1), motor_Fv_(2), motor_Fv_(3), motor_epsilon_);
-    if (vel_cutoff_hz_ > 0.0)
-      RCLCPP_INFO(get_logger(),
-        "Filtro velocidad: fc=%.1f Hz  alpha=%.4f", vel_cutoff_hz_, vel_filter_alpha_);
-    else
-      RCLCPP_WARN(get_logger(), "Filtro velocidad DESACTIVADO (vel_cutoff_hz=0).");
+    RCLCPP_INFO(get_logger(),
+      "Filtro alpha-beta: alpha=%.3f  beta=%.4f  |  Fc_scale=%.2f  |  lazo=%.0f Hz",
+      ab_alpha_, ab_beta_, fc_scale_, loop_rate_hz_);
 
     // ── Pinocchio ────────────────────────────────────────────────────────────
     const std::string urdf = std::string(PACKAGE_URDF_DIR) + "/open_manipulator_x.urdf";
@@ -338,7 +359,7 @@ public:
                 + std::to_string(log_id) + ".csv";
     csv_.open(csv_path_);
     if (csv_.is_open()) {
-      csv_ << "t,q1,q2,q3,q4,dq1,dq2,dq3,dq4,"
+      csv_ << "t,q1,q2,q3,q4,dq1,dq2,dq3,dq4,dq1_filt,dq2_filt,dq3_filt,dq4_filt,"
               "q1_des,q2_des,q3_des,q4_des,dq1_des,dq2_des,dq3_des,dq4_des,"
               "tau1,tau2,tau3,tau4,"
               "curr_cmd1,curr_cmd2,curr_cmd3,curr_cmd4,"
@@ -357,10 +378,13 @@ public:
       throw std::runtime_error("Hardware init failed");
     }
 
-    // ── Timer 100 Hz ─────────────────────────────────────────────────────────
+    // ── Timer de control (loop_rate_hz) ──────────────────────────────────────
     start_time_ = std::chrono::high_resolution_clock::now();
-    timer_ = this->create_wall_timer(10ms, [this]() { tick(); });
-    RCLCPP_INFO(get_logger(), "Control activo a 100 Hz. Ctrl+C para detener.");
+    const auto period = std::chrono::microseconds(
+      static_cast<int64_t>(std::lround(1e6 / loop_rate_hz_)));
+    timer_ = this->create_wall_timer(period, [this]() { tick(); });
+    RCLCPP_INFO(get_logger(), "Control activo a %.0f Hz (Ts=%.1f ms). Ctrl+C para detener.",
+      loop_rate_hz_, 1e3 * Ts_);
   }
 
   ~HWFLControlNode()
@@ -404,20 +428,13 @@ private:
       RCLCPP_INFO(get_logger(), "DXL ID %d listo", static_cast<int>(id));
     }
 
-    grp_pos_  = std::make_unique<dynamixel::GroupSyncRead>(
-      port_handler_, packet_handler_, ADDR_PRESENT_POSITION, LEN_PRESENT_POSITION);
-    grp_vel_  = std::make_unique<dynamixel::GroupSyncRead>(
-      port_handler_, packet_handler_, ADDR_PRESENT_VELOCITY, LEN_PRESENT_VELOCITY);
-    grp_cur_  = std::make_unique<dynamixel::GroupSyncRead>(
-      port_handler_, packet_handler_, ADDR_PRESENT_CURRENT,  LEN_PRESENT_CURRENT);
+    grp_read_ = std::make_unique<dynamixel::GroupSyncRead>(
+      port_handler_, packet_handler_, ADDR_STATE_BLOCK, LEN_STATE_BLOCK);
     grp_wcur_ = std::make_unique<dynamixel::GroupSyncWrite>(
       port_handler_, packet_handler_, ADDR_GOAL_CURRENT, LEN_GOAL_CURRENT);
 
-    for (const auto id : DXL_ID) {
-      grp_pos_->addParam(id);
-      grp_vel_->addParam(id);
-      grp_cur_->addParam(id);
-    }
+    for (const auto id : DXL_ID)
+      grp_read_->addParam(id);
 
     hw_active_ = true;
     RCLCPP_INFO(get_logger(), "Hardware inicializado en %s", port_name_.c_str());
@@ -471,26 +488,24 @@ private:
 
   bool read_state(Vec4& q, Vec4& dq, std::array<int16_t, NUM_JOINTS>& cur)
   {
-    if (grp_pos_->txRxPacket() != COMM_SUCCESS ||
-        grp_vel_->txRxPacket() != COMM_SUCCESS ||
-        grp_cur_->txRxPacket() != COMM_SUCCESS) {
+    if (grp_read_->txRxPacket() != COMM_SUCCESS) {
       RCLCPP_ERROR(get_logger(), "SyncRead fallo");
       return false;
     }
     for (int i = 0; i < NUM_JOINTS; ++i) {
       const uint8_t id = DXL_ID[i];
-      if (!grp_pos_->isAvailable(id, ADDR_PRESENT_POSITION, LEN_PRESENT_POSITION) ||
-          !grp_vel_->isAvailable(id, ADDR_PRESENT_VELOCITY, LEN_PRESENT_VELOCITY) ||
-          !grp_cur_->isAvailable(id, ADDR_PRESENT_CURRENT,  LEN_PRESENT_CURRENT)) {
+      if (!grp_read_->isAvailable(id, ADDR_PRESENT_POSITION, LEN_PRESENT_POSITION) ||
+          !grp_read_->isAvailable(id, ADDR_PRESENT_VELOCITY, LEN_PRESENT_VELOCITY) ||
+          !grp_read_->isAvailable(id, ADDR_PRESENT_CURRENT,  LEN_PRESENT_CURRENT)) {
         RCLCPP_ERROR(get_logger(), "[ID %d] dato no disponible", id);
         return false;
       }
       const int32_t rp = toSigned32(static_cast<uint32_t>(
-        grp_pos_->getData(id, ADDR_PRESENT_POSITION, LEN_PRESENT_POSITION)));
+        grp_read_->getData(id, ADDR_PRESENT_POSITION, LEN_PRESENT_POSITION)));
       const int32_t rv = toSigned32(static_cast<uint32_t>(
-        grp_vel_->getData(id, ADDR_PRESENT_VELOCITY, LEN_PRESENT_VELOCITY)));
+        grp_read_->getData(id, ADDR_PRESENT_VELOCITY, LEN_PRESENT_VELOCITY)));
       const int16_t rc = toSigned16(static_cast<uint32_t>(
-        grp_cur_->getData(id, ADDR_PRESENT_CURRENT,  LEN_PRESENT_CURRENT)));
+        grp_read_->getData(id, ADDR_PRESENT_CURRENT,  LEN_PRESENT_CURRENT)));
 
       q(i)   = encoder_sign_(i) * static_cast<double>(wrappedTickDiff(rp, joint_zero_tick_[i])) * POS_UNIT_RAD;
       dq(i)  = encoder_sign_(i) * static_cast<double>(rv) * VEL_UNIT_RAD_S;
@@ -563,23 +578,27 @@ private:
     // ═══════════════════════════════════════════════════════════════════════
 
     // -- completar --
-    (void)M4; (void)nle4; (void)kp; (void)kd;
+    (void)M4; (void)nle4; (void)kp; (void)kd; (void)ref;
     return Vec4::Zero();  // reemplazar con tau calculado
     // ════════════════
   }
 
   // ─────────────────────────────────────────────────────────────────────────
   //  Conversion torque -> corriente via modelo OLS identificado
-  //    I_cmd = alpha*tau + Fv*dq + Fc*tanh(dq/epsilon) + I_offset
+  //    I_cmd = alpha*tau + Fv*dq + fc_scale*Fc*tanh(dq_des/epsilon) + I_offset
+  //  Fv usa la velocidad medida (termino suave); Fc usa la velocidad DESEADA:
+  //  senal sin ruido → sin chattering, y aporta el empuje de despegue justo
+  //  cuando la referencia arranca (con dq medida ≈ 0 el tanh muere pegado).
   // ─────────────────────────────────────────────────────────────────────────
 
-  std::array<int16_t, NUM_JOINTS> torque_to_current(const Vec4& tau, const Vec4& dq)
+  std::array<int16_t, NUM_JOINTS> torque_to_current(const Vec4& tau, const Vec4& dq,
+                                                    const Vec4& dq_des)
   {
     std::array<int16_t, NUM_JOINTS> cmd{};
     for (int i = 0; i < NUM_JOINTS; ++i) {
       const double I_model = motor_alpha_(i) * tau(i)
                            + motor_Fv_(i)    * dq(i)
-                           + motor_Fc_(i)    * std::tanh(dq(i) / motor_epsilon_)
+                           + fc_scale_ * motor_Fc_(i) * std::tanh(dq_des(i) / motor_epsilon_)
                            + motor_I_offset_(i);
       cmd[i] = clampCurrent(current_sign_(i) * encoder_sign_(i) * I_model, current_cmd_limit_[i]);
     }
@@ -600,13 +619,14 @@ private:
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  //  Callback del timer (100 Hz)
+  //  Callback del timer (loop_rate_hz)
   // ─────────────────────────────────────────────────────────────────────────
 
   void tick()
   {
     if (!hw_active_) return;
 
+    const auto tick_t0 = std::chrono::steady_clock::now();
     const auto   tp = std::chrono::high_resolution_clock::now();
     const double t  = std::chrono::duration<double>(tp - start_time_).count();
 
@@ -627,12 +647,20 @@ private:
       return;
     }
 
-    // 2. Filtro EMA de velocidad articular
-    if (!dq_filter_initialized_) {
-      dq_filtered_           = dq;
-      dq_filter_initialized_ = true;
+    // 2. Filtro alpha-beta: estimacion conjunta de posicion y velocidad
+    //   prediccion: q_pred = q_hat + Ts·dq_hat,  dq_pred = dq_hat
+    //   residuo:    r      = q_meas - q_pred
+    //   correccion: q_hat  = q_pred + alpha·r,    dq_hat = dq_pred + (beta/Ts)·r
+    if (!ab_initialized_) {
+      q_hat_          = q;
+      dq_hat_         = dq;
+      ab_initialized_ = true;
     } else {
-      dq_filtered_ = vel_filter_alpha_ * dq_filtered_ + (1.0 - vel_filter_alpha_) * dq;
+      const Vec4 q_pred  = q_hat_ + Ts_ * dq_hat_;
+      const Vec4 dq_pred = dq_hat_;
+      const Vec4 r       = q - q_pred;
+      q_hat_  = q_pred  + ab_alpha_ * r;
+      dq_hat_ = dq_pred + (ab_beta_ / Ts_) * r;
     }
 
     // 3. Captura posicion inicial (primer tick)
@@ -656,9 +684,11 @@ private:
       }
     }
 
-    // 6. Ley de control — usa dq_filtered_ para reducir chattering
-    const Vec4 tau     = compute_torque(q, dq_filtered_, ref);
-    const auto cur_cmd = torque_to_current(tau, dq_filtered_);
+    // 6. Ley de control — usa dq_hat_ para reducir chattering; el torque se
+    //    satura a +/-tau_max antes de convertirlo a corriente
+    const Vec4 tau_unsat = compute_torque(q, dq_hat_, ref);
+    const Vec4 tau = tau_unsat.cwiseMin(tau_max_).cwiseMax(-tau_max_);
+    const auto cur_cmd = torque_to_current(tau, dq_hat_, ref.dq);
 
     // 7. Escribir corriente
     if (!send_currents(cur_cmd)) {
@@ -696,6 +726,7 @@ private:
       csv_ << std::fixed << std::setprecision(6) << t
            << ',' << q(0)        << ',' << q(1)        << ',' << q(2)        << ',' << q(3)
            << ',' << dq(0)       << ',' << dq(1)       << ',' << dq(2)       << ',' << dq(3)
+           << ',' << dq_hat_(0)  << ',' << dq_hat_(1)  << ',' << dq_hat_(2)  << ',' << dq_hat_(3)
            << ',' << ref.q(0)    << ',' << ref.q(1)    << ',' << ref.q(2)    << ',' << ref.q(3)
            << ',' << ref.dq(0)   << ',' << ref.dq(1)   << ',' << ref.dq(2)   << ',' << ref.dq(3)
            << ',' << tau(0)      << ',' << tau(1)       << ',' << tau(2)      << ',' << tau(3)
@@ -704,13 +735,25 @@ private:
            << '\n';
     }
 
-    // 11. Log periodico por consola
-    if (++log_cnt_ % 100 == 0) {
+    // 11. Log periodico por consola (~1 s)
+    if (++log_cnt_ % static_cast<int>(std::lround(loop_rate_hz_)) == 0) {
       if (csv_.is_open()) csv_.flush();
       RCLCPP_INFO(get_logger(),
         "t=%.2fs  q=[%.3f %.3f %.3f %.3f]  |e|=%.4f  i=[%d %d %d %d]",
         t, q(0), q(1), q(2), q(3), (q - ref.q).norm(),
         cur_cmd[0], cur_cmd[1], cur_cmd[2], cur_cmd[3]);
+    }
+
+    // 12. Deteccion de overrun: si el ciclo (bus + control) no cabe en Ts,
+    //     el lazo real corre mas lento de lo configurado → bajar loop_rate_hz
+    //     o revisar el latency_timer del adaptador USB-serial.
+    const double tick_ms = std::chrono::duration<double, std::milli>(
+      std::chrono::steady_clock::now() - tick_t0).count();
+    if (tick_ms > 1e3 * Ts_) {
+      if (++overrun_cnt_ % 50 == 1) {
+        RCLCPP_WARN(get_logger(), "Overrun del lazo: tick=%.2f ms > Ts=%.1f ms (n=%d)",
+          tick_ms, 1e3 * Ts_, overrun_cnt_);
+      }
     }
   }
 
@@ -734,14 +777,16 @@ private:
   int16_t  current_measured_peak_;
   double   tau_max_;
 
-  double vel_cutoff_hz_;
-  double vel_filter_alpha_;
-  Vec4   dq_filtered_;
-  bool   dq_filter_initialized_{false};
+  double fc_scale_;
+  double ab_alpha_, ab_beta_;
+  double loop_rate_hz_{200.0};
+  double Ts_{0.005};
+  Vec4   q_hat_, dq_hat_;
+  bool   ab_initialized_{false};
 
   dynamixel::PortHandler*   port_handler_{nullptr};
   dynamixel::PacketHandler* packet_handler_{nullptr};
-  std::unique_ptr<dynamixel::GroupSyncRead>  grp_pos_, grp_vel_, grp_cur_;
+  std::unique_ptr<dynamixel::GroupSyncRead>  grp_read_;
   std::unique_ptr<dynamixel::GroupSyncWrite> grp_wcur_;
 
   bool hw_active_;
@@ -749,6 +794,7 @@ private:
   Vec4 q_initial_;
   std::chrono::high_resolution_clock::time_point start_time_;
   int log_cnt_{0};
+  int overrun_cnt_{0};
 
   rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr js_pub_;
   rclcpp::TimerBase::SharedPtr timer_;
