@@ -1,4 +1,6 @@
 claude\ historial/
 
-# Datos experimentales del Lab 4: no versionar (la carpeta queda vacia en el repo)
-data/lab4/**/*.csv
+# Datos y graficas experimentales: no versionar (solo .gitkeep en data/ y plots/)
+data/**/*.csv
+plots/**/*.png
+plots/**/*.eps
