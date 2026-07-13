@@ -11,10 +11,12 @@
  *   gain_scale             [double]          1.0   (escala lineal de Kp; Kd escala con sqrt)
  *   t_imp                  [double]          20.0   (tiempo de implementacion)
  *   log_id                 [int]             1      (nombre del CSV: hw_fl_data_<log_id>.csv)
-*   ab_alpha               [double]          0.4   (filtro α-β: ganancia de posición)
- *   ab_beta                [double]          0.08  (filtro α-β: ganancia de velocidad)
+*   ab_alpha               [double]          0.2   (filtro α-β: ganancia de posición)
+ *   ab_beta                [double]          0.02  (filtro α-β: ganancia de velocidad)
  *   friction_fc_scale      [double]          0.95  (fracción de Fc compensada; el término
  *                                                   Fc se alimenta con dq DESEADA, no medida)
+ *   loop_rate_hz           [double]          200.0 (frecuencia del lazo de control [Hz],
+ *                                                   se acota a [50, 400])
  *
  * Parámetros del modelo identificado (cargar desde config/motorXM430W350T_params.yaml):
  *   motor_alpha            [double[4]]   ticks/N·m       — ganancia de torque por joint
@@ -213,8 +215,9 @@ public:
     this->declare_parameter<dvec>("motor_I_offset",         dvec{0.0,   0.0,   0.0,   0.0  });
     this->declare_parameter<double>("motor_epsilon_friction", 0.05);
     this->declare_parameter<double>("friction_fc_scale", 0.95);
-    this->declare_parameter<double>("ab_alpha", 0.4);
-    this->declare_parameter<double>("ab_beta",  0.08);
+    this->declare_parameter<double>("ab_alpha", 0.2);
+    this->declare_parameter<double>("ab_beta",  0.02);
+    this->declare_parameter<double>("loop_rate_hz", 200.0);
 
     using ivec = std::vector<int64_t>;
     this->declare_parameter<ivec>  ("joint_zero_tick",        ivec{2048, 2048, 2048, 2048});
@@ -245,6 +248,8 @@ public:
 
     ab_alpha_ = get_parameter("ab_alpha").as_double();
     ab_beta_  = get_parameter("ab_beta").as_double();
+    loop_rate_hz_ = std::min(std::max(get_parameter("loop_rate_hz").as_double(), 50.0), 400.0);
+    Ts_ = 1.0 / loop_rate_hz_;
 
     {
       const auto zt = get_parameter("joint_zero_tick").as_integer_array();
@@ -278,8 +283,9 @@ public:
       tau_max_, current_cmd_limit_[0], current_cmd_limit_[1],
       current_cmd_limit_[2], current_cmd_limit_[3],
       static_cast<int>(current_measured_peak_), static_cast<int>(current_limit_register_));
-    RCLCPP_INFO(get_logger(), "Filtro α-β: α=%.3f  β=%.4f  |  Fc_scale=%.2f",
-      ab_alpha_, ab_beta_, fc_scale_);
+    RCLCPP_INFO(get_logger(),
+      "Filtro α-β: α=%.3f  β=%.4f  |  Fc_scale=%.2f  |  lazo=%.0f Hz",
+      ab_alpha_, ab_beta_, fc_scale_, loop_rate_hz_);
 
     // ── Pinocchio ────────────────────────────────────────────────────────────
     const std::string urdf = std::string(PACKAGE_URDF_DIR) + "/open_manipulator_x.urdf";
@@ -317,10 +323,13 @@ public:
       throw std::runtime_error("Hardware init failed");
     }
 
-    // ── Timer 100 Hz ─────────────────────────────────────────────────────────
+    // ── Timer de control (loop_rate_hz) ──────────────────────────────────────
     start_time_ = std::chrono::high_resolution_clock::now();
-    timer_ = this->create_wall_timer(10ms, [this]() { tick(); });
-    RCLCPP_INFO(get_logger(), "Control activo a 100 Hz. Ctrl+C para detener.");
+    const auto period = std::chrono::microseconds(
+      static_cast<int64_t>(std::lround(1e6 / loop_rate_hz_)));
+    timer_ = this->create_wall_timer(period, [this]() { tick(); });
+    RCLCPP_INFO(get_logger(), "Control activo a %.0f Hz (Ts=%.1f ms). Ctrl+C para detener.",
+      loop_rate_hz_, 1e3 * Ts_);
   }
 
   ~HWFLControlNode()
@@ -531,13 +540,14 @@ private:
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  //  Callback del timer (100 Hz)
+  //  Callback del timer (loop_rate_hz)
   // ─────────────────────────────────────────────────────────────────────────
 
   void tick()
   {
     if (!hw_active_) return;
 
+    const auto tick_t0 = std::chrono::steady_clock::now();
     const auto tp  = std::chrono::high_resolution_clock::now();
     const double t = std::chrono::duration<double>(tp - start_time_).count();
 
@@ -559,20 +569,23 @@ private:
     }
 
     // 1b. Filtro α-β: estimación conjunta de posición y velocidad
-    //   predicción: q_pred = q_hat + Ts*dq_hat,  dq_pred = dq_hat
+    //   predicción: q_pred = q_hat + Ts·dq_hat,  dq_pred = dq_hat
     //   residuo:    r      = q_meas - q_pred
     //   corrección: q_hat  = q_pred + α·r,        dq_hat = dq_pred + (β/Ts)·r
-    static constexpr double Ts = 0.01;
+    //   NOTA: la predicción con dinámica directa (ABA) se probó y se descartó
+    //   (tests 4/5): el modelo no incluye fricción y durante stiction predice
+    //   movimiento inexistente, inflando dq_hat hasta +1.5 rad/s con el joint
+    //   detenido, lo que prolonga el stick vía el término -Kd·dq_hat.
     if (!ab_initialized_) {
       q_hat_       = q;
       dq_hat_      = dq;
       ab_initialized_ = true;
     } else {
-      const Vec4 q_pred  = q_hat_ + Ts * dq_hat_;
+      const Vec4 q_pred  = q_hat_ + Ts_ * dq_hat_;
       const Vec4 dq_pred = dq_hat_;
       const Vec4 r       = q - q_pred;
       q_hat_  = q_pred  + ab_alpha_ * r;
-      dq_hat_ = dq_pred + (ab_beta_ / Ts) * r;
+      dq_hat_ = dq_pred + (ab_beta_ / Ts_) * r;
     }
 
     // 2. Captura posición inicial (primer tick)
@@ -646,13 +659,25 @@ private:
            << '\n';
     }
 
-    // 10. Log periódico por consola
-    if (++log_cnt_ % 100 == 0) {
+    // 10. Log periódico por consola (~1 s)
+    if (++log_cnt_ % static_cast<int>(std::lround(loop_rate_hz_)) == 0) {
       if (csv_.is_open()) csv_.flush();
       RCLCPP_INFO(get_logger(),
         "t=%.2fs  q=[%.3f %.3f %.3f %.3f]  |e|=%.4f  i=[%d %d %d %d]",
         t, q(0), q(1), q(2), q(3), (q - ref.q).norm(),
         cur_cmd[0], cur_cmd[1], cur_cmd[2], cur_cmd[3]);
+    }
+
+    // 11. Detección de overrun: si el ciclo (bus + control) no cabe en Ts,
+    //     el lazo real corre más lento de lo configurado → bajar loop_rate_hz
+    //     o revisar el latency_timer del adaptador USB-serial.
+    const double tick_ms = std::chrono::duration<double, std::milli>(
+      std::chrono::steady_clock::now() - tick_t0).count();
+    if (tick_ms > 1e3 * Ts_) {
+      if (++overrun_cnt_ % 50 == 1) {
+        RCLCPP_WARN(get_logger(), "Overrun del lazo: tick=%.2f ms > Ts=%.1f ms (n=%d)",
+          tick_ms, 1e3 * Ts_, overrun_cnt_);
+      }
     }
   }
 
@@ -678,6 +703,8 @@ private:
   double   tau_max_;
 
   double ab_alpha_, ab_beta_;
+  double loop_rate_hz_{200.0};
+  double Ts_{0.005};
   Vec4   q_hat_, dq_hat_;
   bool   ab_initialized_{false};
 
@@ -691,6 +718,7 @@ private:
   Vec4 q_initial_;
   std::chrono::high_resolution_clock::time_point start_time_;
   int log_cnt_{0};
+  int overrun_cnt_{0};
 
   rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr js_pub_;
   rclcpp::TimerBase::SharedPtr timer_;

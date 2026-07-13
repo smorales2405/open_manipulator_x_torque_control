@@ -1,1 +1,4 @@
 claude\ historial/
+
+# Datos experimentales del Lab 4: no versionar (la carpeta queda vacia en el repo)
+data/lab4/**/*.csv
