@@ -87,6 +87,11 @@ static constexpr uint16_t LEN_PRESENT_CURRENT  = 2;
 static constexpr uint16_t LEN_PRESENT_VELOCITY = 4;
 static constexpr uint16_t LEN_PRESENT_POSITION = 4;
 
+// Bloque contiguo current(126,2)+velocity(128,4)+position(132,4): una sola
+// GroupSyncRead por ciclo en vez de tres → latencia de bus ≈ 1/3.
+static constexpr uint16_t ADDR_STATE_BLOCK = ADDR_PRESENT_CURRENT;
+static constexpr uint16_t LEN_STATE_BLOCK  = 10;
+
 static constexpr uint8_t CURRENT_CONTROL_MODE = 0;
 static constexpr uint8_t TORQUE_ENABLE_VAL    = 1;
 static constexpr uint8_t TORQUE_DISABLE_VAL   = 0;
@@ -359,20 +364,13 @@ private:
       RCLCPP_INFO(get_logger(), "DXL ID %d listo", static_cast<int>(id));
     }
 
-    grp_pos_ = std::make_unique<dynamixel::GroupSyncRead>(
-      port_handler_, packet_handler_, ADDR_PRESENT_POSITION, LEN_PRESENT_POSITION);
-    grp_vel_ = std::make_unique<dynamixel::GroupSyncRead>(
-      port_handler_, packet_handler_, ADDR_PRESENT_VELOCITY, LEN_PRESENT_VELOCITY);
-    grp_cur_ = std::make_unique<dynamixel::GroupSyncRead>(
-      port_handler_, packet_handler_, ADDR_PRESENT_CURRENT,  LEN_PRESENT_CURRENT);
+    grp_read_ = std::make_unique<dynamixel::GroupSyncRead>(
+      port_handler_, packet_handler_, ADDR_STATE_BLOCK, LEN_STATE_BLOCK);
     grp_wcur_ = std::make_unique<dynamixel::GroupSyncWrite>(
       port_handler_, packet_handler_, ADDR_GOAL_CURRENT, LEN_GOAL_CURRENT);
 
-    for (const auto id : DXL_ID) {
-      grp_pos_->addParam(id);
-      grp_vel_->addParam(id);
-      grp_cur_->addParam(id);
-    }
+    for (const auto id : DXL_ID)
+      grp_read_->addParam(id);
 
     hw_active_ = true;
     RCLCPP_INFO(get_logger(), "Hardware inicializado en %s", port_name_.c_str());
@@ -426,26 +424,24 @@ private:
 
   bool read_state(Vec4& q, Vec4& dq, std::array<int16_t, NUM_JOINTS>& cur)
   {
-    if (grp_pos_->txRxPacket() != COMM_SUCCESS ||
-        grp_vel_->txRxPacket() != COMM_SUCCESS ||
-        grp_cur_->txRxPacket() != COMM_SUCCESS) {
+    if (grp_read_->txRxPacket() != COMM_SUCCESS) {
       RCLCPP_ERROR(get_logger(), "SyncRead fallo");
       return false;
     }
     for (int i = 0; i < NUM_JOINTS; ++i) {
       const uint8_t id = DXL_ID[i];
-      if (!grp_pos_->isAvailable(id, ADDR_PRESENT_POSITION, LEN_PRESENT_POSITION) ||
-          !grp_vel_->isAvailable(id, ADDR_PRESENT_VELOCITY, LEN_PRESENT_VELOCITY) ||
-          !grp_cur_->isAvailable(id, ADDR_PRESENT_CURRENT,  LEN_PRESENT_CURRENT)) {
+      if (!grp_read_->isAvailable(id, ADDR_PRESENT_POSITION, LEN_PRESENT_POSITION) ||
+          !grp_read_->isAvailable(id, ADDR_PRESENT_VELOCITY, LEN_PRESENT_VELOCITY) ||
+          !grp_read_->isAvailable(id, ADDR_PRESENT_CURRENT,  LEN_PRESENT_CURRENT)) {
         RCLCPP_ERROR(get_logger(), "[ID %d] dato no disponible", id);
         return false;
       }
       const int32_t rp = toSigned32(static_cast<uint32_t>(
-        grp_pos_->getData(id, ADDR_PRESENT_POSITION, LEN_PRESENT_POSITION)));
+        grp_read_->getData(id, ADDR_PRESENT_POSITION, LEN_PRESENT_POSITION)));
       const int32_t rv = toSigned32(static_cast<uint32_t>(
-        grp_vel_->getData(id, ADDR_PRESENT_VELOCITY, LEN_PRESENT_VELOCITY)));
+        grp_read_->getData(id, ADDR_PRESENT_VELOCITY, LEN_PRESENT_VELOCITY)));
       const int16_t rc = toSigned16(static_cast<uint32_t>(
-        grp_cur_->getData(id, ADDR_PRESENT_CURRENT,  LEN_PRESENT_CURRENT)));
+        grp_read_->getData(id, ADDR_PRESENT_CURRENT,  LEN_PRESENT_CURRENT)));
 
       q(i)   = encoder_sign_(i) * static_cast<double>(wrappedTickDiff(rp, joint_zero_tick_[i])) * POS_UNIT_RAD;
       dq(i)  = encoder_sign_(i) * static_cast<double>(rv) * VEL_UNIT_RAD_S;
@@ -484,8 +480,8 @@ private:
     // superar varias veces la fricción estática; M44≈0.001 kg·m² exige kp4 alto.
     // Mantener kd ≈ 1.4·sqrt(kp) por joint: ζ = kd/(2·sqrt(kp)) ≈ 0.7.
     Vec4 kp, kd;
-    kp << 400.0, 400.0, 600.0, 1500.0;
-    kd <<  28.0,  28.0,  34.0,   54.0;
+    kp << 400.0, 400.0, 600.0, 3000.0;
+    kd <<  28.0,  28.0,  34.0,   77.0;
     kp *= gain_scale_;
     kd *= std::sqrt(std::max(gain_scale_, 0.0));
 
@@ -687,7 +683,7 @@ private:
 
   dynamixel::PortHandler*   port_handler_{nullptr};
   dynamixel::PacketHandler* packet_handler_{nullptr};
-  std::unique_ptr<dynamixel::GroupSyncRead>  grp_pos_, grp_vel_, grp_cur_;
+  std::unique_ptr<dynamixel::GroupSyncRead>  grp_read_;
   std::unique_ptr<dynamixel::GroupSyncWrite> grp_wcur_;
 
   bool hw_active_;

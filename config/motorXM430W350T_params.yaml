@@ -38,11 +38,12 @@
     motor_Fc:                [  3.290,   18.725,   25.600,    9.280]   # barrido velocidad
     motor_I_offset:          [ -0.422,  -17.206,  -21.957,   -9.602]   # modo corriente
     # Suavizado del tanh de Coulomb. hw_fl_control_node alimenta el tanh con la
-    # velocidad DESEADA (sin ruido), asi que 0.10 rad/s da despegue rapido sin
-    # chattering. Si un nodo usa la velocidad MEDIDA aqui, subir hacia 0.30
-    # (eps=0.05 con dq medida hacia conmutar el tanh con el ruido cerca de cero).
+    # velocidad DESEADA (sin ruido): eps pequeno es seguro y acorta la zona
+    # muerta en las inversiones de direccion (micro-plateaus). Si un nodo usa
+    # la velocidad MEDIDA aqui, subir hacia 0.30 (con dq medida el tanh
+    # conmutaria con el ruido cerca de velocidad cero).
     # Solo afecta la COMPENSACION, no los valores identificados de Fc/Fv.
-    motor_epsilon_friction:    0.1000
+    motor_epsilon_friction:    0.0500
 
     # ── Configuración de hardware (señales, encoder, límites) ────────────────
     # joint_zero_tick  : posición cero del encoder [ticks] por joint
