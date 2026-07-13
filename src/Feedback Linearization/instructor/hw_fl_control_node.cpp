@@ -13,6 +13,8 @@
  *   log_id                 [int]             1      (nombre del CSV: hw_fl_data_<log_id>.csv)
 *   ab_alpha               [double]          0.4   (filtro α-β: ganancia de posición)
  *   ab_beta                [double]          0.08  (filtro α-β: ganancia de velocidad)
+ *   friction_fc_scale      [double]          0.95  (fracción de Fc compensada; el término
+ *                                                   Fc se alimenta con dq DESEADA, no medida)
  *
  * Parámetros del modelo identificado (cargar desde config/motorXM430W350T_params.yaml):
  *   motor_alpha            [double[4]]   ticks/N·m       — ganancia de torque por joint
@@ -205,6 +207,7 @@ public:
     this->declare_parameter<dvec>("motor_Fc",               dvec{0.0,   0.0,   0.0,   0.0  });
     this->declare_parameter<dvec>("motor_I_offset",         dvec{0.0,   0.0,   0.0,   0.0  });
     this->declare_parameter<double>("motor_epsilon_friction", 0.05);
+    this->declare_parameter<double>("friction_fc_scale", 0.95);
     this->declare_parameter<double>("ab_alpha", 0.4);
     this->declare_parameter<double>("ab_beta",  0.08);
 
@@ -233,6 +236,7 @@ public:
     motor_Fc_       = load_vec4("motor_Fc");
     motor_I_offset_ = load_vec4("motor_I_offset");
     motor_epsilon_  = get_parameter("motor_epsilon_friction").as_double();
+    fc_scale_       = get_parameter("friction_fc_scale").as_double();
 
     ab_alpha_ = get_parameter("ab_alpha").as_double();
     ab_beta_  = get_parameter("ab_beta").as_double();
@@ -269,7 +273,8 @@ public:
       tau_max_, current_cmd_limit_[0], current_cmd_limit_[1],
       current_cmd_limit_[2], current_cmd_limit_[3],
       static_cast<int>(current_measured_peak_), static_cast<int>(current_limit_register_));
-    RCLCPP_INFO(get_logger(), "Filtro α-β: α=%.3f  β=%.4f", ab_alpha_, ab_beta_);
+    RCLCPP_INFO(get_logger(), "Filtro α-β: α=%.3f  β=%.4f  |  Fc_scale=%.2f",
+      ab_alpha_, ab_beta_, fc_scale_);
 
     // ── Pinocchio ────────────────────────────────────────────────────────────
     const std::string urdf = std::string(PACKAGE_URDF_DIR) + "/open_manipulator_x.urdf";
@@ -475,9 +480,12 @@ private:
 
   Vec4 compute_torque(const Vec4& q, const Vec4& dq, const Reference& ref)
   {
+    // Ganancias por articulación: la rigidez de feedback es M_ii·kp y debe
+    // superar varias veces la fricción estática; M44≈0.001 kg·m² exige kp4 alto.
+    // Mantener kd ≈ 1.4·sqrt(kp) por joint: ζ = kd/(2·sqrt(kp)) ≈ 0.7.
     Vec4 kp, kd;
-    kp << 1000.0, 1000.0, 1000.0, 1000.0;
-    kd <<    5.0,    5.0,    5.0,    5.0;
+    kp << 400.0, 400.0, 600.0, 1500.0;
+    kd <<  28.0,  28.0,  34.0,   54.0;
     kp *= gain_scale_;
     kd *= std::sqrt(std::max(gain_scale_, 0.0));
 
@@ -496,13 +504,17 @@ private:
     return tau_full.head(NUM_JOINTS);
   }
 
-  std::array<int16_t, NUM_JOINTS> torque_to_current(const Vec4& tau, const Vec4& dq)
+  // Fv usa la velocidad medida (término suave); Fc usa la velocidad DESEADA:
+  // señal sin ruido → sin chattering, y aporta el empuje de despegue justo
+  // cuando la referencia arranca (con dq_hat≈0 el tanh moría estando pegado).
+  std::array<int16_t, NUM_JOINTS> torque_to_current(const Vec4& tau, const Vec4& dq,
+                                                    const Vec4& dq_des)
   {
     std::array<int16_t, NUM_JOINTS> cmd{};
     for (int i = 0; i < NUM_JOINTS; ++i) {
       const double I_model = motor_alpha_(i) * tau(i)
                            + motor_Fv_(i)    * dq(i)
-                           + motor_Fc_(i)    * std::tanh(dq(i) / motor_epsilon_)
+                           + fc_scale_ * motor_Fc_(i) * std::tanh(dq_des(i) / motor_epsilon_)
                            + motor_I_offset_(i);
       cmd[i] = clampCurrent(current_sign_(i) * encoder_sign_(i) * I_model, current_cmd_limit_[i]);
     }
@@ -591,7 +603,7 @@ private:
     // 5. Ley de control — usa dq_hat_ para reducir chattering por ruido de encoder
     const Vec4 tau_unsat = compute_torque(q, dq_hat_, ref);
     const Vec4 tau = tau_unsat.cwiseMin(tau_max_).cwiseMax(-tau_max_);
-    const auto cur_cmd = torque_to_current(tau, dq_hat_);
+    const auto cur_cmd = torque_to_current(tau, dq_hat_, ref.dq);
 
     // 6. Escribir corriente
     if (!send_currents(cur_cmd)) {
@@ -659,6 +671,7 @@ private:
   double gain_scale_, t_imp_;
   Vec4   motor_alpha_, motor_Fv_, motor_Fc_, motor_I_offset_;
   double motor_epsilon_;
+  double fc_scale_;
 
   std::array<int32_t, NUM_JOINTS> joint_zero_tick_;
   Vec4     encoder_sign_, current_sign_;
