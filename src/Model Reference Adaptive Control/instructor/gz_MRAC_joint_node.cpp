@@ -1,48 +1,85 @@
 // ============================================================================
 //  gz_MRAC_joint_node.cpp
 //  Control Adaptativo (MRAC / Slotine-Li) en espacio articular
-//  OpenMANIPULATOR-X (Gazebo)
+//  OpenMANIPULATOR-X (Gazebo) — Lab 7, Actividad 2
 //
 //  Modelo dinamico nominal (rigido, via Pinocchio):
-//    M(q)*ddq + C(q,dq)*dq + g(q) + tau_fric(dq) + tau_carga = tau
-//    tau_fric = diag(b)*dq         (friccion viscosa, b desconocido)
-//    tau_carga                     (carga en el efector, masa m_L desconocida)
+//    M(q)*ddq + C(q,dq)*dq + g(q) + B_NOM*dq = tau     (catalogo, escala 1.0)
 //
-//  El controlador conoce la dinamica RIGIDA del brazo (URDF nominal) y ADAPTA
-//  en linea un vector pequeno de parametros fisicos desconocidos:
-//    a_hat = [ m_L , b1 , b2 , b3 , b4 ]^T   (carga + fricciones viscosas)
+//  La PLANTA real (Gazebo) difiere del modelo nominal por dos escalas del
+//  Xacro (config/sim_init_config.yaml):
+//    mass_inertia_scale : 1.0 -> 1.2   (masa+inercia de link1..link5, TODO el tensor)
+//    damping_scale       : 1.0 -> 1.1   (damping viscoso de joint1..joint4)
+//  friction_scale se mantiene en 0.0 (friccion de Coulomb no modelada, igual
+//  que en SMC) y no hay carga en el efector (spawn_load: false).
 //
-//  Superficie de seguimiento (igual estructura que SMC articular):
+//  El controlador ADAPTA en linea 8 parametros fisicos interpretables:
+//    a_hat = [ alpha1..alpha4 , b1..b4 ]^T
+//    alpha_k : escala de inercia del cuerpo movido por jointk (linkk+1)
+//              nominal = 1.0  |  real = 1.2
+//    b_j     : damping viscoso de jointj
+//              nominal = catalogo (B_NOM, desde el URDF)  |  real = 1.1*B_NOM
+//
+//  Superficie de seguimiento (igual estructura que SMC/MRAC articular previo):
 //    e_q  = q  - q_d                 (error de posicion)
 //    e_dq = dq - dq_d                (error de velocidad)
 //    s    = e_dq + Lambda_q * e_q  =  dq - dq_r
 //    dq_r  = dq_d  - Lambda_q * e_q       (velocidad de referencia)
 //    ddq_r = ddq_d - Lambda_q * e_dq      (aceleracion de referencia)
 //
-//  Forma lineal en parametros (Slotine-Li):
-//    M(q)*ddq_r + C(q,dq)*dq_r + g(q) + Y(q,dq,dq_r,ddq_r)*a = tau_modelo
-//    El termino RIGIDO conocido se evalua con Pinocchio (RNEA, forma Slotine-Li).
-//    El regresor adaptado Y = [ Y_mL | diag(dq_r) ]:
-//      - Y_mL  : columna de la carga unitaria en el efector (Pinocchio, modelo + carga)
-//      - diag(dq_r) : columnas de friccion viscosa
+//  Regresor Slotine-Li exacto via pinocchio::computeJointTorqueRegressor
+//  (generaliza la identidad de polarizacion que antes se aplicaba a RNEA,
+//  ahora aplicada al REGRESOR R(q,v,a), con R(q,v,a)*pi = M(q)a+C(q,v)v+g(q)
+//  para cualquier vector de parametros dinamicos pi):
 //
-//  Ley de control adaptativo:
-//    tau     = tau_nom(q,dq,dq_r,ddq_r) + Y*a_hat - K_D*s
-//    tau_sat = clamp(tau, -TAU_MAX, TAU_MAX)
+//    Y_SL(q,dq,dqr,ddqr) = R(q,0,ddqr)
+//                         + 0.5*[ R(q,dq+dqr,0) - R(q,dq,0) - R(q,dqr,0) + R(q,0,0) ]
+//
+//  Y_SL es (nv x 10*ncuerpos). La columna alpha_k se obtiene contrayendo el
+//  bloque de 10 columnas del cuerpo k con sus parametros dinamicos NOMINALES
+//  pi_nom_k = model.inertias[jointk].toDynamicParameters()
+//           = [ m, m*cx, m*cy, m*cz, Ixx, Ixy, Iyy, Ixz, Iyz, Izz ]  (orden interno Pinocchio):
+//
+//    Y_alpha.col(k) = ( Y_SL.middleCols(10*(jointk-1), 10) * pi_nom_k ).head<NARM>()
+//
+//  Esto captura el escalado UNIFORME de masa + centro de masa + tensor de
+//  inercia completo del cuerpo (a diferencia de una masa puntual, que solo
+//  aproxima la masa y no el tensor). Los 2 grados de libertad del gripper
+//  (no escalados por mass_inertia_scale en la planta) quedan como termino
+//  RIGIDO CONOCIDO dentro de tau_nom (no se adaptan ni se reconstruyen).
+//
+//  Regresor completo:  Y = [ Y_alpha | diag(dq_r) ]   (4x8)
+//    - Y_alpha    : 4 columnas, escala de inercia por eslabon
+//    - diag(dq_r) : 4 columnas, damping viscoso por junta
+//
+//  Ley de control adaptativo (FORMA DE DESVIACION respecto al catalogo, evita
+//  contar dos veces la parte nominal que ya esta dentro de tau_nom):
+//    tau_nom  = tau_nom_rigido(q,dq,dqr,ddqr) + B_NOM .* dq_r      (RNEA + damping nominal)
+//    tau      = tau_nom + Y*(a_hat - A_HAT_0) - K_D*s
+//    tau_sat  = clamp(tau, -TAU_MAX, TAU_MAX)
+//  En a_hat = A_HAT_0 (catalogo)  ->  tau = tau_nom - K_D*s  (mejor modelo fijo + PD).
+//  En a_hat = a_real (1.2 | 1.1*B_NOM) -> tau reproduce exactamente la planta real + PD.
 //
 //  Ley de adaptacion (con proyeccion a la region fisica):
 //    a_hat_dot = -Gamma .* (Y^T * s)      (solo si adaptive = true)
-//    a_hat     = clamp(a_hat, A_MIN, A_MAX)
+//    a_hat     = clamp(a_hat, A_MIN, A_MAX)     (alpha > 0 , b >= 0)
 //
-//  Estabilidad (Lyapunov):
-//    V = 1/2 s^T M(q) s + 1/2 a_tilde^T Gamma^-1 a_tilde,  a_tilde = a_hat - a
-//    V_dot = -s^T K_D s <= 0
+//  Estabilidad (Lyapunov, a_tilde = a_hat - a_real):
+//    V = 1/2 s^T M(q) s + 1/2 a_tilde^T Gamma^-1 a_tilde
+//    V_dot = -s^T K_D s <= 0   (bajo excitacion persistente, a_hat -> a_real)
 //
 //  Caso no adaptativo (comparacion, adaptive:=false):
-//    a_hat se congela en A_HAT_0 (a_hat_dot = 0) durante toda la simulacion.
+//    a_hat se congela en A_HAT_0 (catalogo nominal) durante toda la simulacion.
 //
-//  Trayectoria articular de referencia (omega = 1.0 rad/s, igual que SMC):
-//    q_d   = [ (pi/4)*sin(w*t),  -0.45+0.5*sin(w*t),  0.35-0.5*sin(w*t),  pi/4+0.25*sin(w*t) ]
+//  Trayectoria articular de referencia — MULTISENO, frecuencias distintas por
+//  junta (excitacion persistente; la senoidal en fase anterior era pobre para
+//  identificar 8 parametros). qi_d(t) = Ci + Ai*sin(wai*t) + Bi*sin(wbi*t):
+//    q1_d = 0.00 + 0.60*sin(0.6t) + 0.20*sin(1.5t)
+//    q2_d = -0.30 + 0.45*sin(0.9t) + 0.15*sin(1.9t)
+//    q3_d = 0.30 + 0.45*sin(1.3t) + 0.15*sin(0.7t)
+//    q4_d = 0.80 + 0.40*sin(1.7t) + 0.15*sin(1.1t)
+//  (verificado dentro de limites de posicion/velocidad del URDF; en t=0 todos
+//  los senos valen 0 -> arranca en los centros [0, -0.30, 0.30, 0.80]).
 //
 //  Suscriptor : /joint_states                    (sensor_msgs/JointState)
 //  Publicador : /arm_effort_controller/commands   (std_msgs/Float64MultiArray)
@@ -52,30 +89,33 @@
 //    t_sim     [double]  0.0    — duracion en segundos (0 = ilimitado)
 //    adaptive  [bool]    true   — true: adapta a_hat | false: a_hat fijo en A_HAT_0
 //
-//  CSV generado: data/lab7/sim/act1/gz_mrac_joint_<modo>_<test_num>.csv
+//  CSV generado: data/lab7/sim/act2/gz_mrac_joint_<modo>_<test_num>.csv
 //    <modo> = "adaptive" | "fixed"
 //  Columnas: t, q1..q4, dq1..dq4, q1_des..q4_des, dq1_des..dq4_des,
-//            s1..s4, tau1..tau4, sat1..sat4, mL_hat, b1_hat, b2_hat, b3_hat, b4_hat
+//            s1..s4, tau1..tau4, sat1..sat4,
+//            a1_hat..a4_hat, b1_hat..b4_hat
 //
 //  Notas de configuracion (config/sim_init_config.yaml):
-//    - Arrancar en q_d(0):  use_fixed_init: true   q_init: [0.0, -0.45, 0.35, 0.785]
-//    - Carga desconocida :  spawn_load: true        (cilindro ~0.1 kg en el efector)
-//    - Friccion de planta:  friction_scale: 1.0     (la planta de Gazebo aplica damping;
-//                                                    el controlador la estima en b_hat)
-//    - Incertidumbre param: mass_inertia_scale: 1.2  damping_scale: 1.1
+//    - Arrancar en q_d(0):  use_fixed_init: true   q_init: [0.0, -0.30, 0.30, 0.80]
+//    - Planta real        :  mass_inertia_scale: 1.2   damping_scale: 1.1
+//    - Sin friccion Coulomb: friction_scale: 0.0  (igual que SMC)
+//    - Sin carga en efector: spawn_load: false
+//    - Damping nominal joint2/joint3 = 0 en el URDF -> b2_hat, b3_hat deben
+//      permanecer cerca de 0 (no hay damping viscoso real que identificar ahi).
 //
 //  Ejemplos de uso:
 //
-//    # Caso adaptativo (estima carga y friccion en linea):
+//    # Caso adaptativo (estima escala de inercia y damping en linea):
 //    ros2 run open_manipulator_x_torque_control gz_mrac_joint_node
-//      --ros-args -p adaptive:=true -p test_num:=1 -p t_sim:=20.0
+//      --ros-args -p adaptive:=true -p test_num:=1 -p t_sim:=30.0
 //
-//    # Caso no adaptativo (parametros fijos, referencia de comparacion):
+//    # Caso no adaptativo (catalogo nominal fijo, referencia de comparacion):
 //    ros2 run open_manipulator_x_torque_control gz_mrac_joint_node
-//      --ros-args -p adaptive:=false -p test_num:=2 -p t_sim:=20.0
+//      --ros-args -p adaptive:=false -p test_num:=2 -p t_sim:=30.0
 //
 // ============================================================================
 
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <filesystem>
@@ -92,9 +132,9 @@
 #include <Eigen/Core>
 #include <pinocchio/multibody/model.hpp>
 #include <pinocchio/multibody/data.hpp>
-#include <pinocchio/spatial/inertia.hpp>
 #include <pinocchio/parsers/urdf.hpp>
 #include <pinocchio/algorithm/rnea.hpp>
+#include <pinocchio/algorithm/regressor.hpp>
 
 using namespace std::chrono_literals;
 
@@ -107,37 +147,43 @@ using namespace std::chrono_literals;
 
 static constexpr double PI      = M_PI;
 static constexpr int    NARM    = 4;       // articulaciones controladas
-static constexpr int    NP      = 5;       // parametros adaptados: [m_L, b1..b4]
+static constexpr int    NP      = 8;       // parametros adaptados: [alpha1..4, b1..4]
 static constexpr double TAU_MAX = 1.2;     // [N·m] limite de torque por articulacion
 static constexpr double DT      = 0.01;    // [s] periodo de control (100 Hz)
-static constexpr double LOAD_X_OFFSET = 0.015;  // [m] offset de la carga en el eje x del efector
-                                                //     (coincide con load_x_offset del YAML)
 
-using Vec4 = Eigen::Vector4d;
-using Vec5 = Eigen::Matrix<double, NP, 1>;
-using Mat45 = Eigen::Matrix<double, NARM, NP>;
+using Vec4  = Eigen::Vector4d;
+using Vec8  = Eigen::Matrix<double, NP, 1>;
+using Vec10 = Eigen::Matrix<double, 10, 1>;
+using Mat48 = Eigen::Matrix<double, NARM, NP>;
+
+// Damping nominal por junta (URDF, escala 1.0) — xacro/open_manipulator_x.urdf.xacro
+static const Vec4 B_NOM = (Vec4() << 0.0367, 0.0000, 0.0000, 0.0050).finished();
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  GANANCIAS MRAC — ajustar aqui
 //  Indice articular: [joint1, joint2, joint3, joint4]
-//  Indice parametro: [m_L, b1, b2, b3, b4]
+//  Indice parametro: [alpha1, alpha2, alpha3, alpha4, b1, b2, b3, b4]
 // ═══════════════════════════════════════════════════════════════════════════
 static const Vec4 LAMBDA_Q = {5.0,  5.0,  10.0,  25.0};   // superficie de seguimiento [1/s]
 static const Vec4 K_D      = {5.0,  5.0,  10.0,  25.0};   // amortiguamiento sobre s (proporcional a s)
 
-// Tasas de adaptacion Gamma = diag(gamma_mL, gamma_b1..b4)
-//   Rango sugerido m_L : [0.5, 5.0]   |   Rango sugerido b_i : [0.1, 2.0]
-static const Vec5 GAMMA = (Vec5() << 2.0,  0.5, 0.5, 0.5, 0.5).finished();
+// Tasas de adaptacion Gamma = diag(gamma_alpha1..4, gamma_b1..4)
+static const Vec8 GAMMA =
+  (Vec8() << 0.5, 0.5, 0.5, 0.5,   2.0, 2.0, 2.0, 2.0).finished();
 
-// Estimacion inicial a_hat(0) = [m_L, b1, b2, b3, b4]  (sin conocimiento previo)
-static const Vec5 A_HAT_0 = (Vec5() << 0.0,  0.0, 0.0, 0.0, 0.0).finished();
+// Estimacion inicial a_hat(0) = catalogo nominal (mass_inertia_scale=1.0, damping_scale=1.0).
+// Con esto el caso no adaptativo (adaptive:=false) es el mejor modelo fijo posible.
+static const Vec8 A_HAT_0 =
+  (Vec8() << 1.0, 1.0, 1.0, 1.0,   B_NOM[0], B_NOM[1], B_NOM[2], B_NOM[3]).finished();
 
-// Proyeccion a la region fisica admisible (anti-deriva parametrica)
-static const Vec5 A_MIN = (Vec5() << 0.0,  0.0, 0.0, 0.0, 0.0).finished();
-static const Vec5 A_MAX = (Vec5() << 2.0,  1.0, 1.0, 1.0, 1.0).finished();
+// Proyeccion a la region fisica admisible (anti-deriva parametrica): alpha > 0, b >= 0
+static const Vec8 A_MIN =
+  (Vec8() << 0.5, 0.5, 0.5, 0.5,   0.0, 0.0, 0.0, 0.0).finished();
+static const Vec8 A_MAX =
+  (Vec8() << 2.0, 2.0, 2.0, 2.0,   0.2, 0.2, 0.2, 0.2).finished();
 // ═══════════════════════════════════════════════════════════════════════════
 
-// ── Trayectoria de referencia articular (identica a SMC articular) ───────────
+// ── Trayectoria de referencia articular (multiseno, excitacion persistente) ──
 struct Reference {
   Vec4 q, dq, ddq;
 };
@@ -145,35 +191,33 @@ struct Reference {
 static Reference desiredTrajectory(double t)
 {
   Reference ref;
-  const double w = 1.0;  // [rad/s]
 
   ref.q <<
-       (PI/4.0) * std::sin(w * t),
-      -0.45 + 0.5 * std::sin(w * t),
-       0.35 - 0.5 * std::sin(w * t),
-      (PI/4.0) + 0.25 * std::sin(w * t);
+       0.00 + 0.60 * std::sin(0.6 * t) + 0.20 * std::sin(1.5 * t),
+      -0.30 + 0.45 * std::sin(0.9 * t) + 0.15 * std::sin(1.9 * t),
+       0.30 + 0.45 * std::sin(1.3 * t) + 0.15 * std::sin(0.7 * t),
+       0.80 + 0.40 * std::sin(1.7 * t) + 0.15 * std::sin(1.1 * t);
 
   ref.dq <<
-       (PI/4.0) * w * std::cos(w * t),
-       0.5 * w * std::cos(w * t),
-      -0.5 * w * std::cos(w * t),
-      0.25 * w * std::cos(w * t);
+      0.60 * 0.6 * std::cos(0.6 * t) + 0.20 * 1.5 * std::cos(1.5 * t),
+      0.45 * 0.9 * std::cos(0.9 * t) + 0.15 * 1.9 * std::cos(1.9 * t),
+      0.45 * 1.3 * std::cos(1.3 * t) + 0.15 * 0.7 * std::cos(0.7 * t),
+      0.40 * 1.7 * std::cos(1.7 * t) + 0.15 * 1.1 * std::cos(1.1 * t);
 
   ref.ddq <<
-      -(PI/4.0) * w * w * std::sin(w * t),
-      -0.5 * w * w * std::sin(w * t),
-       0.5 * w * w * std::sin(w * t),
-      -0.25 * w * w * std::sin(w * t);
+      -0.60 * 0.6 * 0.6 * std::sin(0.6 * t) - 0.20 * 1.5 * 1.5 * std::sin(1.5 * t),
+      -0.45 * 0.9 * 0.9 * std::sin(0.9 * t) - 0.15 * 1.9 * 1.9 * std::sin(1.9 * t),
+      -0.45 * 1.3 * 1.3 * std::sin(1.3 * t) - 0.15 * 0.7 * 0.7 * std::sin(0.7 * t),
+      -0.40 * 1.7 * 1.7 * std::sin(1.7 * t) - 0.15 * 1.1 * 1.1 * std::sin(1.1 * t);
 
   return ref;
 }
 
-// ── Termino Slotine-Li:  M(q)*ddq_r + C(q,dq)*dq_r + g(q)  via RNEA ──────────
+// ── Termino Slotine-Li rigido:  M(q)*ddq_r + C(q,dq)*dq_r + g(q) via RNEA ────
 //   Identidades (rnea(q,v,a) = M(q)a + C(q,v)v + g(q)):
 //     g(q)        = rnea(q, 0,   0)
 //     M(q)*ddq_r  = rnea(q, 0,   ddq_r) - g
 //     C(q,dq)*dq_r= 1/2 [ rnea(q, dq+dq_r, 0) - rnea(q, dq, 0) - rnea(q, dq_r, 0) + g ]
-//                   (forma de Christoffel, por identidad de polarizacion)
 static Eigen::VectorXd slotineLiTorque(
     const pinocchio::Model & model, pinocchio::Data & data,
     const Eigen::VectorXd & q,   const Eigen::VectorXd & dq,
@@ -187,6 +231,27 @@ static Eigen::VectorXd slotineLiTorque(
   const Eigen::VectorXd r_dqr = pinocchio::rnea(model, data, q, dqr,       zero);
   const Eigen::VectorXd Cqr   = 0.5 * (r_sum - r_dq - r_dqr + g);                 // C(q,dq)*dq_r
   return Mddqr + Cqr;                                                            // M*ddq_r + C*dq_r + g
+}
+
+// ── Regresor Slotine-Li:  misma identidad de polarizacion, aplicada al ──────
+//   regresor R(q,v,a) en vez de RNEA. R(q,v,a)*pi = M(q)a+C(q,v)v+g(q) para
+//   cualquier vector de parametros dinamicos pi (uno por cuerpo, 10 c/u).
+//   Cada llamada a computeJointTorqueRegressor sobrescribe data.jointTorqueRegressor,
+//   por eso cada resultado se copia (Eigen::MatrixXd) antes de la siguiente.
+static Eigen::MatrixXd slotineLiRegressor(
+    const pinocchio::Model & model, pinocchio::Data & data,
+    const Eigen::VectorXd & q,   const Eigen::VectorXd & dq,
+    const Eigen::VectorXd & dqr, const Eigen::VectorXd & ddqr)
+{
+  const Eigen::VectorXd zero = Eigen::VectorXd::Zero(model.nv);
+
+  const Eigen::MatrixXd R_g     = pinocchio::computeJointTorqueRegressor(model, data, q, zero,     zero);
+  const Eigen::MatrixXd R_Mddqr = pinocchio::computeJointTorqueRegressor(model, data, q, zero,     ddqr);
+  const Eigen::MatrixXd R_sum   = pinocchio::computeJointTorqueRegressor(model, data, q, dq + dqr, zero);
+  const Eigen::MatrixXd R_dq    = pinocchio::computeJointTorqueRegressor(model, data, q, dq,       zero);
+  const Eigen::MatrixXd R_dqr   = pinocchio::computeJointTorqueRegressor(model, data, q, dqr,      zero);
+
+  return R_Mddqr + 0.5 * (R_sum - R_dq - R_dqr + R_g);
 }
 
 // ── Nodo principal ────────────────────────────────────────────────────────────
@@ -206,7 +271,7 @@ public:
     adaptive_          = this->get_parameter("adaptive").as_bool();
     mode_str_          = adaptive_ ? "adaptive" : "fixed";
 
-    // ── Modelo Pinocchio (brazo nominal) ──────────────────────────────────────
+    // ── Modelo Pinocchio (brazo nominal, escala 1.0) ────────────────────────────
     const std::string urdf_path =
       std::string(PACKAGE_URDF_DIR) + "/open_manipulator_x.urdf";
     try {
@@ -217,8 +282,7 @@ public:
     }
     data_ = pinocchio::Data(model_);
 
-    // ── Modelo con carga unitaria en el efector (para el regresor Y_mL) ───────
-    build_load_model();
+    precompute_regressor_bases();
 
     RCLCPP_INFO(this->get_logger(),
       "MRAC articular — modo=%s  tau_max=%.2f N·m", mode_str_.c_str(), TAU_MAX);
@@ -227,9 +291,13 @@ public:
       LAMBDA_Q[0], LAMBDA_Q[1], LAMBDA_Q[2], LAMBDA_Q[3],
       K_D[0],      K_D[1],      K_D[2],      K_D[3]);
     RCLCPP_INFO(this->get_logger(),
-      "Gamma=[%.2f | %.2f %.2f %.2f %.2f]  a_hat(0)=[%.2f | %.2f %.2f %.2f %.2f]",
-      GAMMA[0], GAMMA[1], GAMMA[2], GAMMA[3], GAMMA[4],
-      A_HAT_0[0], A_HAT_0[1], A_HAT_0[2], A_HAT_0[3], A_HAT_0[4]);
+      "Gamma_alpha=[%.2f %.2f %.2f %.2f]  Gamma_b=[%.2f %.2f %.2f %.2f]",
+      GAMMA[0], GAMMA[1], GAMMA[2], GAMMA[3],
+      GAMMA[4], GAMMA[5], GAMMA[6], GAMMA[7]);
+    RCLCPP_INFO(this->get_logger(),
+      "a_hat(0): alpha=[%.2f %.2f %.2f %.2f]  b=[%.4f %.4f %.4f %.4f]  (catalogo nominal)",
+      A_HAT_0[0], A_HAT_0[1], A_HAT_0[2], A_HAT_0[3],
+      A_HAT_0[4], A_HAT_0[5], A_HAT_0[6], A_HAT_0[7]);
     if (t_sim_ > 0.0) {
       RCLCPP_INFO(this->get_logger(), "t_sim = %.1f s", t_sim_);
     } else {
@@ -259,43 +327,29 @@ public:
   }
 
 private:
-  // ── Modelo con carga unitaria en el efector ────────────────────────────────
-  //   model_load_ = model_ + masa puntual unitaria en end_effector_link.
-  //   La diferencia slotineLi(model_load_) - slotineLi(model_) entrega exactamente
-  //   la columna del regresor asociada a la masa de carga m_L (dinamica lineal en
-  //   los parametros inerciales).
-  void build_load_model()
+  // ── Indices de junta y parametros dinamicos nominales (para Y_alpha) ───────
+  //   pi_nom_[i] = parametros dinamicos nominales (10) del cuerpo movido por
+  //   jointi (linki+1), en el orden interno de Pinocchio (ver
+  //   pinocchio::Inertia::toDynamicParameters()). Y_alpha.col(i) contrae el
+  //   bloque de 10 columnas de jointi en el regresor Slotine-Li con pi_nom_[i]:
+  //   captura el escalado UNIFORME de masa + CoM + tensor de inercia completo
+  //   del cuerpo (no una masa puntual).
+  void precompute_regressor_bases()
   {
-    model_load_ = model_;
-
-    pinocchio::JointIndex jid = static_cast<pinocchio::JointIndex>(model_load_.njoints - 1);
-    pinocchio::SE3 placement = pinocchio::SE3::Identity();
-
-    if (model_load_.existFrame("end_effector_link")) {
-      const pinocchio::FrameIndex fid = model_load_.getFrameId("end_effector_link");
-      const pinocchio::Frame & f = model_load_.frames[fid];
-      jid       = f.parentJoint;
-      placement = f.placement;
-    } else {
-      RCLCPP_WARN(this->get_logger(),
-        "Frame 'end_effector_link' no encontrado — carga anclada al ultimo joint.");
+    for (int i = 0; i < NARM; ++i) {
+      const std::string jname = "joint" + std::to_string(i + 1);
+      jid_[i]    = model_.getJointId(jname);
+      pi_nom_[i] = model_.inertias[jid_[i]].toDynamicParameters();
     }
-
-    // Masa puntual unitaria (sin inercia rotacional), desplazada LOAD_X_OFFSET en x del efector
-    const pinocchio::Inertia unit_load(
-      1.0, Eigen::Vector3d(LOAD_X_OFFSET, 0.0, 0.0), Eigen::Matrix3d::Zero());
-    model_load_.appendBodyToJoint(jid, unit_load, placement);
-
-    data_load_ = pinocchio::Data(model_load_);
   }
 
   // ── CSV ───────────────────────────────────────────────────────────────────
   void open_csv(int test_num)
   {
     std::filesystem::create_directories(
-      std::string(PACKAGE_DATA_DIR) + "/lab7/sim/act1");
+      std::string(PACKAGE_DATA_DIR) + "/lab7/sim/act2");
 
-    csv_path_ = std::string(PACKAGE_DATA_DIR) + "/lab7/sim/act1/gz_mrac_joint_"
+    csv_path_ = std::string(PACKAGE_DATA_DIR) + "/lab7/sim/act2/gz_mrac_joint_"
                 + mode_str_ + "_" + std::to_string(test_num) + ".csv";
     csv_.open(csv_path_);
     if (!csv_.is_open()) {
@@ -310,7 +364,7 @@ private:
          << "s1,s2,s3,s4,"
          << "tau1,tau2,tau3,tau4,"
          << "sat1,sat2,sat3,sat4,"
-         << "mL_hat,b1_hat,b2_hat,b3_hat,b4_hat\n";
+         << "a1_hat,a2_hat,a3_hat,a4_hat,b1_hat,b2_hat,b3_hat,b4_hat\n";
     RCLCPP_INFO(this->get_logger(), "CSV: %s", csv_path_.c_str());
   }
 
@@ -362,22 +416,25 @@ private:
     dqr_pin.head<NARM>()  = dqr;
     ddqr_pin.head<NARM>() = ddqr;
 
-    // ── Termino rigido nominal y regresor de carga (Pinocchio) ─────────────
-    const Eigen::VectorXd tau_nom_full =
-      slotineLiTorque(model_,      data_,      q_pin, dq_pin, dqr_pin, ddqr_pin);
-    const Eigen::VectorXd tau_load_full =
-      slotineLiTorque(model_load_, data_load_, q_pin, dq_pin, dqr_pin, ddqr_pin);
+    // ── Termino rigido nominal (RNEA) + damping nominal ─────────────────────
+    const Eigen::VectorXd tau_nom_rigid_full =
+      slotineLiTorque(model_, data_, q_pin, dq_pin, dqr_pin, ddqr_pin);
+    const Vec4 tau_nom = tau_nom_rigid_full.head<NARM>() + B_NOM.cwiseProduct(dqr);
 
-    const Vec4 tau_nom = tau_nom_full.head<NARM>();
-    const Vec4 Y_mL    = (tau_load_full - tau_nom_full).head<NARM>();   // columna m_L
+    // ── Regresor Slotine-Li completo y columnas de escala de inercia ───────
+    const Eigen::MatrixXd Y_SL = slotineLiRegressor(model_, data_, q_pin, dq_pin, dqr_pin, ddqr_pin);
 
-    // ── Regresor adaptado  Y = [ Y_mL | diag(dq_r) ] ───────────────────────
-    Mat45 Y = Mat45::Zero();
-    Y.col(0) = Y_mL;
-    for (int i = 0; i < NARM; ++i) { Y(i, 1 + i) = dqr[i]; }            // fricciones
+    Mat48 Y = Mat48::Zero();
+    for (int i = 0; i < NARM; ++i) {
+      const int col0 = 10 * (static_cast<int>(jid_[i]) - 1);
+      Y.col(i) = (Y_SL.middleCols(col0, 10) * pi_nom_[i]).head<NARM>();  // Y_alpha
+    }
+    for (int i = 0; i < NARM; ++i) {
+      Y(i, NARM + i) = dqr[i];                                          // Y_b = diag(dq_r)
+    }
 
-    // ── Ley de control adaptativo ──────────────────────────────────────────
-    const Vec4 tau     = tau_nom + Y * a_hat_ - K_D.asDiagonal() * s_q;
+    // ── Ley de control adaptativo (forma de desviacion respecto al catalogo) ─
+    const Vec4 tau     = tau_nom + Y * (a_hat_ - A_HAT_0) - K_D.asDiagonal() * s_q;
     const Vec4 tau_sat = tau.cwiseMin(TAU_MAX).cwiseMax(-TAU_MAX);
 
     // ── Publicar torques ───────────────────────────────────────────────────
@@ -386,9 +443,10 @@ private:
     torque_pub_->publish(cmd);
 
     RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-      "t=%.2fs  |s|=%.4f  |e|=%.4f rad  mL=%.3f kg  b=[%.3f %.3f %.3f %.3f]",
+      "t=%.2fs  |s|=%.4f  |e|=%.4f rad  alpha=[%.3f %.3f %.3f %.3f]  b=[%.4f %.4f %.4f %.4f]",
       t_, s_q.norm(), e_q.norm(),
-      a_hat_[0], a_hat_[1], a_hat_[2], a_hat_[3], a_hat_[4]);
+      a_hat_[0], a_hat_[1], a_hat_[2], a_hat_[3],
+      a_hat_[4], a_hat_[5], a_hat_[6], a_hat_[7]);
 
     // ── Registro CSV (a_hat usado en este tick) ────────────────────────────
     if (csv_.is_open()) {
@@ -404,14 +462,14 @@ private:
            << ',' << (std::abs(tau[1]) > TAU_MAX ? 1 : 0)
            << ',' << (std::abs(tau[2]) > TAU_MAX ? 1 : 0)
            << ',' << (std::abs(tau[3]) > TAU_MAX ? 1 : 0)
-           << ',' << a_hat_[0]   << ',' << a_hat_[1]   << ',' << a_hat_[2]
-           << ',' << a_hat_[3]   << ',' << a_hat_[4]
+           << ',' << a_hat_[0]   << ',' << a_hat_[1]   << ',' << a_hat_[2]   << ',' << a_hat_[3]
+           << ',' << a_hat_[4]   << ',' << a_hat_[5]   << ',' << a_hat_[6]   << ',' << a_hat_[7]
            << '\n';
     }
 
     // ── Ley de adaptacion (Euler + proyeccion) ─────────────────────────────
     if (adaptive_) {
-      const Vec5 a_dot = -GAMMA.cwiseProduct(Y.transpose() * s_q);
+      const Vec8 a_dot = -GAMMA.cwiseProduct(Y.transpose() * s_q);
       a_hat_ += DT * a_dot;
       a_hat_ = a_hat_.cwiseMax(A_MIN).cwiseMin(A_MAX);
     }
@@ -433,14 +491,17 @@ private:
   }
 
   // ── Miembros ───────────────────────────────────────────────────────────────
-  pinocchio::Model model_,  model_load_;
-  pinocchio::Data  data_,   data_load_;
+  pinocchio::Model model_;
+  pinocchio::Data  data_;
+
+  std::array<pinocchio::JointIndex, NARM> jid_;
+  std::array<Vec10, NARM> pi_nom_;
 
   double      t_;
   double      t_sim_;
   bool        adaptive_;
   std::string mode_str_;
-  Vec5        a_hat_;     // estimacion actual [m_L, b1, b2, b3, b4]
+  Vec8        a_hat_;     // estimacion actual [alpha1..4, b1..4]
 
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr torque_pub_;
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr  joint_sub_;

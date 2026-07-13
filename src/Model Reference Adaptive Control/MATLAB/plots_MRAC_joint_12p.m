@@ -1,13 +1,15 @@
-%% plots_MRAC_joint.m
-% Graficas para Actividad 1 — Control Adaptativo (MRAC / Slotine-Li) articular
-% OpenMANIPULATOR-X, Laboratorio 7
+%% plots_MRAC_joint_12p.m
+% Graficas para el MRAC articular de 12 PARAMETROS (alpha1..4, Fv1..4, Fc1..4)
+% OpenMANIPULATOR-X, campana sim-to-real (nodo gz_mrac_joint_12p_node)
 %
 %   Figura 1 — Seguimiento de posiciones articulares  q1..q4
 %   Figura 2 — Error de seguimiento articular         e_q1..e_q4
 %   Figura 3 — Seguimiento de velocidades articulares dq1..dq4
 %   Figura 4 — Superficies de seguimiento             s1..s4
 %   Figura 5 — Torques de control                     tau1..tau4
-%   Figura 6 — Parametros estimados                   mL_hat, b1..b4_hat
+%   Figura 6 — Parametros estimados                   alpha_hat, Fv_hat, Fc_hat
+%               (con lineas de referencia en los valores VERDADEROS de la
+%                planta: escalas usadas en config/sim_init_config.yaml)
 %
 %   Metricas reportadas en consola (por articulacion):
 %     e_q,max [rad] | e_q,RMS [rad] | max|tau| [N·m] | tau_RMS [N·m] | Sat [%] | TV(tau)
@@ -18,18 +20,31 @@
 clear; clc; close all;
 
 %% ── Configuracion ────────────────────────────────────────────────────────────
-mode        = 'sim';        % 'sim' = simulacion Gazebo (gz_MRAC_joint_node)
+mode        = 'sim';        % 'sim' = simulacion Gazebo (gz_mrac_joint_12p_node)
 
-ctrl_mode   = 'adaptive';   % Caso simulado: 'adaptive' | 'fixed'
-                            %   debe coincidir con el parametro adaptive del nodo
-                            %   (adaptive:=true -> 'adaptive', adaptive:=false -> 'fixed')
+ctrl_mode   = 'adaptive';   % Caso simulado (debe coincidir con los parametros del nodo):
+                            %   'adaptive'         adaptive:=true  friction_prior:=true
+                            %   'fixed'            adaptive:=false friction_prior:=true
+                            %   'adaptive_noprior' adaptive:=true  friction_prior:=false (C4)
+                            %   'fixed_noprior'    adaptive:=false friction_prior:=false
 
-test_num    = 1;            % Identificador del ensayo (test_num usado al lanzar el nodo)
+test_num    = 4;            % Identificador del ensayo (test_num usado al lanzar el nodo)
 
-EXPORT_FIGS = false;        % true  = guardar PNG (300 dpi) y EPS vectorial (600 dpi)
+EXPORT_FIGS = true;        % true  = guardar PNG (300 dpi) y EPS vectorial (600 dpi)
                             % false = solo visualizar
 
 TAU_MAX     = 1.2;          % [N·m] limite de torque (debe coincidir con el nodo)
+
+% Escalas de la PLANTA usadas en config/sim_init_config.yaml al generar este
+% ensayo — definen los valores verdaderos de los parametros (lineas de
+% referencia en la Figura 6):
+MASS_SCALE_TRUE     = 1.0;  % mass_inertia_scale -> alpha verdadero
+DAMPING_SCALE_TRUE  = 1.0;  % damping_scale      -> Fv verdadero = escala*FV_NOM
+FRICTION_SCALE_TRUE = 1.0;  % friction_scale     -> Fc verdadero = escala*FC_NOM
+
+% Friccion nominal identificada (URDF/Xacro escala 1.0, mismos valores del nodo)
+FV_NOM = [0.0367, 0.0000, 0.0000, 0.0050];   % [N·m·s/rad]
+FC_NOM = [0.0146, 0.0830, 0.1143, 0.0413];   % [N·m]
 
 % Directorio raiz del paquete ROS 2
 pkg_dir = '/home/utec/open_manx_ws/src/open_manipulator_x_torque_control';
@@ -37,9 +52,9 @@ pkg_dir = '/home/utec/open_manx_ws/src/open_manipulator_x_torque_control';
 %% ── Rutas dinamicas ──────────────────────────────────────────────────────────
 switch mode
     case 'sim'
-        csv_file   = fullfile(pkg_dir, 'data', 'lab7', 'sim', 'act2', ...
-                              sprintf('gz_mrac_joint_%s_%d.csv', ctrl_mode, test_num));
-        output_dir = fullfile(pkg_dir, 'plots', 'lab7', 'sim', 'act2', ...
+        csv_file   = fullfile(pkg_dir, 'data', 'lab7', 'sim', 'mrac12p', ...
+                              sprintf('gz_mrac_joint_12p_%s_%d.csv', ctrl_mode, test_num));
+        output_dir = fullfile(pkg_dir, 'plots', 'lab7', 'sim', 'mrac12p', ...
                               sprintf('test%d_%s', test_num, ctrl_mode));
         mode_label = 'Simulacion';
     otherwise
@@ -68,13 +83,14 @@ tau    = [T.tau1,    T.tau2,    T.tau3,    T.tau4   ];
 sat    = [T.sat1,    T.sat2,    T.sat3,    T.sat4   ];   % 0/1 por muestra
 
 a_hat  = [T.a1_hat,  T.a2_hat,  T.a3_hat,  T.a4_hat ];
-b_hat  = [T.b1_hat,  T.b2_hat,  T.b3_hat,  T.b4_hat ];
+fv_hat = [T.fv1_hat, T.fv2_hat, T.fv3_hat, T.fv4_hat];
+fc_hat = [T.fc1_hat, T.fc2_hat, T.fc3_hat, T.fc4_hat];
 
 e_q    = q - q_des;
 
 %% ── Metricas (por articulacion) ──────────────────────────────────────────────
 fprintf('\n%s\n', repmat('═', 1, 88));
-fprintf(' Metricas MRAC articular  [%s | modo=%s | test=%d]\n', ...
+fprintf(' Metricas MRAC articular 12p  [%s | modo=%s | test=%d]\n', ...
         mode_label, ctrl_mode, test_num);
 fprintf('%s\n', repmat('═', 1, 88));
 fprintf('%-6s  %-12s  %-12s  %-14s  %-14s  %-10s  %-10s\n', ...
@@ -91,9 +107,13 @@ for i = 1:4
             i, e_max_i, e_rms_i, tau_max_i, tau_rms_i, sat_pct_i, tv_i);
 end
 fprintf('%s\n', repmat('-', 1, 88));
-fprintf(' Parametros estimados finales:  alpha=[%.3f %.3f %.3f %.3f]   b=[%.4f %.4f %.4f %.4f] N·m·s/rad\n', ...
-        a_hat(end,1), a_hat(end,2), a_hat(end,3), a_hat(end,4), ...
-        b_hat(end,1), b_hat(end,2), b_hat(end,3), b_hat(end,4));
+fprintf(' Parametros estimados finales (verdadero entre parentesis):\n');
+fprintf('   alpha = [%.3f %.3f %.3f %.3f]              (%.2f)\n', ...
+        a_hat(end,1), a_hat(end,2), a_hat(end,3), a_hat(end,4), MASS_SCALE_TRUE);
+fprintf('   Fv    = [%.4f %.4f %.4f %.4f] N·m·s/rad  (escala %.2f x nominal)\n', ...
+        fv_hat(end,1), fv_hat(end,2), fv_hat(end,3), fv_hat(end,4), DAMPING_SCALE_TRUE);
+fprintf('   Fc    = [%.4f %.4f %.4f %.4f] N·m        (escala %.2f x nominal)\n', ...
+        fc_hat(end,1), fc_hat(end,2), fc_hat(end,3), fc_hat(end,4), FRICTION_SCALE_TRUE);
 fprintf('%s\n\n', repmat('═', 1, 88));
 
 %% ── Estilo comun ─────────────────────────────────────────────────────────────
@@ -109,7 +129,10 @@ jointNames = {'Articulacion 1', 'Articulacion 2', ...
 xlims      = [t(1), t(end)];
 
 % Etiqueta del modo para los titulos
-mode_tex = struct('adaptive', 'adaptativo', 'fixed', 'no adaptativo');
+mode_tex = struct('adaptive',         'adaptativo', ...
+                  'fixed',            'no adaptativo', ...
+                  'adaptive_noprior', 'adaptativo, sin prior de friccion', ...
+                  'fixed_noprior',    'no adaptativo, sin prior de friccion');
 if isfield(mode_tex, ctrl_mode)
     ctrl_label = mode_tex.(ctrl_mode);
 else
@@ -140,7 +163,7 @@ end
 lgd1 = legend(axs1(1), [h_ref1, h_mea1], {'Referencia', 'Medicion'}, ...
               'Orientation', 'horizontal', 'FontSize', fs, 'Location', 'northoutside');
 lgd1.Layout.Tile = 'north';
-title(tl1, sprintf('MRAC Articular — Seguimiento de Posiciones  %s', sub_label), ...
+title(tl1, sprintf('MRAC 12p — Seguimiento de Posiciones  %s', sub_label), ...
       'FontSize', fs_title, 'FontWeight', 'bold');
 
 %% ── Figura 2 — Error de seguimiento articular ────────────────────────────────
@@ -160,7 +183,7 @@ for i = 1:4
     xlim(xlims);
 end
 
-title(tl2, sprintf('MRAC Articular — Error de Seguimiento Articular  %s', sub_label), ...
+title(tl2, sprintf('MRAC 12p — Error de Seguimiento Articular  %s', sub_label), ...
       'FontSize', fs_title, 'FontWeight', 'bold');
 
 %% ── Figura 3 — Seguimiento de velocidades articulares ────────────────────────
@@ -186,7 +209,7 @@ end
 lgd3 = legend(axs3(1), [h_ref3, h_mea3], {'Referencia', 'Medicion'}, ...
               'Orientation', 'horizontal', 'FontSize', fs, 'Location', 'northoutside');
 lgd3.Layout.Tile = 'north';
-title(tl3, sprintf('MRAC Articular — Seguimiento de Velocidades  %s', sub_label), ...
+title(tl3, sprintf('MRAC 12p — Seguimiento de Velocidades  %s', sub_label), ...
       'FontSize', fs_title, 'FontWeight', 'bold');
 
 %% ── Figura 4 — Superficies de seguimiento ────────────────────────────────────
@@ -206,7 +229,7 @@ for i = 1:4
     xlim(xlims);
 end
 
-title(tl4, sprintf('MRAC Articular — Superficies de Seguimiento  %s', sub_label), ...
+title(tl4, sprintf('MRAC 12p — Superficies de Seguimiento  %s', sub_label), ...
       'FontSize', fs_title, 'FontWeight', 'bold');
 
 %% ── Figura 5 — Torques de control ────────────────────────────────────────────
@@ -230,13 +253,13 @@ for i = 1:4
     xlim(xlims);
 end
 
-title(tl5, sprintf('MRAC Articular — Torques de Control  %s', sub_label), ...
+title(tl5, sprintf('MRAC 12p — Torques de Control  %s', sub_label), ...
       'FontSize', fs_title, 'FontWeight', 'bold');
 
 %% ── Figura 6 — Parametros estimados ──────────────────────────────────────────
 figure(6); clf;
-set(gcf, 'Color', 'w', 'Position', [150 -560 1100 460]);
-tl6 = tiledlayout(1, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
+set(gcf, 'Color', 'w', 'Position', [150 -560 1500 460]);
+tl6 = tiledlayout(1, 3, 'TileSpacing', 'compact', 'Padding', 'compact');
 
 % Escala de inercia estimada (alpha1..4)
 nexttile(tl6);
@@ -244,8 +267,11 @@ h_a = gobjects(1, 4);
 for i = 1:4
     h_a(i) = plot(t, a_hat(:,i), '-', 'Color', c_tau(i,:), 'LineWidth', lw); hold on;
 end
-yline(1.2, '--k', 'LineWidth', 1.0, 'Label', 'planta real (1.2)');
-yline(1.0, ':',   'LineWidth', 0.9, 'Color', [0.5 0.5 0.5], 'Label', 'nominal (1.0)');
+if MASS_SCALE_TRUE ~= 1.0
+    yline(MASS_SCALE_TRUE, '--k', 'LineWidth', 1.0, ...
+          'Label', sprintf('planta real (%.2f)', MASS_SCALE_TRUE));
+end
+yline(1.0, ':', 'LineWidth', 0.9, 'Color', [0.5 0.5 0.5], 'Label', 'nominal (1.0)');
 xlabel('Tiempo [s]', 'FontSize', fs);
 ylabel('$\hat{\alpha}_k$', 'Interpreter', 'latex', 'FontSize', fs);
 title('Escala de inercia estimada', 'FontSize', fs_title - 2);
@@ -253,20 +279,39 @@ legend(h_a, {'$\hat{\alpha}_1$', '$\hat{\alpha}_2$', '$\hat{\alpha}_3$', '$\hat{
        'Interpreter', 'latex', 'Location', 'best', 'FontSize', fs);
 grid on; box on; set(gca, 'FontSize', fs); xlim(xlims);
 
-% Damping viscoso estimado (b1..4)
+% Friccion viscosa estimada (Fv1..4) — lineas discontinuas: valor verdadero
 nexttile(tl6);
-h_b = gobjects(1, 4);
+h_fv = gobjects(1, 4);
 for i = 1:4
-    h_b(i) = plot(t, b_hat(:,i), '-', 'Color', c_tau(i,:), 'LineWidth', lw); hold on;
+    h_fv(i) = plot(t, fv_hat(:,i), '-', 'Color', c_tau(i,:), 'LineWidth', lw); hold on;
+end
+for i = 1:4
+    yline(DAMPING_SCALE_TRUE * FV_NOM(i), '--', 'Color', c_tau(i,:), 'LineWidth', 0.9);
 end
 xlabel('Tiempo [s]', 'FontSize', fs);
-ylabel('$\hat{b}_i$ [N$\cdot$m$\cdot$s/rad]', 'Interpreter', 'latex', 'FontSize', fs);
-title('Damping viscoso estimado', 'FontSize', fs_title - 2);
-legend(h_b, {'$\hat{b}_1$', '$\hat{b}_2$', '$\hat{b}_3$', '$\hat{b}_4$'}, ...
+ylabel('$\hat{F}_{v,i}$ [N$\cdot$m$\cdot$s/rad]', 'Interpreter', 'latex', 'FontSize', fs);
+title('Friccion viscosa estimada (-- verdadero)', 'FontSize', fs_title - 2);
+legend(h_fv, {'$\hat{F}_{v,1}$', '$\hat{F}_{v,2}$', '$\hat{F}_{v,3}$', '$\hat{F}_{v,4}$'}, ...
        'Interpreter', 'latex', 'Location', 'best', 'FontSize', fs);
 grid on; box on; set(gca, 'FontSize', fs); xlim(xlims);
 
-title(tl6, sprintf('MRAC Articular — Parametros Estimados  %s', sub_label), ...
+% Friccion de Coulomb estimada (Fc1..4) — lineas discontinuas: valor verdadero
+nexttile(tl6);
+h_fc = gobjects(1, 4);
+for i = 1:4
+    h_fc(i) = plot(t, fc_hat(:,i), '-', 'Color', c_tau(i,:), 'LineWidth', lw); hold on;
+end
+for i = 1:4
+    yline(FRICTION_SCALE_TRUE * FC_NOM(i), '--', 'Color', c_tau(i,:), 'LineWidth', 0.9);
+end
+xlabel('Tiempo [s]', 'FontSize', fs);
+ylabel('$\hat{F}_{c,i}$ [N$\cdot$m]', 'Interpreter', 'latex', 'FontSize', fs);
+title('Friccion de Coulomb estimada (-- verdadero)', 'FontSize', fs_title - 2);
+legend(h_fc, {'$\hat{F}_{c,1}$', '$\hat{F}_{c,2}$', '$\hat{F}_{c,3}$', '$\hat{F}_{c,4}$'}, ...
+       'Interpreter', 'latex', 'Location', 'best', 'FontSize', fs);
+grid on; box on; set(gca, 'FontSize', fs); xlim(xlims);
+
+title(tl6, sprintf('MRAC 12p — Parametros Estimados  %s', sub_label), ...
       'FontSize', fs_title, 'FontWeight', 'bold');
 
 %% ── Exportacion ──────────────────────────────────────────────────────────────
