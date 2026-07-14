@@ -4,7 +4,7 @@
 %
 % Trayectoria: x0 = [pi/2; 0; pi/6; pi/3; 0; 0; 0; 0]
 %              yf = [0.2; -0.13; 0.2; 0]  (sin obstaculo)
-% N = 30, Ts = 0.05 s  (tf = 1.5 s)
+% N = 40, Ts = 0.1 s  (tf = 4.0 s)
 %
 % Figuras generadas:
 %   Figura 1 — Trayectorias articulares optimizadas q_ref
@@ -25,7 +25,7 @@ EXPORT_FIGS = false;   % true  = guardar PNG (300 dpi) y EPS vectorial (600 dpi)
 
 % ── Identificadores de sesion (editar antes de cada ejecucion) ────────────
 act_num            = 1;     % numero de actividad
-trial_num          = 1;     % numero de prueba — nombra el log y el zmin
+trial_num          = 2;     % numero de prueba — nombra el log y el zmin
 use_saved_solution = false; % true → carga N, Ts, x0, yf y zmin desde el .mat
 
 pkg_dir    = '/home/utec/open_manx_ws/src/open_manipulator_x_torque_control';
@@ -49,12 +49,21 @@ fprintf('=== lab5_act1_sol  %s ===\n\n', datestr(now, 'yyyy-mm-dd HH:MM:SS'));
 riccati_method = 'zoh';
 riccati_jj     = 100;   % sub-pasos RK4 por intervalo Ts (solo 'sqrt')
 
+% ── Aceleracion de la optimizacion ────────────────────────────────────────
+% USE_PARALLEL: fmincon evalua las diferencias finitas del gradiente en
+%   paralelo (requiere Parallel Computing Toolbox; el primer parpool de la
+%   sesion tarda ~10-30 s en abrir).
+% MEX: ejecutar build_omdyn_mex.m una vez — genera OMDyn.<mexext> y
+%   open_manx_fkin.<mexext>, que tienen precedencia sobre los .m y aceleran
+%   cada iteracion ~5-10x. Ambas mejoras se combinan.
+USE_PARALLEL = true;
+
 %% ========================================================================
 %  1. Parametros generales
 %  ========================================================================
 
-N  = 40;
-Ts = 0.1;
+N  = 80;
+Ts = 0.05;
 nx = 8;
 nu = 4;
 
@@ -99,11 +108,34 @@ ub = [repmat(x_upper, N, 1);  ukmax * ones(nu*N, 1)];
 
 z0 = [kron(ones(N,1), x0); kron(ones(N,1), u0g)];
 
+% ── Aceleracion: estado del MEX + pool paralelo ──────────────────────────
+if endsWith(which('OMDyn'), mexext)
+    fprintf('OMDyn: MEX compilado — %s\n', which('OMDyn'));
+else
+    fprintf(['OMDyn: version .m interpretada. Ejecutar build_omdyn_mex.m ' ...
+             'para acelerar ~5-10x cada iteracion.\n']);
+end
+if USE_PARALLEL && isempty(ver('parallel'))
+    fprintf('Parallel Computing Toolbox no instalado — continuando en serie.\n');
+    USE_PARALLEL = false;
+end
+if USE_PARALLEL
+    try
+        if isempty(gcp('nocreate')), parpool; end
+    catch pool_err
+        warning('Sin pool paralelo (%s). Continuando en serie.', pool_err.message);
+        USE_PARALLEL = false;
+    end
+end
+
 % Algoritmo SQP: resuelve el KKT directamente sin barrier functions.
-% Para N=30 (360 variables, 240 igualdades) converge en 50-150 iter vs 200+ en interior-point.
+% Para N=40 (480 variables, 320 igualdades) converge en 50-150 iter vs 200+ en interior-point.
+% UseParallel reparte las ~N*(nx+nu)+1 evaluaciones de diferencias finitas
+% de cada iteracion entre los workers del pool.
 options = optimoptions('fmincon', ...
     'Display',               'iter', ...
     'Algorithm',             'sqp', ...
+    'UseParallel',           USE_PARALLEL, ...
     'MaxFunctionEvaluations', 100000, ...
     'MaxIterations',          500, ...
     'OptimalityTolerance',    1e-4, ...
@@ -294,9 +326,11 @@ fprintf('K_TV calculado. max||K_TV(:,:,k)|| = %.4f\n', ...
 
 x0sim = x0 + 0.05*randn(nx,1);
 
-[T, Xsim] = ode45( ...
-    @(t,x) OM4dof(t, x, controlTVLQR(t, x, Uref, Xref, Ts, N, K_TV)), ...
-    0:Ts:(N*Ts), x0sim);
+% Control en lazo cerrado con saturacion explicita (OM4dof ya no satura
+% internamente — ver nota en OM4dof).
+u_cl = @(t,x) max(min(controlTVLQR(t, x, Uref, Xref, Ts, N, K_TV), ukmax), ukmin);
+
+[T, Xsim] = ode45(@(t,x) OM4dof(t, x, u_cl(t,x)), 0:Ts:(N*Ts), x0sim);
 Xsim = Xsim';
 
 %% 8. Calculo de salidas y métricas de seguimiento TV-LQR
@@ -371,9 +405,7 @@ hold on; grid on; box on;
 h_mc = gobjects(1,1);
 for rrsim = 1:20
     x0sim_mc = x0 + 0.1*randn(nx,1);
-    [~, Xsim_mc] = ode45( ...
-        @(t,x) OM4dof(t, x, controlTVLQR(t, x, Uref, Xref, Ts, N, K_TV)), ...
-        0:Ts:(N*Ts), x0sim_mc);
+    [~, Xsim_mc] = ode45(@(t,x) OM4dof(t, x, u_cl(t,x)), 0:Ts:(N*Ts), x0sim_mc);
     Xsim_mc = Xsim_mc';
     ysim_mc = zeros(4, size(Xsim_mc,2));
     for i = 1:size(Xsim_mc,2)
@@ -543,10 +575,16 @@ function [c_des, c_eq] = restr(z, Ts, N, nx, nu, x0)
 end
 
 function dx = OM4dof(t, x, u) %#ok<INUSD>
+% Modelo no lineal SIN saturacion interna de u:
+%   - En la optimizacion los bounds lb/ub ya imponen |u| <= 1. Un clamp aqui
+%     anularia el gradiente por diferencias finitas justo en u = ±1
+%     (columnas cero en B_k) y estanca el paso SQP con entradas saturadas.
+%   - En la simulacion en lazo cerrado la saturacion se aplica explicitamente
+%     sobre la salida de controlTVLQR (handle u_cl, seccion 7).
 
     q  = x(1:4);
     dq = x(5:8);
-    u  = max(min(u(:), 1), -1);
+    u  = u(:);
 
     [M, phib] = OMDyn(q, dq);
     phib = phib(:);

@@ -4,3 +4,16 @@ claude\ historial/
 data/**/*.csv
 plots/**/*.png
 plots/**/*.eps
+
+# Salidas de ejecucion de MATLAB (Lab 5): logs de fmincon y soluciones .mat
+src/Trajectory Optimization TV-LQR/MATLAB/logs/
+src/Trajectory Optimization TV-LQR/MATLAB/zmin/
+
+# Binarios MEX y carpeta de trabajo de MATLAB Coder (build_omdyn_mex.m)
+*.mexa64
+*.mexw64
+*.mexmaci64
+codegen/
+
+# Backup transitorio que crea gen_OMDyn.m en cada regeneracion
+OMDyn_prev.m

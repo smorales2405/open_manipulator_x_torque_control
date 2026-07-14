@@ -6,14 +6,21 @@
 % Tiempo estimado: 15-35 minutos (sin llamadas a simplify)
 %
 % Salida:
-%   OMDyn_openmani.m  — copia de seguridad del OMDyn.m existente (openmani.urdf)
-%   OMDyn.m           — nueva version consistente con open_manipulator_x.urdf
+%   OMDyn_prev.m  — copia de seguridad del OMDyn.m existente en esta carpeta
+%   OMDyn.m       — nueva version consistente con open_manipulator_x.urdf
 %
-% Parametros tomados de open_manipulator_x.urdf:
-%   - Masas link2..5, centros de masa, tensores de inercia
-%     (transformados desde datos de ensamble ROBOTIS e-Manual, R por link:
-%      link2→I, link3→Rz(180°), link4→Ry(90°), link5→Ry(90°))
-%   - Origenes y ejes de joint1..4  (identicos a openmani.urdf)
+% Parametros tomados VERBATIM de los bloques <inertial> de
+% urdf/open_manipulator_x.urdf (masas pesadas en balanza, inercias del CAD
+% escaladas — la misma referencia que usan Gazebo y los nodos hw/gz via
+% Pinocchio):
+%   - Masas link2..5, centros de masa y tensores de inercia (frame del link)
+%   - Origenes y ejes de joint1..4
+% Los links del gripper (gripper_link, gripper_link_sub, end_effector_link)
+% son placeholders de 1 g en el URDF; se lumpean rigidamente en link5 para
+% coincidir con el modelo reducido de Pinocchio/Gazebo (gripper bloqueado).
+%
+% Tras regenerar: copiar OMDyn.m a ../instructor/ y ../student/, y
+% recompilar el MEX con ../instructor/build_omdyn_mex.m.
 
 clear; clc;
 fprintf('=================================================================\n');
@@ -26,33 +33,59 @@ t0 = tic;
 %  ========================================================================
 
 % Masas [kg]  — link1 es la base fija, no contribuye a la dinamica
-% Fuente: datos de ensamble ROBOTIS e-Manual transformados al frame del link
-m = [1.0483260e-01;   % link2  (Joint1 Assembly: 104.83 g)
-     1.4234630e-01;   % link3  (Joint2 Assembly: 142.35 g)
-     1.3467049e-01;   % link4  (Joint3 Assembly: 134.67 g)
-     2.3650927e-01];  % link5  (Joint4 Assembly: 235.51 g — incluye gripper)
+% Fuente: bloques <inertial> de urdf/open_manipulator_x.urdf (verbatim)
+m = [0.0970;    % link2
+     0.1235;    % link3
+     0.1151;    % link4
+     0.2206];   % link5
 
 % Centros de masa en el frame del link correspondiente [m]
-% Transformados con rotaciones: link2→I, link3→Rz(180°), link4,5→Ry(90°)
-rc = [  0.0000000e+00, -5.6914372e-04, 2.6565513e-02;   % link2
-        9.1617228e-03,  4.1915210e-04, 1.0599938e-01;   % link3
-        9.3290225e-02,  4.4304274e-04, 3.6312773e-07;   % link4
-        6.0472935e-02,  7.9503949e-07, 6.1273313e-03];  % link5
+% Fuente: <inertial><origin xyz> del URDF (verbatim)
+rc = [ 0.000000, 0.000657, 0.044319;    % link2
+       0.007606, 0.000389, 0.099924;    % link3
+       0.089168, 0.000437, 0.000001;    % link4
+       0.062451, 0.000000, 0.005878];   % link5
 
 % Tensores de inercia en el CoM, en el frame del link [kg·m^2]
 %   I = [Ixx, Ixy, Ixz; Ixy, Iyy, Iyz; Ixz, Iyz, Izz]
-Ic = {[ 3.3802078e-05,  0.0,            0.0;
-        0.0,            2.9569411e-05,  2.2121514e-07;
-        0.0,            2.2121514e-07,  1.7810252e-05], ...  % link2
-      [ 2.3711450e-04, -2.7513999e-07, -2.6668982e-05;
-       -2.7513999e-07,  2.4488355e-04, -1.3128636e-06;
-       -2.6668982e-05, -1.3128636e-06,  4.2967059e-05], ...  % link3
-      [ 2.4809204e-05, -1.2221090e-06,  1.8290300e-09;
-       -1.2221090e-06,  1.7818139e-04,  0.0;
-        1.8290300e-09,  0.0,            1.8688812e-04], ...  % link4
-      [ 1.7393236e-04, -1.5305492e-08,  2.2615865e-05;
-       -1.5305492e-08,  2.0769766e-04, -2.2288943e-07;
-        2.2615865e-05, -2.2288943e-07,  2.6708326e-04]};     % link5
+% Fuente: <inertial><inertia> del URDF (verbatim)
+Ic = {[ 3.078317e-05,  0.0,            0.0;
+        0.0,            2.670366e-05,  -1.289659e-07;
+        0.0,           -1.289659e-07,   1.627175e-05], ...  % link2
+      [ 1.979680e-04, -2.511443e-07, -2.497601e-05;
+       -2.511443e-07,  2.046627e-04, -1.351040e-06;
+       -2.497601e-05, -1.351040e-06,  3.374865e-05], ...    % link3
+      [ 1.930305e-05, -1.189078e-06,  3.461654e-09;
+       -1.189078e-06,  1.483284e-04,  0.0;
+        3.461654e-09,  0.0,           1.547550e-04], ...    % link4
+      [ 1.344328e-04, -1.788649e-08,  2.259163e-05;
+       -1.788649e-08,  1.892619e-04,  9.936937e-07;
+        2.259163e-05,  9.936937e-07,  2.174510e-04]};       % link5
+
+% ── Lumping de los links del gripper en link5 ────────────────────────────
+% El URDF une gripper_link, gripper_link_sub y end_effector_link a link5
+% (placeholders de 1 g, inercia 1e-6). Gazebo y los nodos hw/gz (Pinocchio
+% con gripper bloqueado) los simulan como parte del cuerpo distal, asi que
+% se combinan aqui en link5 con el teorema de ejes paralelos.
+m_g = [1.0e-3; 1.0e-3; 1.0e-3];        % masas [kg]
+p_g = [0.0817,  0.021, 0;              % gripper_link      (frame link5, q_grip=0)
+       0.0817, -0.021, 0;              % gripper_link_sub
+       0.126,   0.0,   0];             % end_effector_link
+I_g = 1.0e-6 * eye(3);                 % inercia propia de cada placeholder
+
+paxis = @(d) dot(d,d)*eye(3) - d(:)*d(:)';   % matriz de ejes paralelos
+
+m5_new  = m(4) + sum(m_g);
+rc5_new = (m(4)*rc(4,:) + m_g'*p_g) / m5_new;
+Ic5_new = Ic{4} + m(4)*paxis(rc(4,:) - rc5_new);
+for gg = 1:numel(m_g)
+    Ic5_new = Ic5_new + I_g + m_g(gg)*paxis(p_g(gg,:) - rc5_new);
+end
+m(4)    = m5_new;
+rc(4,:) = rc5_new;
+Ic{4}   = Ic5_new;
+fprintf('link5 con gripper lumpeado: m=%.4f kg  rc=[%.6f %.6f %.6f] m\n\n', ...
+        m(4), rc(4,:));
 
 % Origenes de los joints en el frame del link padre [m]
 % Nota: identicos a openmani.urdf (joint1 Z=0.017 conservado en omx.urdf)
@@ -297,13 +330,13 @@ fprintf('[%.0fs] phib calculado.\n', toc(t0));
 
 script_dir  = fileparts(mfilename('fullpath'));
 orig_file   = fullfile(script_dir, 'OMDyn.m');
-backup_file = fullfile(script_dir, 'OMDyn_openmani.m');  % backup de la version openmani.urdf
+backup_file = fullfile(script_dir, 'OMDyn_prev.m');   % backup de la version previa
 output_file = fullfile(script_dir, 'OMDyn.m');
 
-% Copia de seguridad del OMDyn.m existente (generado desde openmani.urdf)
+% Copia de seguridad del OMDyn.m existente en esta carpeta
 if isfile(orig_file)
     copyfile(orig_file, backup_file);
-    fprintf('\nCopia de seguridad guardada en: OMDyn_openmani.m\n');
+    fprintf('\nCopia de seguridad guardada en: OMDyn_prev.m\n');
 end
 
 fprintf('[%.0fs] Generando OMDyn.m con matlabFunction (Optimize=true)...\n', toc(t0));
@@ -313,10 +346,25 @@ matlabFunction(M_sym, phib_sym, ...
     'Vars',     {q_sym, dq_sym}, ...
     'Outputs',  {'M', 'phib'}, ...
     'Optimize', true, ...
-    'Comments', 'Generado automaticamente por gen_OMDyn.m desde openmani.urdf');
+    'Comments', 'Generado automaticamente por gen_OMDyn.m desde open_manipulator_x.urdf');
 
 fprintf('\n=================================================================\n');
 fprintf('  LISTO: OMDyn.m generado en %.1f minutos\n', toc(t0)/60);
-fprintf('  Copia de seguridad: OMDyn_original.m\n');
+fprintf('  Copia de seguridad: OMDyn_prev.m\n');
 fprintf('  Verifica con: validate_omdyn_vs_urdf.m\n');
+fprintf('  Luego: copiar OMDyn.m a ../instructor/ y ../student/, y\n');
+fprintf('  recompilar el MEX con ../instructor/build_omdyn_mex.m\n');
 fprintf('=================================================================\n');
+
+% Los binarios MEX (build_omdyn_mex.m) tienen precedencia sobre OMDyn.m:
+% si existe uno de una version anterior, avisar que quedaria desactualizado.
+for d = {script_dir, fullfile(script_dir, '..', 'instructor'), ...
+         fullfile(script_dir, '..', 'student')}
+    stale_mex = fullfile(d{1}, ['OMDyn.' mexext]);
+    if isfile(stale_mex)
+        fprintf(['\nADVERTENCIA: existe %s\n' ...
+                 '  El MEX tiene precedencia sobre OMDyn.m y quedaria DESACTUALIZADO.\n' ...
+                 '  Tras copiar el nuevo OMDyn.m, recompilar con build_omdyn_mex.m ' ...
+                 '(o borrar el MEX).\n'], stale_mex);
+    end
+end

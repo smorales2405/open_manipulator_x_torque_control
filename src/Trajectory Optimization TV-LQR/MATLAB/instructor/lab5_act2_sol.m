@@ -31,8 +31,9 @@
 %   Fig 4 — Trayectoria cartesiana 3D + paraboloide obstáculo (meshgrid)
 %   Fig 5 — Señal de control TV-LQR vs referencia
 %
-% Para usar en Gazebo: tras correr este script, actualizar Lab5_Export_Refs.m
-%   con  zmin_file='zmin_act2.mat'  y  N=30.
+% Para usar en Gazebo: tras correr este script (deja N, Ts, nx, nu, x0, yf,
+%   Xref, Uref, K_TV en el workspace), ejecutar Lab5_Export_Refs.m para
+%   regenerar la carpeta references/.
 
 clear; close all; clc;
 rng(1);
@@ -42,7 +43,7 @@ EXPORT_FIGS = true;
 % ── Identificadores de sesión (editar antes de cada ejecución) ───────────────
 act_num            = 2;     % número de actividad
 trial_num          = 16;    % número de prueba — nombra el log y el zmin
-use_saved_solution = true; % true → carga N, Ts, x0, yf y zmin desde el .mat
+use_saved_solution = false; % true → carga N, Ts, x0, yf y zmin desde el .mat
 
 pkg_dir    = '/home/utec/open_manx_ws/src/open_manipulator_x_torque_control';
 matlab_dir = fullfile(pkg_dir, 'src', 'Trajectory Optimization TV-LQR', 'MATLAB');
@@ -62,11 +63,20 @@ fprintf('=== lab5_act2_sol  %s ===\n\n', datestr(now,'yyyy-mm-dd HH:MM:SS'));
 %   'sqrt_rk4' — Sqrt RK4 continuo (según guía del lab, integración hacia atrás)
 riccati_method = 'zoh';
 
+% ── Aceleracion de la optimizacion ────────────────────────────────────────
+% USE_PARALLEL: fmincon evalua las diferencias finitas del gradiente en
+%   paralelo (requiere Parallel Computing Toolbox; el primer parpool de la
+%   sesion tarda ~10-30 s en abrir).
+% MEX: ejecutar build_omdyn_mex.m una vez — genera OMDyn.<mexext> y
+%   open_manx_fkin.<mexext>, que tienen precedencia sobre los .m y aceleran
+%   cada iteracion ~5-10x. Ambas mejoras se combinan.
+USE_PARALLEL = true;
+
 %% ========================================================================
 %  1. Parámetros generales  (iguales a Act. 1)
 %  ========================================================================
 
-N  = 40;    % 50 → 30: reduce variables de 600 a 360 (2.8× más rápido por iteración)
+N  = 40;    % 480 variables de decision: N*(nx+nu)
 Ts = 0.1;
 nx = 8;
 nu = 4;  
@@ -84,8 +94,8 @@ if use_saved_solution
     end
     sv       = load(zmin_file, 'zmin', 'exitflag', 'output', 'N', 'Ts', 'x0', 'yf');
     zmin     = sv.zmin;    exitflag = sv.exitflag;    output = sv.output;
-    % N  = sv.N;    Ts = sv.Ts;
-    % x0 = sv.x0;  yf = sv.yf;
+    N  = sv.N;    Ts = sv.Ts;
+    x0 = sv.x0;   yf = sv.yf;
     fprintf('Cargado: %s  (N=%d  Ts=%.3f s)\n\n', zmin_file, N, Ts);
 end
 
@@ -141,14 +151,56 @@ lb = [repmat(x_lower, N, 1);  ukmin * ones(nu*N, 1)];
 ub = [repmat(x_upper, N, 1);  ukmax * ones(nu*N, 1)];
 x0_guess = x0;
 
-% Warm start constante: todos los estados en x0, torques de compensación
-% gravitatoria. Factible para el hard constraint (z_obs≈0 en y0).
-z0 = [kron(ones(N,1), x0); kron(ones(N,1), u0g)];
-fprintf('Warm start: punto constante en x0 con compensacion gravitatoria\n\n');
+% Warm start: por defecto punto constante (todos los estados en x0, torques
+% de compensacion gravitatoria — factible para el hard constraint en y0).
+% Si existe la solucion de la Actividad 1 con el mismo N y Ts, se usa como
+% semilla: mismo x0/yf sin obstaculo, tipicamente reduce las iteraciones de
+% fmincon a la mitad.
+warm_start_act1_trial = 1;   % 0 = desactivar; n>0 = usar zmin_act1_n.mat
 
+z0     = [kron(ones(N,1), x0); kron(ones(N,1), u0g)];
+ws_msg = 'punto constante en x0 con compensacion gravitatoria';
+if warm_start_act1_trial > 0
+    ws_file = fullfile(zmin_dir, sprintf('zmin_act1_%d.mat', warm_start_act1_trial));
+    if exist(ws_file, 'file')
+        ws = load(ws_file, 'zmin', 'N', 'Ts');
+        if ws.N == N && abs(ws.Ts - Ts) < 1e-12
+            z0     = ws.zmin;
+            ws_msg = sprintf('solucion de la Act. 1 (%s)', ws_file);
+        else
+            fprintf('Aviso: %s tiene N=%d Ts=%.3f (aqui N=%d Ts=%.3f) — se ignora.\n', ...
+                    ws_file, ws.N, ws.Ts, N, Ts);
+        end
+    end
+end
+fprintf('Warm start: %s\n\n', ws_msg);
+
+% ── Aceleracion: estado del MEX + pool paralelo ──────────────────────────
+if endsWith(which('OMDyn'), mexext)
+    fprintf('OMDyn: MEX compilado — %s\n', which('OMDyn'));
+else
+    fprintf(['OMDyn: version .m interpretada. Ejecutar build_omdyn_mex.m ' ...
+             'para acelerar ~5-10x cada iteracion.\n']);
+end
+if USE_PARALLEL && isempty(ver('parallel'))
+    fprintf('Parallel Computing Toolbox no instalado — continuando en serie.\n');
+    USE_PARALLEL = false;
+end
+if USE_PARALLEL
+    try
+        if isempty(gcp('nocreate')), parpool; end
+    catch pool_err
+        warning('Sin pool paralelo (%s). Continuando en serie.', pool_err.message);
+        USE_PARALLEL = false;
+    end
+end
+
+% UseParallel reparte las ~N*(nx+nu)+1 evaluaciones de diferencias finitas
+% de cada iteracion entre los workers del pool.
 options = optimoptions('fmincon', ...
     'Display',               'iter', ...
     'Algorithm',             'sqp', ...
+    'UseParallel',           USE_PARALLEL, ...
     'MaxFunctionEvaluations', 200000, ...
     'MaxIterations',          1000, ...
     'OptimalityTolerance',    1e-4, ...
@@ -312,9 +364,12 @@ fprintf('K_TV calculado.\n');
 %  ========================================================================
 
 x0sim = x0 + 0.05*randn(nx,1);
-[T, Xsim] = ode45( ...
-    @(t,x) OM4dof(t, x, controlTVLQR(t,x,Uref,Xref,Ts,N,K_TV)), ...
-    0:Ts:(N*Ts), x0sim);
+
+% Control en lazo cerrado con saturacion explicita (OM4dof ya no satura
+% internamente — ver nota en OM4dof).
+u_cl = @(t,x) max(min(controlTVLQR(t,x,Uref,Xref,Ts,N,K_TV), ukmax), ukmin);
+
+[T, Xsim] = ode45(@(t,x) OM4dof(t, x, u_cl(t,x)), 0:Ts:(N*Ts), x0sim);
 Xsim = Xsim';
 
 ysim = zeros(4, numel(T));
@@ -448,9 +503,7 @@ patch([x_lo x_hi x_hi x_lo], repmat(y_hi,1,4), ...
 % ── Monte Carlo (20 realizaciones) ───────────────────────────────────────
 for rr = 1:20
     x0mc = x0 + 0.10*randn(nx,1);
-    [~,Xmc] = ode45( ...
-        @(t,x) OM4dof(t,x,controlTVLQR(t,x,Uref,Xref,Ts,N,K_TV)), ...
-        0:Ts:N*Ts, x0mc);
+    [~,Xmc] = ode45(@(t,x) OM4dof(t, x, u_cl(t,x)), 0:Ts:N*Ts, x0mc);
     Xmc = Xmc';
     ymc = zeros(4, size(Xmc,2));
     for i = 1:size(Xmc,2), ymc(:,i) = open_manx_fkin(Xmc(1:4,i)); end
@@ -604,10 +657,16 @@ end
 % ─────────────────────────────────────────────────────────────────────────
 
 function dx = OM4dof(t, x, u) %#ok<INUSD>
+% Modelo no lineal SIN saturacion interna de u:
+%   - En la optimizacion los bounds lb/ub ya imponen |u| <= 1. Un clamp aqui
+%     anularia el gradiente por diferencias finitas justo en u = ±1
+%     (columnas cero en B_k) y estanca el paso SQP con entradas saturadas.
+%   - En la simulacion en lazo cerrado la saturacion se aplica explicitamente
+%     sobre la salida de controlTVLQR (handle u_cl, seccion 10).
 
     q  = x(1:4);
     dq = x(5:8);
-    u  = max(min(u(:), 1), -1);
+    u  = u(:);
 
     [M, phib] = OMDyn(q, dq);
     phib = phib(:);
