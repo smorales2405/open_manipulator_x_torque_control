@@ -189,7 +189,11 @@ def generate_launch_description():
         arguments=[
             '-name', 'open_manipulator_x_effort',
             '-topic', 'robot_description',
-            '-x', '0.0', '-y', '0.0', '-z', '0.01',
+            # z=0: la placa base (mesh z local [-0.010,0], frame en su cara
+            # superior a +0.010 del root) queda apoyada exactamente en el piso,
+            # con link1 a 0.010 m — igual que el robot real sobre la mesa.
+            # (con z=0.01 el modelo, anclado al mundo, flotaba 10 mm)
+            '-x', '0.0', '-y', '0.0', '-z', '0.0',
         ],
         output='screen',
     )
@@ -237,9 +241,11 @@ def generate_launch_description():
         # las trata como casco convexo y deja "huecos" en las paredes.
         # Dimensiones en marco local del link (antes de aplicar la pose del modelo):
         #   STL [mm]: X∈[-160,+160], Y∈[-75,+75], Z∈[0,158]  → scale 0.001
-        #   Techo  : 320×150×3 mm  → centro (0, 0, 0.1565 m)
-        #   Pared-I: 320×3×155 mm  → centro (0, -0.0735, 0.0775 m)
-        #   Pared-D: 320×3×155 mm  → centro (0, +0.0735, 0.0775 m)
+        #   Techo  : 320×150×3 mm → centro (0, 0, 0.1565 m)
+        #   Paredes: 3×150×155 mm en los EXTREMOS DEL ANCHO (x local = ±0.1565 m),
+        #            donde el STL apoya las patas (x∈[±155,±158] mm, verificado
+        #            de los vértices de la malla). Con yaw=pi/2 quedan en
+        #            y_mundo=±0.1565, coincidiendo con las paredes visibles.
         _col = (
             '<surface><contact><ode><kp>1000000</kp><kd>100</kd></ode></contact>'
             '<friction><ode><mu>0.6</mu><mu2>0.6</mu2></ode></friction></surface>'
@@ -256,11 +262,11 @@ def generate_launch_description():
             '<collision name="col_top"><pose>0 0 0.1565 0 0 0</pose>'
             '<geometry><box><size>0.320 0.150 0.003</size></box></geometry>'
             + _col + '</collision>'
-            '<collision name="col_left"><pose>0 -0.0735 0.0775 0 0 0</pose>'
-            '<geometry><box><size>0.320 0.003 0.155</size></box></geometry>'
+            '<collision name="col_left"><pose>-0.1565 0 0.0775 0 0 0</pose>'
+            '<geometry><box><size>0.003 0.150 0.155</size></box></geometry>'
             + _col + '</collision>'
-            '<collision name="col_right"><pose>0 0.0735 0.0775 0 0 0</pose>'
-            '<geometry><box><size>0.320 0.003 0.155</size></box></geometry>'
+            '<collision name="col_right"><pose>0.1565 0 0.0775 0 0 0</pose>'
+            '<geometry><box><size>0.003 0.150 0.155</size></box></geometry>'
             + _col + '</collision>'
             '</link></model></sdf>'
         ).format(uri=_stl)

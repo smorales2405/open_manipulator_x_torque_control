@@ -15,7 +15,7 @@
 clear; clc; close all;
 
 %% ── Configuracion ────────────────────────────────────────────────────────────
-mode        = 'real';   % 'sim'  = simulacion Gazebo
+mode        = 'sim';   % 'sim'  = simulacion Gazebo
                        % 'real' = implementacion hardware real
 
 test_num    = 4;       % Numero de log

@@ -4,31 +4,36 @@
 %
 % Objetivo : Mismo x0 y yf que Act. 1, evitando el obstáculo MDF.
 %
-% Obstáculo MDF en Gazebo (sim_init_config.yaml):
-%   pose: x=0.075 m, y=0, z=0, yaw=pi/2
-%   Marco link1 —usado por open_manx_fkin— (offset base ≈ 114.75 mm respecto a Gazebo):
-%     X ∈ [0.11475, 0.26475] m   (ancho 150 mm, centrado en x_c=0.18975)
-%     Y ∈ [-0.160, 0.160] m  (largo 320 mm, centrado en y=0)
-%     Z ∈ [0,     0.158] m   (altura techo 158 mm)
+% Obstáculo: arco MDF (310×150×158 mm, obstacle_mdf.pdf) spawneado en Gazebo
+% con obstacle_pose: [0.1125, 0, 0, 0, 0, pi/2] (config/sim_init_config.yaml,
+% marco MUNDO = centro del STL). En el setup real, la cara trasera del arco
+% sobresale 1/4 de su fondo (37.5 mm) del filo delantero del baseplate.
 %
-% Modelo de obstáculo — paraboloide con pendiente elevada:
-%   z_obs(x,y) = max(0,  z_top - α_x·(x-x_c)² - α_y·(y-y_c)²)
-%   donde:
-%     z_top = 0.183 m  (techo 158 mm + 10 mm base robot + 15 mm espesor eslabón)
-%     α_x   = z_top/rx²  ≈ 29.9 m⁻¹  (pendiente elevada en X)
-%     α_y   = z_top/ry²  ≈  6.6 m⁻¹  (pendiente en Y)
-%   El paraboloide vale cero exactamente en el borde del footprint y alcanza
-%   z_top en el centro (x_c, y_c), modelando la cubierta del arco.
+% Marco link1 (el que usa open_manx_fkin): el robot va montado atras de la
+% placa — xacro world_fixed: link1 en mundo (-0.127, 0, +0.010). Por tanto:
+%   x_obs  = 0.1125 + 0.127 = 0.2395 m   → X ∈ [0.1645, 0.3145] m
+%   Y ∈ [-0.158, 0.158] m  (paredes en los extremos del ancho, y=±0.1565)
+%   z_ceil = 0.158 - 0.010 = 0.148 m     (techo sobre el piso − altura de
+%                                          link1 sobre el piso: placa 10 mm)
+% Verificacion de coherencia: cara trasera 0.3145 vs filo de placa
+% (0.150 mundo + 0.127) = 0.277 → sobresale 37.5 mm = 150/4 ✓
 %
-% Restricción de evasión (soft, penalización cuadrática en J):
-%   violation_k = max(0,  z_obs(x_k, y_k) - z_k)
-%   J_obs       = c_obs · Σ violation_k²
+% Restricción de evasión (hard constraint en restr, plano XZ): el EE debe
+% quedar FUERA de la caja de exclusion del techo, inflada con la geometria
+% del gripper (dedos hasta ~34 mm bajo el eje con el pitch del cruce,
+% cuerpo 40 mm sobre el eje, punta 21 mm mas alla del punto EE — mallas
+% URDF / spec ROBOTIS):
+%   c = EPS - max(dx_out, dz_out) ≤ 0,  dx/dz_out = distancia fuera de la caja
+% Evaluada en cada nodo Y en el punto medio de cada intervalo (intersample).
+% NOTA: la version anterior usaba la parabola x-x_lo-α(z-z_safe)²≤0; su rama
+% inferior simetrica admitia, cerca del borde frontal, pasar con el gripper
+% dentro del techo (colision verificada en Gazebo). La caja no tiene ramas.
 %
 % Figuras:
 %   Fig 1 — Trayectorias articulares optimizadas q_ref
 %   Fig 2 — Entradas optimizadas u_ref
 %   Fig 3 — Seguimiento articular TV-LQR (simulación vs referencia)
-%   Fig 4 — Trayectoria cartesiana 3D + paraboloide obstáculo (meshgrid)
+%   Fig 4 — Trayectoria cartesiana 3D + arco MDF (techo y paredes)
 %   Fig 5 — Señal de control TV-LQR vs referencia
 %
 % Para usar en Gazebo: tras correr este script (deja N, Ts, nx, nu, x0, yf,
@@ -38,12 +43,14 @@
 clear; close all; clc;
 rng(1);
 
-EXPORT_FIGS = true;
+EXPORT_FIGS = false;
 
 % ── Identificadores de sesión (editar antes de cada ejecución) ───────────────
 act_num            = 2;     % número de actividad
-trial_num          = 16;    % número de prueba — nombra el log y el zmin
+trial_num          = 4;     % número de prueba — nombra el log y el zmin
 use_saved_solution = false; % true → carga N, Ts, x0, yf y zmin desde el .mat
+                            % (false: la caja crecio con la envolvente de
+                            %  pitch del gripper → re-optimizar)
 
 pkg_dir    = '/home/utec/open_manx_ws/src/open_manipulator_x_torque_control';
 matlab_dir = fullfile(pkg_dir, 'src', 'Trajectory Optimization TV-LQR', 'MATLAB');
@@ -76,8 +83,8 @@ USE_PARALLEL = true;
 %  1. Parámetros generales  (iguales a Act. 1)
 %  ========================================================================
 
-N  = 40;    % 480 variables de decision: N*(nx+nu)
-Ts = 0.1;
+N  = 80;    % 480 variables de decision: N*(nx+nu)
+Ts = 0.05;
 nx = 8;
 nu = 4;  
 
@@ -111,30 +118,61 @@ dq_max  = 10;
 %  2. Parámetros del obstáculo MDF
 %  ========================================================================
 
-x_obs  = 0.22725; % [m] centro X en marco link1 (= 0.075 m Gazebo + 114.75 mm offset base)
-y_obs  = 0.0;     % [m] centro Y
-z_ceil = 0.158;   % [m] techo físico del arco MDF
-rx_obs = 0.075;   % [m] semi-ancho en X (footprint = 150 mm)
-ry_obs = 0.160;   % [m] semi-ancho en Y (footprint = 320 mm)
-x_lo   = x_obs - rx_obs;   % 0.11475 m
-x_hi   = x_obs + rx_obs;   % 0.26475 m
-y_lo   = y_obs - ry_obs;   % -0.160 m
-y_hi   = y_obs + ry_obs;   % +0.160 m
+% Centro del arco en marco link1 = pose Gazebo (mundo) + offset world→link1
+% (xacro world_fixed: link1 en mundo (-0.127, 0, +0.010)).
+OBS_GZ_X = 0.1125;   % [m] obstacle_pose x en sim_init_config.yaml (marco mundo)
+X_W2L1   = 0.127;    % [m] offset mundo→link1 en x (world_fixed del xacro)
 
-% Constraint XZ — análogo a la placa del Lab 2025:
-%   x_k - x_lo - alpha_z*(z_k - z_ceil)^2 ≤ 0
-% Para avanzar en x más allá de x_lo, el EE debe estar en z alejado de z_ceil.
-% Condición mínima: alpha_z ≥ (x_yf-x_lo)/(z_yf-z_ceil)^2 = 0.085/0.00176 ≈ 48.2
-alpha_z = 50.0;    % [m⁻¹]
-% z_ceil_safe: techo efectivo del constraint = z_ceil + 10 mm de margen.
-% Garantiza que el EE entre al footprint al menos 10 mm sobre el techo físico.
-% Factibilidad yf: alpha_z*(z_yf-z_ceil_safe)^2 = 50*(0.032)^2 = 0.051 ≥ x_yf-x_lo = 0.048 ✓
-z_ceil_safe = z_ceil + 0.010;  % [m] = 0.168 m
+x_obs  = OBS_GZ_X + X_W2L1;   % 0.2395 m — centro X en marco link1
+y_obs  = 0.0;                 % [m] centro Y
+z_ceil = 0.158 - 0.010;       % 0.148 m — techo fisico en marco link1 (techo a
+                              % 158 mm del piso; link1 a 10 mm por la placa)
+rx_obs = 0.075;   % [m] semi-fondo en X (footprint = 150 mm)
+ry_obs = 0.158;   % [m] semi-ancho en Y (paredes en y=±0.1565, borde exterior)
+x_lo   = x_obs - rx_obs;   % 0.1645 m (cara frontal, lado robot)
+x_hi   = x_obs + rx_obs;   % 0.3145 m (cara trasera)
+y_lo   = y_obs - ry_obs;
+y_hi   = y_obs + ry_obs;
 
-fprintf('--- Obstáculo MDF ---\n');
-fprintf('  Footprint link1 : X=[%.5f, %.5f]  Y=[%.3f, %.3f] m\n', x_lo, x_hi, y_lo, y_hi);
-fprintf('  z_ceil=%.3f m (fisico)  z_ceil_safe=%.3f m (+10 mm)  alpha_z=%.1f\n\n', ...
-        z_ceil, z_ceil_safe, alpha_z);
+% ── Zona de exclusion (plano XZ): caja del techo inflada por el gripper ──
+% La parabola x-x_lo-α(z-z_safe)²≤0 de la version anterior tiene una rama
+% inferior simetrica: cerca del borde frontal (vertice) admite pasar con el
+% EE apenas sobre el techo fisico → el gripper colisiono en Gazebo. Se
+% reemplaza por una caja de exclusion con margenes anisotropicos tomados de
+% la geometria del gripper (mallas URDF / spec ROBOTIS):
+h_fing    = 0.029;   % [m] dedos bajo el eje del EE (gripper horizontal)
+g_fwd     = 0.021;   % [m] punta de dedos mas alla del punto EE (fkin)
+% Con el gripper inclinado (pitch φ>0, punta abajo) la esquina inferior-
+% delantera de los dedos cae h_fing·cosφ + g_fwd·sinφ bajo el eje. La
+% referencia cruza el arco con φ hasta ~0.3 rad → 34 mm (+2 mm por
+% apertura de pinza / incertidumbre de mallas). Sin esta correccion el
+% gripper rozo el borde del techo en Gazebo (test 3, t≈3.1-3.2 s).
+h_grip    = 0.036;   % [m] envolvente vertical bajo el eje (valida si φ ≤ 0.3)
+h_grip_up = 0.040;   % [m] cuerpo sobre el eje del EE → margen bajo el techo
+                     %     (relevante para el paso por debajo del reto)
+m_clr     = 0.010;   % [m] margen de seguridad adicional
+EPS_CLR   = 0.002;   % [m] holgura minima exigida fuera de la caja
+
+box_x = [x_lo - g_fwd - m_clr,   x_hi + g_fwd + m_clr];    % [0.1335, 0.3455]
+box_z = [z_ceil - 0.003 - h_grip_up - m_clr, ...           %  0.095 (bajo techo)
+         z_ceil + h_grip + m_clr];                         %  0.194 (sobre techo)
+
+% Constraint (ver restr): fuera de la caja en x O en z, con holgura EPS_CLR:
+%   c = EPS_CLR - max( max(box_x(1)-x, x-box_x(2)), max(box_z(1)-z, z-box_z(2)) ) ≤ 0
+% Cruce por ARRIBA: z ≥ box_z(2)+EPS = 0.196 → esquina de dedos (con pitch)
+%   ≥ +14 mm sobre el techo fisico.
+% Paso por DEBAJO (reto): z ≤ box_z(1)-EPS = 0.093 → cuerpo ≥ +10 mm bajo techo.
+% Factibilidad yf=(0.2,-0.13,0.2): z_yf - box_z(2) = 6 mm ≥ EPS_CLR ✓
+% (presupuesto vertical total: z_yf - z_ceil = 52 mm = 36 gripper + 10 margen
+%  + 6 de holgura en yf — alejar el arco en x NO amplia este presupuesto)
+
+fprintf('--- Obstáculo MDF (marco link1) ---\n');
+fprintf('  Footprint: X=[%.4f, %.4f]  Y=[%.3f, %.3f] m   z_ceil=%.3f m\n', ...
+        x_lo, x_hi, y_lo, y_hi, z_ceil);
+fprintf('  Caja de exclusion (EE): X=[%.4f, %.4f]  Z=[%.3f, %.3f]  EPS=%.0f mm\n', ...
+        box_x(1), box_x(2), box_z(1), box_z(2), 1e3*EPS_CLR);
+fprintf('  Cruce sobre techo: z >= %.3f (gripper >= %+.0f mm)\n\n', ...
+        box_z(2)+EPS_CLR, 1e3*(box_z(2)+EPS_CLR - h_grip - z_ceil));
 
 %% ========================================================================
 %  3. Inicialización de la optimización
@@ -156,7 +194,7 @@ x0_guess = x0;
 % Si existe la solucion de la Actividad 1 con el mismo N y Ts, se usa como
 % semilla: mismo x0/yf sin obstaculo, tipicamente reduce las iteraciones de
 % fmincon a la mitad.
-warm_start_act1_trial = 1;   % 0 = desactivar; n>0 = usar zmin_act1_n.mat
+warm_start_act1_trial = 3;   % 0 = desactivar; n>0 = usar zmin_act1_n.mat
 
 z0     = [kron(ones(N,1), x0); kron(ones(N,1), u0g)];
 ws_msg = 'punto constante en x0 con compensacion gravitatoria';
@@ -217,7 +255,7 @@ if ~use_saved_solution
     [zmin, ~, exitflag, output] = fmincon( ...
         @(z) Jcosto(z, Ts, N, nx, nu, x0, yf), ...
         z0, [], [], [], [], lb, ub, ...
-        @(z) restr(z, Ts, N, nx, nu, x0, x_lo, z_ceil_safe, alpha_z), ...
+        @(z) restr(z, Ts, N, nx, nu, x0, box_x, box_z, EPS_CLR), ...
         options);
     save(zmin_file, 'zmin', 'exitflag', 'output', 'N', 'Ts', 'x0', 'yf');
     fprintf('Guardado: %s\n', zmin_file);
@@ -237,29 +275,39 @@ Uref = reshape(zmin(nx*N+(1:nu*N)),    [nu N]);
 %  6. Verificar evasión del obstáculo
 %  ========================================================================
 
-% Verificación del constraint XZ: x_k - x_lo - alpha_z*(z_k - z_ceil_safe)^2 ≤ 0
-% + clearance físico sobre techo real (z_ceil).
-max_cxz    = -inf;
-min_phys_clr = inf;
+% Verificación del constraint de caja (nodos + puntos medios) y clearance
+% físico del EE y del gripper (esquina de dedos con el pitch φ de cada
+% nodo: h_fing·cosφ + g_fwd·sinφ bajo el eje) sobre el techo real.
+c_box_chk = @(y) EPS_CLR - max(max(box_x(1) - y(1), y(1) - box_x(2)), ...
+                               max(box_z(1) - y(3), y(3) - box_z(2)));
+max_cxz      = -inf;
+min_phys_clr = inf;      % EE sobre el techo fisico
+min_grip_clr = inf;      % parte baja del gripper sobre el techo fisico
+q_prev = x0(1:4);
 for k = 1:N
-    yk   = open_manx_fkin(Xref(1:4,k));
-    c_xz = yk(1) - x_lo - alpha_z*(yk(3) - z_ceil_safe)^2;
-    if c_xz > max_cxz, max_cxz = c_xz; end
-    if yk(1) >= x_lo
-        clr = yk(3) - z_ceil;
-        if clr < min_phys_clr, min_phys_clr = clr; end
+    for q_eval = {0.5*(q_prev + Xref(1:4,k)), Xref(1:4,k)}   % medio, nodo
+        yk = open_manx_fkin(q_eval{1});
+        max_cxz = max(max_cxz, c_box_chk(yk));
+        if yk(1) >= x_lo && yk(1) <= x_hi && abs(yk(2)) <= ry_obs
+            min_phys_clr = min(min_phys_clr, yk(3) - z_ceil);
+            % esquina inferior-delantera de los dedos con el pitch del nodo
+            h_eff = h_fing*cos(yk(4)) + g_fwd*max(sin(yk(4)), 0);
+            min_grip_clr = min(min_grip_clr, yk(3) - h_eff - z_ceil);
+        end
     end
+    q_prev = Xref(1:4,k);
 end
 
-fprintf('--- Verificación obstáculo (constraint XZ) ---\n');
-if max_cxz <= 0
-    fprintf('  OK — constraint (z_ceil_safe=%.3f m) satisfecho (max c = %.5f)\n\n', z_ceil_safe, max_cxz);
+fprintf('--- Verificación obstáculo (caja de exclusion, nodos + medios) ---\n');
+if max_cxz <= 1e-4    % ConstraintTolerance de fmincon
+    fprintf('  OK — constraint satisfecho (max c = %.2e)\n\n', max_cxz);
 else
-    fprintf('  ADVERTENCIA: constraint violado (max c = %.5f > 0)\n', max_cxz);
-    fprintf('  EE entra al arco cerca del techo. Re-optimizar.\n\n');
+    fprintf('  ADVERTENCIA: constraint violado (max c = %.2e > 1e-4)\n', max_cxz);
+    fprintf('  EE entra a la caja de exclusion del techo. Re-optimizar.\n\n');
 end
 if ~isinf(min_phys_clr)
-    fprintf('  Clearance minimo sobre techo fisico (z_ceil=%.3f m): %.4f m\n\n', z_ceil, min_phys_clr);
+    fprintf('  Clearance min sobre techo fisico (z_ceil=%.3f): EE %.1f mm | gripper %.1f mm\n\n', ...
+            z_ceil, 1e3*min_phys_clr, 1e3*min_grip_clr);
 else
     fprintf('  INFO: trayectoria fuera del footprint en todos los pasos.\n\n');
 end
@@ -488,7 +536,7 @@ title(tl3,'Seguimiento articular TV-LQR — Act. 2 (con obstáculo)', ...
       'FontSize',fs_ttl,'FontWeight','bold');
 
 %% ========================================================================
-%  Fig 4 — Trayectoria 3D + paraboloide obstáculo (meshgrid)
+%  Fig 4 — Trayectoria 3D + arco MDF (techo y paredes)
 %  ========================================================================
 
 figure(4); clf;
@@ -643,14 +691,23 @@ end
 
 % ─────────────────────────────────────────────────────────────────────────
 
-function [c_des, c_eq] = restr(z, Ts, N, nx, nu, x0, x_lo, z_ceil, alpha_z)
+function [c_des, c_eq] = restr(z, Ts, N, nx, nu, x0, box_x, box_z, eps_clr)
 % Restricciones del problema de optimización.
-% Constraint de obstáculo (plano XZ, análogo al Lab 2025):
-%   x_k - x_lo - alpha_z*(z_k - z_ceil)^2 ≤ 0
-% Para avanzar en x más allá de x_lo, el EE debe estar en z alejado de z_ceil.
+% Constraint de obstáculo: el EE debe quedar FUERA de la caja de exclusion
+% del techo (inflada con la geometria del gripper) en x O en z:
+%   c = eps_clr - max(dx_out, dz_out) ≤ 0
+%   dx_out = max(box_x(1)-x, x-box_x(2))   (>0 si esta fuera de la caja en x)
+%   dz_out = max(box_z(1)-z, z-box_z(2))   (>0 si esta fuera de la caja en z)
+% Dentro de la caja ambos son negativos → c > 0 (violado, magnitud =
+% penetracion + eps_clr). Se evalúa en cada nodo Y en el punto medio
+% articular de cada intervalo: con Ts=0.05 el EE recorre hasta ~15 mm entre
+% nodos y podría "cortar" la esquina del techo entre dos nodos factibles.
 
     c_eq  = zeros(nx*N, 1);
-    c_des = zeros(N, 1);
+    c_des = zeros(2*N, 1);
+
+    c_box = @(y) eps_clr - max(max(box_x(1) - y(1), y(1) - box_x(2)), ...
+                               max(box_z(1) - y(3), y(3) - box_z(2)));
 
     for k = 0:N-1
         if k == 0, xk = x0; else, xk = z(nx*(k-1) + (1:nx)); end
@@ -664,9 +721,9 @@ function [c_des, c_eq] = restr(z, Ts, N, nx, nu, x0, x_lo, z_ceil, alpha_z)
         k4 = OM4dof(k*Ts + Ts,   xk + Ts*k3,   uk);
         c_eq(nx*k + (1:nx)) = xkp1 - (xk + Ts*(k1 + 2*k2 + 2*k3 + k4)/6);
 
-        % Restricción evasión techo arco MDF — plano XZ (Lab 2025 style).
-        yk = open_manx_fkin(xkp1(1:4));
-        c_des(k+1) = yk(1) - x_lo - alpha_z*(yk(3) - z_ceil)^2;
+        % Evasión del techo del arco MDF: nodo k+1 y punto medio del intervalo
+        c_des(2*k+1) = c_box(open_manx_fkin(xkp1(1:4)));
+        c_des(2*k+2) = c_box(open_manx_fkin(0.5*(xk(1:4) + xkp1(1:4))));
     end
 end
 

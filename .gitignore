@@ -4,6 +4,10 @@ claude\ historial/
 data/**/*.csv
 plots/**/*.png
 plots/**/*.eps
+plots/**/*.pdf
+
+# Bytecode de Python (launch files)
+__pycache__/
 
 # Salidas de ejecucion de MATLAB (Lab 5): logs de fmincon y soluciones .mat
 src/Trajectory Optimization TV-LQR/MATLAB/logs/
