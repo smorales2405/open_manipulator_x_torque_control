@@ -22,8 +22,11 @@
 //
 //  Parametros ROS 2 (--ros-args -p nombre:=valor):
 //    test_num      [int]    1       — identificador del CSV generado
-//    t_sim         [double] 0.0     — duracion en segundos (0 = sin limite)
 //    reference_dir [string] "src/Trajectory Optimization TV-LQR/references"
+//
+//  Duracion: automatica, igual al ultimo instante de time_ref.txt
+//  (tf = N*Ts). Al completar la trayectoria el nodo publica torque cero
+//  y termina por si solo.
 //
 //  Suscriptor : /joint_states                   (sensor_msgs/JointState)
 //  Publicador : /arm_effort_controller/commands  (std_msgs/Float64MultiArray)
@@ -127,20 +130,14 @@ public:
   {
     // ── Parametros ──────────────────────────────────────────────────────────
     this->declare_parameter<int>        ("test_num",      1);
-    this->declare_parameter<double>     ("t_sim",         0.0);
     this->declare_parameter<std::string>("reference_dir",
       "src/Trajectory Optimization TV-LQR/references");
 
     const int test_num    = this->get_parameter("test_num").as_int();
-    t_sim_                = this->get_parameter("t_sim").as_double();
     const std::string ref_name = this->get_parameter("reference_dir").as_string();
     ref_dir_ = std::string(PACKAGE_SHARE_DIR) + "/" + ref_name;
 
     RCLCPP_INFO(get_logger(), "reference_dir: %s", ref_dir_.c_str());
-    if (t_sim_ > 0.0)
-      RCLCPP_INFO(get_logger(), "t_sim: %.2f s", t_sim_);
-    else
-      RCLCPP_INFO(get_logger(), "t_sim: ilimitado");
 
     // ── Seccion 1: Carga de referencias ─────────────────────────────────────
     auto fatal_load = [&](const std::string & path) {
@@ -202,7 +199,9 @@ public:
     }
 
     refs_loaded_ = true;
-    RCLCPP_INFO(get_logger(), "Referencias cargadas: N=%d  Ts=%.3f s", N_, Ts_);
+    t_end_ = t_ref_.back();   // duracion = ultimo instante de time_ref.txt
+    RCLCPP_INFO(get_logger(),
+      "Referencias cargadas: N=%d  Ts=%.3f s  (duracion: %.2f s)", N_, Ts_, t_end_);
     RCLCPP_INFO(get_logger(),
       "Feedforward de friccion URDF ACTIVO: damping=[%.4f %.4f %.4f %.4f]  "
       "coulomb=[%.4f %.4f %.4f %.4f]",
@@ -340,20 +339,21 @@ private:
 
     t_ += 0.01;
 
-    if (t_sim_ > 0.0 && t_ >= t_sim_) {
-      RCLCPP_INFO(get_logger(), "Simulacion completada (%.2f s).", t_sim_);
+    if (t_ >= t_end_) {
+      RCLCPP_INFO(get_logger(), "Trayectoria completada (%.2f s).", t_end_);
       std_msgs::msg::Float64MultiArray zero;
       zero.data.assign(NARM, 0.0);
       torque_pub_->publish(zero);
       if (csv_.is_open()) { csv_.close(); }
       timer_->cancel();
+      rclcpp::shutdown();
     }
   }
 
   // ── Miembros ──────────────────────────────────────────────────────────────
   std::string ref_dir_;
   double      t_;
-  double      t_sim_;
+  double      t_end_{0.0};   // duracion de la trayectoria (time_ref.txt)
   bool        refs_loaded_;
 
   int    N_;

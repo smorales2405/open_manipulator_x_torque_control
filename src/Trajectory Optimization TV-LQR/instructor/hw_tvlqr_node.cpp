@@ -33,7 +33,6 @@
  * Parametros ROS 2 (--ros-args -p nombre:=valor):
  *   port_name              [string]    "/dev/ttyUSB0"
  *   torque_scale           [double]    1.0   (escala de seguridad, rango 0..1)
- *   t_run                  [double]    1.5   (duracion en segundos, 0 = sin limite)
  *   test_num               [int]       1     (identificador del CSV)
  *   reference_dir          [string]    "src/Trajectory Optimization TV-LQR/references"
  *   ab_alpha               [double]    0.2   (filtro α-β: ganancia de posicion)
@@ -42,8 +41,11 @@
  *                                             requiere latency_timer=1 en el FTDI)
  *   friction_fc_scale      [double]    0.95  (fraccion de Fc compensada)
  *
+ * Duracion: automatica, igual al ultimo instante de time_ref.txt (tf = N*Ts).
+ * Al completar la trayectoria el nodo apaga los motores y termina solo.
+ *
  * USO TIPICO:
- *   ros2 run open_manipulator_x_torque_control hw_tvlqr_node --ros-args -p t_run:=1.5 -p test_num:=1
+ *   ros2 run open_manipulator_x_torque_control hw_tvlqr_node --ros-args -p test_num:=1
  *
  * Publisher: /hw/joint_states (sensor_msgs/JointState) — monitoreo
  *
@@ -206,7 +208,6 @@ public:
     // ── Parametros ──────────────────────────────────────────────────────────
     this->declare_parameter<std::string>("port_name",     "/dev/ttyUSB0");
     this->declare_parameter<double>     ("torque_scale",   1.0);
-    this->declare_parameter<double>     ("t_run",          1.5);
     this->declare_parameter<int>        ("test_num",        1);
     this->declare_parameter<std::string>("reference_dir",
       "src/Trajectory Optimization TV-LQR/references");
@@ -224,7 +225,6 @@ public:
 
     port_name_        = this->get_parameter("port_name").as_string();
     torque_scale_     = std::min(std::max(this->get_parameter("torque_scale").as_double(), 0.0), 1.0);
-    t_run_            = this->get_parameter("t_run").as_double();
     const int test_num = this->get_parameter("test_num").as_int();
     const std::string ref_name = this->get_parameter("reference_dir").as_string();
     ref_dir_ = std::string(PACKAGE_SHARE_DIR) + "/" + ref_name;
@@ -246,8 +246,8 @@ public:
     Ts_loop_      = 1.0 / loop_rate_hz_;
 
     RCLCPP_INFO(get_logger(),
-      "puerto=%s  scale=%.2f  t_run=%.1fs  id=%d",
-      port_name_.c_str(), torque_scale_, t_run_, test_num);
+      "puerto=%s  scale=%.2f  id=%d",
+      port_name_.c_str(), torque_scale_, test_num);
     RCLCPP_INFO(get_logger(),
       "motor α=[%.1f %.1f %.1f %.1f]  Fv=[%.2f %.2f %.2f %.2f]  ε=%.3f  fc_scale=%.2f",
       motor_alpha_(0), motor_alpha_(1), motor_alpha_(2), motor_alpha_(3),
@@ -317,7 +317,9 @@ public:
     }
 
     refs_loaded_ = true;
-    RCLCPP_INFO(get_logger(), "Referencias cargadas: N=%d  Ts=%.3f s", N_, Ts_);
+    t_end_ = t_ref_.back();   // duracion = ultimo instante de time_ref.txt
+    RCLCPP_INFO(get_logger(),
+      "Referencias cargadas: N=%d  Ts=%.3f s  (duracion: %.2f s)", N_, Ts_, t_end_);
 
     // ── CSV ──────────────────────────────────────────────────────────────────
     std::filesystem::create_directories(std::string(PACKAGE_DATA_DIR) + "/lab5/real");
@@ -530,8 +532,8 @@ private:
     const auto tp = std::chrono::high_resolution_clock::now();
     const double t = std::chrono::duration<double>(tp - start_time_).count();
 
-    if (t_run_ > 0.0 && t >= t_run_) {
-      RCLCPP_INFO(get_logger(), "Duracion completada (%.2f s).", t_run_);
+    if (t >= t_end_) {
+      RCLCPP_INFO(get_logger(), "Trayectoria completada (%.2f s).", t_end_);
       if (timer_) timer_->cancel();
       shutdown_hardware();
       if (csv_.is_open()) { csv_.flush(); csv_.close(); }
@@ -666,7 +668,8 @@ private:
 
   std::string ref_dir_;
   std::string port_name_;
-  double      torque_scale_, t_run_;
+  double      torque_scale_;
+  double      t_end_{0.0};   // duracion de la trayectoria (time_ref.txt)
   Vec4        motor_alpha_, motor_Fv_, motor_Fc_, motor_I_offset_;
   double      motor_epsilon_;
   double      fc_scale_;
@@ -710,7 +713,7 @@ int main(int argc, char * argv[])
   rclcpp::init(argc, argv);
 
   // Auto-carga config/motorXM430W350T_params.yaml; los -p de la línea de comandos
-  // (test_num, torque_scale, t_run, etc.) lo sobrescriben → no requiere launch.
+  // (test_num, torque_scale, etc.) lo sobrescriben → no requiere launch.
   rclcpp::NodeOptions opts;
   const std::string cfg = std::string(PACKAGE_CONFIG_DIR) + "/motorXM430W350T_params.yaml";
   if (std::filesystem::exists(cfg)) {

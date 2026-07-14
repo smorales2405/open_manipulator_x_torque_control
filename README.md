@@ -472,19 +472,20 @@ ros2 launch open_manipulator_x_torque_control torque_sim.launch.py
 **Step 4 — Run TV-LQR node** (Terminal 2)
 
 ```bash
-# Simulation (t_sim = tf = N * Ts)
+# Simulation
 ros2 run open_manipulator_x_torque_control gz_tvlqr_node \
-    --ros-args -p test_num:=1 -p t_sim:=1.5
+    --ros-args -p test_num:=1
 
-# Real hardware (t_run = tf = N * Ts)
+# Real hardware
 ros2 run open_manipulator_x_torque_control hw_tvlqr_node \
-    --ros-args -p test_num:=1 -p t_run:=1.5
+    --ros-args -p test_num:=1
 ```
+
+Both nodes run for the trajectory duration read from `time_ref.txt` (tf = N * Ts) and stop on their own — no duration parameter is needed.
 
 | Parameter | Description |
 |---|---|
 | `test_num` | ID appended to output CSV; use different IDs for Act. 1 and Act. 2 |
-| `t_sim` / `t_run` | Must equal `N * Ts` from MATLAB |
 | `torque_scale` | (optional) Scale factor on applied torque, useful for a progressive HW ramp-up |
 
 Data saved to: `data/lab5/sim/data_log_sim_lab5_<N>.csv` and `data/lab5/real/data_log_real_lab5_<N>.csv`
