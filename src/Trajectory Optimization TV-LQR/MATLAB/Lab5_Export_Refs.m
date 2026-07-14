@@ -18,7 +18,7 @@
 
 clc;
 
-ref_dir = '../references';
+ref_dir = '/home/utec/open_manx_ws/src/open_manipulator_x_torque_control/src/Trajectory Optimization TV-LQR/references';
 
 %% ========================================================================
 %  1. Validar variables del workspace

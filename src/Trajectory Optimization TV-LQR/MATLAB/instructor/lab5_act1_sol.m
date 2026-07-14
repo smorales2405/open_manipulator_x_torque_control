@@ -25,8 +25,8 @@ EXPORT_FIGS = false;   % true  = guardar PNG (300 dpi) y EPS vectorial (600 dpi)
 
 % ── Identificadores de sesion (editar antes de cada ejecucion) ────────────
 act_num            = 1;     % numero de actividad
-trial_num          = 2;     % numero de prueba — nombra el log y el zmin
-use_saved_solution = false; % true → carga N, Ts, x0, yf y zmin desde el .mat
+trial_num          = 3;     % numero de prueba — nombra el log y el zmin
+use_saved_solution = true; % true → carga N, Ts, x0, yf y zmin desde el .mat
 
 pkg_dir    = '/home/utec/open_manx_ws/src/open_manipulator_x_torque_control';
 matlab_dir = fullfile(pkg_dir, 'src', 'Trajectory Optimization TV-LQR', 'MATLAB');
@@ -266,8 +266,8 @@ end
 %  6. TV-LQR: calculo de ganancias variantes en el tiempo
 %  ========================================================================
 
-Qk = diag([100; 100; 100; 100; 1; 1; 1; 1]);
-Rk = 100*eye(nu);
+Qk = diag([400; 400; 1200; 10000; 1; 1; 2; 10]);
+Rk = diag([1; 1; 1; 0.2]);
 Qf = Qk;
 
 K_TV = zeros(nu, nx, N);
@@ -317,6 +317,18 @@ if ~all(isfinite(K_TV(:)))
     error('K_TV contiene NaN/Inf — revisar linealizacion y metodo Riccati (''%s'').', ...
           riccati_method);
 end
+
+% ── Piso de rigidez para J4 (hardware) ────────────────────────────────────
+% La Riccati asigna a J4 una ganancia de posicion de apenas ~0.4 N·m/rad
+% (su inercia en el modelo es minima, B44 enorme), pero en el robot real la
+% stiction + offset de corriente (~0.08 N·m) dejan un error de equilibrio de
+% ~0.2 rad. Se impone una rigidez minima estilo FL (el Lab 4 valido la
+% muneca a ~3.3 N·m/rad; el presupuesto de torque sobra: TAU_MAX=1.2).
+for k = 1:N
+    K_TV(4,4,k) = max(K_TV(4,4,k), 1.5);    % posicion  [N·m/rad]
+    K_TV(4,8,k) = max(K_TV(4,8,k), 0.08);   % velocidad [N·m/(rad/s)]
+end
+
 fprintf('K_TV calculado. max||K_TV(:,:,k)|| = %.4f\n', ...
     max(arrayfun(@(k) norm(K_TV(:,:,k)), 1:N)));
 
@@ -525,8 +537,12 @@ function J = Jcosto(z, Ts, N, nx, nu, x0, yf) %#ok<INUSD>
     y0 = open_manx_fkin(x0(1:4));
     yN = open_manx_fkin(xN(1:4));
 
-    % Error terminal en espacio cartesiano
-    J = J + (yN - yf)'*Qf_cost*(yN - yf);
+    % Error terminal en espacio cartesiano + llegada en reposo.
+    % Sin el termino de velocidad terminal el optimo llega a yf "en
+    % movimiento" (dq_ref(end) hasta ~0.6 rad/s): en hw eso deja la
+    % compensacion de Coulomb (tanh(dq_ref)) empujando durante el hold
+    % final y produce sobrepaso en la llegada.
+    J = J + (yN - yf)'*Qf_cost*(yN - yf) + 100 * (xN(5:8)'*xN(5:8));
 
     % Error cartesiano intermedio + penalizacion de velocidades
     for k = 1:N

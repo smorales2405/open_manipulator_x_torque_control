@@ -307,8 +307,11 @@ end
 %  9. TV-LQR — cálculo de ganancias variantes en el tiempo
 %  ========================================================================
 
-Qk = diag([100; 100; 100; 500;   10;  10;  10;  50]);
-Rk = 100*eye(nu);
+% Pesos validados en hardware (Act. 1, test 2): posicion agresiva y R bajo.
+% Con los antiguos (Q=[100..500], R=100) las ganancias eran sub-stiction y
+% J4 se desbocaba (ver lab5_act1_sol.m, seccion 6).
+Qk = diag([400; 400; 400; 10000;   1; 1; 1; 10]);
+Rk = diag([1; 1; 1; 0.2]);
 Qf = Qk;
 K_TV = zeros(nu, nx, N);
 
@@ -357,6 +360,16 @@ switch riccati_method
 end
 
 assert(all(isfinite(K_TV(:))), 'K_TV contiene NaN/Inf.');
+
+% ── Piso de rigidez para J4 (hardware) ────────────────────────────────────
+% La Riccati asigna a J4 ~0.4 N·m/rad (inercia minima en el modelo), pero la
+% stiction + offset de corriente (~0.08 N·m) dejan ~0.2 rad de error de
+% equilibrio en el robot real. Rigidez minima estilo FL (Lab 4: ~3.3 N·m/rad).
+for k = 1:N
+    K_TV(4,4,k) = max(K_TV(4,4,k), 1.5);    % posicion  [N·m/rad]
+    K_TV(4,8,k) = max(K_TV(4,8,k), 0.08);   % velocidad [N·m/(rad/s)]
+end
+
 fprintf('K_TV calculado.\n');
 
 %% ========================================================================
@@ -606,7 +619,10 @@ function J = Jcosto(z, Ts, N, nx, nu, x0, yf)
     xN = z(nx*(N-1) + (1:nx));
     yN = open_manx_fkin(xN(1:4));
 
-    J = J + (yN - yf)' * Qf_cost * (yN - yf);
+    % Error terminal cartesiano + llegada en reposo (sin el termino de
+    % velocidad terminal el optimo llega a yf "en movimiento" y en hw la
+    % compensacion de Coulomb sigue empujando durante el hold final).
+    J = J + (yN - yf)' * Qf_cost * (yN - yf) + 100 * (xN(5:8)' * xN(5:8));
 
     for k = 1:N
         xk    = z(nx*(k-1) + (1:nx));
