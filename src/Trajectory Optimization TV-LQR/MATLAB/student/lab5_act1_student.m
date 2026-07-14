@@ -34,6 +34,16 @@ zmin_file  = fullfile(zmin_dir, sprintf('zmin_act%d_%d.mat', act_num, trial_num)
 riccati_method = 'zoh';
 riccati_jj     = 100;   % sub-pasos RK4 por intervalo Ts (solo 'sqrt')
 
+% Aceleracion de fmincon: OMDyn (dinamica) y open_manx_fkin (cinematica) se
+% distribuyen ya compilados como MEX y deben estar en esta carpeta junto al
+% script (~5-10x por iteracion). USE_PARALLEL usa la Parallel Computing
+% Toolbox si existe.
+USE_PARALLEL = true;
+
+if ~endsWith(which('OMDyn'), mexext) || ~endsWith(which('open_manx_fkin'), mexext)
+    error('Faltan OMDyn.%s y/o open_manx_fkin.%s en esta carpeta.', mexext, mexext);
+end
+
 %% ========================================================================
 %  1. Parametros generales
 %  ========================================================================
@@ -85,9 +95,19 @@ ub = [repmat(x_upper, N, 1);  ukmax * ones(nu*N, 1)];
 
 z0 = [kron(ones(N,1), x0); kron(ones(N,1), u0g)];
 
+if USE_PARALLEL && isempty(ver('parallel')), USE_PARALLEL = false; end
+if USE_PARALLEL
+    try
+        if isempty(gcp('nocreate')), parpool; end
+    catch
+        USE_PARALLEL = false;
+    end
+end
+
 options = optimoptions('fmincon', ...
     'Display',               'iter', ...
     'Algorithm',             'sqp', ...
+    'UseParallel',           USE_PARALLEL, ...
     'MaxFunctionEvaluations', 100000, ...
     'MaxIterations',          500, ...
     'OptimalityTolerance',    1e-4, ...
@@ -207,8 +227,10 @@ end
 %  ========================================================================
 
 % ── COMPLETAR: definir matrices de ponderacion ─────────────────────────────
+% Sugerencia (validado en hardware): R grande produce ganancias que no
+% vencen la friccion estatica del robot real; pesos de posicion >> velocidad.
 Qk = diag([ ; ; ; ; ; ; ; ]);
-Rk = *eye(nu);
+Rk = ;
 % ──────────────────────────────────────────────────────────────────────────
 Qf = Qk;
 
@@ -248,6 +270,16 @@ end
 if ~all(isfinite(K_TV(:)))
     error('K_TV contiene NaN/Inf.');
 end
+
+% ── Piso de rigidez para J4 (hardware, NO modificar) ──────────────────────
+% La Riccati asigna a J4 una ganancia minima (su inercia en el modelo es
+% diminuta); en el robot real la stiction + offset de corriente (~0.08 N·m)
+% dejarian ~0.2 rad de error de equilibrio. Rigidez minima validada en hw:
+for k = 1:N
+    K_TV(4,4,k) = max(K_TV(4,4,k), 1.5);    % posicion  [N·m/rad]
+    K_TV(4,8,k) = max(K_TV(4,8,k), 0.08);   % velocidad [N·m/(rad/s)]
+end
+
 fprintf('K_TV calculado. max||K_TV(:,:,k)|| = %.4f\n', ...
     max(arrayfun(@(k) norm(K_TV(:,:,k)), 1:N)));
 
@@ -257,9 +289,11 @@ fprintf('K_TV calculado. max||K_TV(:,:,k)|| = %.4f\n', ...
 
 x0sim = x0 + 0.05*randn(nx,1);
 
-[T, Xsim] = ode45( ...
-    @(t,x) OM4dof(t, x, controlTVLQR(t, x, Uref, Xref, Ts, N, K_TV)), ...
-    0:Ts:(N*Ts), x0sim);
+% Control en lazo cerrado con saturacion explicita (OM4dof NO debe saturar
+% internamente — ver nota en OM4dof).
+u_cl = @(t,x) max(min(controlTVLQR(t, x, Uref, Xref, Ts, N, K_TV), ukmax), ukmin);
+
+[T, Xsim] = ode45(@(t,x) OM4dof(t, x, u_cl(t,x)), 0:Ts:(N*Ts), x0sim);
 Xsim = Xsim';
 
 %% 8. Calculo de salidas y metricas de seguimiento TV-LQR
@@ -322,9 +356,7 @@ hold on; grid on; box on;
 h_mc = gobjects(1,1);
 for rrsim = 1:20
     x0sim_mc = x0 + 0.1*randn(nx,1);
-    [~, Xsim_mc] = ode45( ...
-        @(t,x) OM4dof(t, x, controlTVLQR(t, x, Uref, Xref, Ts, N, K_TV)), ...
-        0:Ts:(N*Ts), x0sim_mc);
+    [~, Xsim_mc] = ode45(@(t,x) OM4dof(t, x, u_cl(t,x)), 0:Ts:(N*Ts), x0sim_mc);
     Xsim_mc = Xsim_mc';
     ysim_mc = zeros(4, size(Xsim_mc,2));
     for i = 1:size(Xsim_mc,2)
@@ -415,6 +447,9 @@ function J = Jcosto(z, Ts, N, nx, nu, x0, yf) %#ok<INUSD>
     % ── COMPLETAR ──────────────────────────────────────────────────────────
     % Definir matrices de peso Qy, Qf_cost, Qv, R.
     % Calcular y acumular los terminos del costo en J.
+    % IMPORTANTE: incluir una penalizacion terminal FUERTE de velocidad,
+    % p. ej. + 100*(xN(5:8)'*xN(5:8)). Sin ella el optimo llega a yf "en
+    % movimiento" y el hold final falla en el robot real.
     % ───────────────────────────────────────────────────────────────────────
 end
 
@@ -440,7 +475,10 @@ end
 function dx = OM4dof(t, x, u) %#ok<INUSD>
 % Modelo de espacio de estados del OpenManipulator-X de 4 GDL.
 %   x = [q; dq],  dx = [dq; ddq]
-%   M(q)*ddq + Phi(q,dq) = u - tau_fric,   tau_fric = bf*dq
+%   M(q)*ddq + Phi(q,dq) = u - tau_fric,   tau_fric = bf*dq  (bf = 0.001)
+% NO saturar u aqui: los bounds lb/ub ya imponen |u|<=1 y un clamp anularia
+% el gradiente por diferencias finitas justo en u=±1 (estanca al SQP). La
+% saturacion del lazo cerrado se aplica afuera, via u_cl (seccion 7).
 
     % ── COMPLETAR ──────────────────────────────────────────────────────────
 end

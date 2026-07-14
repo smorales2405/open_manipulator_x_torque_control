@@ -34,6 +34,16 @@ zmin_file  = fullfile(zmin_dir, sprintf('zmin_act%d_%d.mat', act_num, trial_num)
 % Metodo Riccati: 'zoh' (ZOH exacto) | 'sqrt_rk4' (forma sqrt, RK4 hacia atras)
 riccati_method = 'zoh';
 
+% Aceleracion de fmincon: OMDyn (dinamica) y open_manx_fkin (cinematica) se
+% distribuyen ya compilados como MEX y deben estar en esta carpeta junto al
+% script (~5-10x por iteracion). USE_PARALLEL usa la Parallel Computing
+% Toolbox si existe.
+USE_PARALLEL = true;
+
+if ~endsWith(which('OMDyn'), mexext) || ~endsWith(which('open_manx_fkin'), mexext)
+    error('Faltan OMDyn.%s y/o open_manx_fkin.%s en esta carpeta.', mexext, mexext);
+end
+
 %% ========================================================================
 %  1. Parametros generales
 %  ========================================================================
@@ -74,24 +84,41 @@ dq_max  = 10;
 %  2. Parametros del obstaculo MDF
 %  ========================================================================
 
-x_obs  = 0.22725; % [m] centro X en marco link1 (= 0.075 m Gazebo + 0.15225 m offset base)
-y_obs  = 0.0;     % [m] centro Y
-z_ceil = 0.158;   % [m] techo físico del arco MDF
-rx_obs = 0.075;   % [m] semi-ancho en X (footprint = 150 mm)
-ry_obs = 0.160;   % [m] semi-ancho en Y (footprint = 320 mm)
-x_lo   = x_obs - rx_obs;   % 0.11475 m
-x_hi   = x_obs + rx_obs;   % 0.26475 m
-y_lo   = y_obs - ry_obs;   % -0.160 m
-y_hi   = y_obs + ry_obs;   % +0.160 m
+% Centro del arco en marco link1 = pose Gazebo (marco mundo, centro del STL)
+% + offset mundo→link1 (xacro world_fixed: link1 en mundo (-0.127, 0, +0.010)).
+OBS_GZ_X = 0.1125;   % [m] obstacle_pose x en config/sim_init_config.yaml
+X_W2L1   = 0.127;    % [m] offset mundo→link1 en x
 
-% Constraint XZ: x_k - x_lo - alpha_z*(z_k - z_ceil_safe)^2 <= 0
-alpha_z     = 50.0;
-z_ceil_safe = z_ceil + 0.010;
+x_obs  = OBS_GZ_X + X_W2L1;   % 0.2395 m — centro X en marco link1
+y_obs  = 0.0;
+z_ceil = 0.158 - 0.010;       % 0.148 m — techo fisico en marco link1 (techo a
+                              % 158 mm del piso; link1 a 10 mm por la placa)
+rx_obs = 0.075;   % [m] semi-fondo en X (footprint = 150 mm)
+ry_obs = 0.158;   % [m] semi-ancho en Y (paredes en y=±0.1565)
+x_lo   = x_obs - rx_obs;   % 0.1645 m (cara frontal, lado robot)
+x_hi   = x_obs + rx_obs;   % 0.3145 m (cara trasera)
+y_lo   = y_obs - ry_obs;
+y_hi   = y_obs + ry_obs;
 
-fprintf('--- Obstaculo MDF ---\n');
-fprintf('  Footprint link1: X=[%.5f, %.5f]  Y=[%.3f, %.3f] m\n', x_lo, x_hi, y_lo, y_hi);
-fprintf('  z_ceil=%.3f m  z_ceil_safe=%.3f m (+10 mm)  alpha_z=%.1f\n\n', ...
-        z_ceil, z_ceil_safe, alpha_z);
+% ── Zona de exclusion (plano XZ): caja del techo inflada por el gripper ──
+% El EE (punto de open_manx_fkin) debe quedar FUERA de esta caja en x O en
+% z. Margenes segun la geometria del gripper (mallas URDF / spec ROBOTIS):
+h_fing    = 0.029;   % [m] dedos bajo el eje del EE (gripper horizontal)
+g_fwd     = 0.021;   % [m] punta de dedos mas alla del punto EE
+h_grip    = 0.036;   % [m] envolvente bajo el eje con el pitch del cruce
+                     %     (h_fing·cosφ + g_fwd·sinφ para φ ≤ 0.3 rad)
+h_grip_up = 0.040;   % [m] cuerpo sobre el eje (paso por debajo, reto)
+m_clr     = 0.010;   % [m] margen de seguridad adicional
+EPS_CLR   = 0.002;   % [m] holgura minima exigida fuera de la caja
+
+box_x = [x_lo - g_fwd - m_clr,   x_hi + g_fwd + m_clr];
+box_z = [z_ceil - 0.003 - h_grip_up - m_clr,  z_ceil + h_grip + m_clr];
+
+fprintf('--- Obstaculo MDF (marco link1) ---\n');
+fprintf('  Footprint: X=[%.4f, %.4f]  Y=[%.3f, %.3f] m   z_ceil=%.3f m\n', ...
+        x_lo, x_hi, y_lo, y_hi, z_ceil);
+fprintf('  Caja de exclusion (EE): X=[%.4f, %.4f]  Z=[%.3f, %.3f]  EPS=%.0f mm\n\n', ...
+        box_x(1), box_x(2), box_z(1), box_z(2), 1e3*EPS_CLR);
 
 %% ========================================================================
 %  3. Inicializacion de la optimizacion
@@ -106,12 +133,38 @@ x_upper = [q_upper;              dq_max * ones(4,1)];
 lb = [repmat(x_lower, N, 1);  ukmin * ones(nu*N, 1)];
 ub = [repmat(x_upper, N, 1);  ukmax * ones(nu*N, 1)];
 
-z0 = [kron(ones(N,1), x0); kron(ones(N,1), u0g)];
-fprintf('Warm start: punto constante en x0 con compensacion gravitatoria\n\n');
+% Warm start: punto constante en x0 (compensacion gravitatoria). Si existe
+% la solucion de la Act. 1 con el mismo N y Ts, se usa como semilla —
+% tipicamente reduce las iteraciones de fmincon a la mitad.
+warm_start_act1_trial = 1;   % 0 = desactivar; n>0 = usar zmin_act1_n.mat
+
+z0     = [kron(ones(N,1), x0); kron(ones(N,1), u0g)];
+ws_msg = 'punto constante en x0 con compensacion gravitatoria';
+if warm_start_act1_trial > 0
+    ws_file = fullfile(zmin_dir, sprintf('zmin_act1_%d.mat', warm_start_act1_trial));
+    if exist(ws_file, 'file')
+        ws = load(ws_file, 'zmin', 'N', 'Ts');
+        if ws.N == N && abs(ws.Ts - Ts) < 1e-12
+            z0     = ws.zmin;
+            ws_msg = sprintf('solucion de la Act. 1 (%s)', ws_file);
+        end
+    end
+end
+fprintf('Warm start: %s\n\n', ws_msg);
+
+if USE_PARALLEL && isempty(ver('parallel')), USE_PARALLEL = false; end
+if USE_PARALLEL
+    try
+        if isempty(gcp('nocreate')), parpool; end
+    catch
+        USE_PARALLEL = false;
+    end
+end
 
 options = optimoptions('fmincon', ...
     'Display',               'iter', ...
     'Algorithm',             'sqp', ...
+    'UseParallel',           USE_PARALLEL, ...
     'MaxFunctionEvaluations', 200000, ...
     'MaxIterations',          1000, ...
     'OptimalityTolerance',    1e-4, ...
@@ -128,7 +181,7 @@ if ~use_saved_solution
     [zmin, ~, exitflag, output] = fmincon( ...
         @(z) Jcosto(z, Ts, N, nx, nu, x0, yf), ...
         z0, [], [], [], [], lb, ub, ...
-        @(z) restr(z, Ts, N, nx, nu, x0, x_lo, z_ceil_safe, alpha_z), ...
+        @(z) restr(z, Ts, N, nx, nu, x0, box_x, box_z, EPS_CLR), ...
         options);
     save(zmin_file, 'zmin', 'exitflag', 'output', 'N', 'Ts', 'x0', 'yf');
     fprintf('Guardado: %s\n', zmin_file);
@@ -148,27 +201,37 @@ Uref = reshape(zmin(nx*N+(1:nu*N)), [nu N]);
 %  6. Verificar evasion del obstaculo
 %  ========================================================================
 
+% Verifica el constraint de caja (nodos + puntos medios) y el clearance
+% fisico del EE y de la esquina de dedos (con el pitch de cada nodo).
+c_box_chk = @(y) EPS_CLR - max(max(box_x(1) - y(1), y(1) - box_x(2)), ...
+                               max(box_z(1) - y(3), y(3) - box_z(2)));
 max_cxz      = -inf;
 min_phys_clr = inf;
+min_grip_clr = inf;
+q_prev = x0(1:4);
 for k = 1:N
-    yk   = open_manx_fkin(Xref(1:4,k));
-    c_xz = yk(1) - x_lo - alpha_z*(yk(3) - z_ceil_safe)^2;
-    if c_xz > max_cxz, max_cxz = c_xz; end
-    if yk(1) >= x_lo
-        clr = yk(3) - z_ceil;
-        if clr < min_phys_clr, min_phys_clr = clr; end
+    for q_eval = {0.5*(q_prev + Xref(1:4,k)), Xref(1:4,k)}   % medio, nodo
+        yk = open_manx_fkin(q_eval{1});
+        max_cxz = max(max_cxz, c_box_chk(yk));
+        if yk(1) >= x_lo && yk(1) <= x_hi && abs(yk(2)) <= ry_obs
+            min_phys_clr = min(min_phys_clr, yk(3) - z_ceil);
+            h_eff = h_fing*cos(yk(4)) + g_fwd*max(sin(yk(4)), 0);
+            min_grip_clr = min(min_grip_clr, yk(3) - h_eff - z_ceil);
+        end
     end
+    q_prev = Xref(1:4,k);
 end
 
-fprintf('--- Verificacion obstaculo (constraint XZ) ---\n');
-if max_cxz <= 0
-    fprintf('  OK — constraint satisfecho (max c = %.5f)\n\n', max_cxz);
+fprintf('--- Verificacion obstaculo (caja de exclusion, nodos + medios) ---\n');
+if max_cxz <= 1e-4    % ConstraintTolerance de fmincon
+    fprintf('  OK — constraint satisfecho (max c = %.2e)\n\n', max_cxz);
 else
-    fprintf('  ADVERTENCIA: constraint violado (max c = %.5f > 0)\n', max_cxz);
-    fprintf('  EE entra al arco cerca del techo. Re-optimizar.\n\n');
+    fprintf('  ADVERTENCIA: constraint violado (max c = %.2e > 1e-4)\n', max_cxz);
+    fprintf('  EE entra a la caja de exclusion del techo. Re-optimizar.\n\n');
 end
 if ~isinf(min_phys_clr)
-    fprintf('  Clearance minimo sobre techo fisico (z_ceil=%.3f m): %.4f m\n\n', z_ceil, min_phys_clr);
+    fprintf('  Clearance min sobre techo fisico (z_ceil=%.3f): EE %.1f mm | gripper %.1f mm\n\n', ...
+            z_ceil, 1e3*min_phys_clr, 1e3*min_grip_clr);
 else
     fprintf('  INFO: trayectoria fuera del footprint en todos los pasos.\n\n');
 end
@@ -222,8 +285,10 @@ end
 %  ========================================================================
 
 % ── COMPLETAR: definir matrices de ponderacion ─────────────────────────────
+% Sugerencia (validado en hardware): R grande produce ganancias que no
+% vencen la friccion estatica del robot real; pesos de posicion >> velocidad.
 Qk = diag([ ; ; ; ; ; ; ; ]);
-Rk = *eye(nu);
+Rk = ;
 % ──────────────────────────────────────────────────────────────────────────
 Qf = Qk;
 K_TV = zeros(nu, nx, N);
@@ -262,6 +327,16 @@ switch riccati_method
 end
 
 assert(all(isfinite(K_TV(:))), 'K_TV contiene NaN/Inf.');
+
+% ── Piso de rigidez para J4 (hardware, NO modificar) ──────────────────────
+% La Riccati asigna a J4 una ganancia minima (su inercia en el modelo es
+% diminuta); en el robot real la stiction + offset de corriente (~0.08 N·m)
+% dejarian ~0.2 rad de error de equilibrio. Rigidez minima validada en hw:
+for k = 1:N
+    K_TV(4,4,k) = max(K_TV(4,4,k), 1.5);    % posicion  [N·m/rad]
+    K_TV(4,8,k) = max(K_TV(4,8,k), 0.08);   % velocidad [N·m/(rad/s)]
+end
+
 fprintf('K_TV calculado.\n');
 
 %% ========================================================================
@@ -269,9 +344,12 @@ fprintf('K_TV calculado.\n');
 %  ========================================================================
 
 x0sim = x0 + 0.05*randn(nx,1);
-[T, Xsim] = ode45( ...
-    @(t,x) OM4dof(t, x, controlTVLQR(t, x, Uref, Xref, Ts, N, K_TV)), ...
-    0:Ts:(N*Ts), x0sim);
+
+% Control en lazo cerrado con saturacion explicita (OM4dof NO debe saturar
+% internamente — ver nota en OM4dof).
+u_cl = @(t,x) max(min(controlTVLQR(t, x, Uref, Xref, Ts, N, K_TV), ukmax), ukmin);
+
+[T, Xsim] = ode45(@(t,x) OM4dof(t, x, u_cl(t,x)), 0:Ts:(N*Ts), x0sim);
 Xsim = Xsim';
 
 ysim = zeros(4, numel(T));
@@ -394,9 +472,7 @@ patch([x_lo x_hi x_hi x_lo], repmat(y_hi, 1, 4), [0 0 z_ceil z_ceil], c_obs_colo
 
 for rr = 1:20
     x0mc = x0 + 0.10*randn(nx,1);
-    [~, Xmc] = ode45( ...
-        @(t,x) OM4dof(t, x, controlTVLQR(t, x, Uref, Xref, Ts, N, K_TV)), ...
-        0:Ts:N*Ts, x0mc);
+    [~, Xmc] = ode45(@(t,x) OM4dof(t, x, u_cl(t,x)), 0:Ts:N*Ts, x0mc);
     Xmc = Xmc';
     ymc = zeros(4, size(Xmc,2));
     for i = 1:size(Xmc,2), ymc(:,i) = open_manx_fkin(Xmc(1:4,i)); end
@@ -489,17 +565,27 @@ function J = Jcosto(z, Ts, N, nx, nu, x0, yf)
     % ── COMPLETAR ──────────────────────────────────────────────────────────
     % Definir matrices de peso Qy, Qf_cost, Qv, R.
     % Calcular y acumular los terminos del costo en J.
+    % IMPORTANTE: incluir una penalizacion terminal FUERTE de velocidad,
+    % p. ej. + 100*(xN(5:8)'*xN(5:8)). Sin ella el optimo llega a yf "en
+    % movimiento" y el hold final falla en el robot real.
     % ───────────────────────────────────────────────────────────────────────
 end
 
-function [c_des, c_eq] = restr(z, Ts, N, nx, nu, x0, x_lo, z_ceil, alpha_z)
+function [c_des, c_eq] = restr(z, Ts, N, nx, nu, x0, box_x, box_z, eps_clr)
 % Restricciones del problema de optimizacion.
-% c_eq:  dinamica discreta (RK4)
-% c_des: constraint de evasion del obstaculo (plano XZ)
-%        x_k - x_lo - alpha_z*(z_k - z_ceil)^2 <= 0
+% c_eq : dinamica discreta (RK4).
+% c_des: evasion del techo — el EE debe quedar FUERA de la caja de exclusion
+%        (inflada con la geometria del gripper) en x O en z, evaluada en
+%        cada nodo Y en el punto medio articular de cada intervalo (2N
+%        entradas): entre nodos el EE recorre ~15 mm y podria "cortar" la
+%        esquina del techo con ambos nodos factibles.
 
     c_eq  = zeros(nx*N, 1);
-    c_des = zeros(N, 1);
+    c_des = zeros(2*N, 1);
+
+    % c_box(y) <= 0 fuera de la caja; > 0 dentro (magnitud = penetracion+eps)
+    c_box = @(y) eps_clr - max(max(box_x(1) - y(1), y(1) - box_x(2)), ...
+                               max(box_z(1) - y(3), y(3) - box_z(2)));
 
     for k = 0:N-1
         if k == 0, xk = x0; else, xk = z(nx*(k-1) + (1:nx)); end
@@ -512,8 +598,9 @@ function [c_des, c_eq] = restr(z, Ts, N, nx, nu, x0, x_lo, z_ceil, alpha_z)
         % ───────────────────────────────────────────────────────────────────
 
         % ── COMPLETAR ──────────────────────────────────────────────────────
-        % Calcular la posicion cartesiana yk de xkp1 usando open_manx_fkin.
-        % Calcular c_des(k+1) con el constraint de evasion del techo.
+        % Evaluar el constraint de evasion usando c_box y open_manx_fkin:
+        %   c_des(2*k+1) → en el nodo xkp1
+        %   c_des(2*k+2) → en el punto medio articular 0.5*(xk+xkp1)
         % ───────────────────────────────────────────────────────────────────
     end
 end
@@ -521,7 +608,10 @@ end
 function dx = OM4dof(t, x, u) %#ok<INUSD>
 % Modelo de espacio de estados del OpenManipulator-X de 4 GDL.
 %   x = [q; dq],  dx = [dq; ddq]
-%   M(q)*ddq + Phi(q,dq) = u - tau_fric,   tau_fric = bf*dq
+%   M(q)*ddq + Phi(q,dq) = u - tau_fric,   tau_fric = bf*dq  (bf = 0.001)
+% NO saturar u aqui: los bounds lb/ub ya imponen |u|<=1 y un clamp anularia
+% el gradiente por diferencias finitas justo en u=±1 (estanca al SQP). La
+% saturacion del lazo cerrado se aplica afuera, via u_cl (seccion 10).
 
     % ── COMPLETAR ──────────────────────────────────────────────────────────
 end
