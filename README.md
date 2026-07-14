@@ -451,7 +451,7 @@ Complete and run `lab5_act1_student.m` (or `lab5_act2_student.m`). Then export r
 run('src/Trajectory Optimization TV-LQR/MATLAB/Lab5_Export_Refs.m')
 ```
 
-This writes: `time_ref.txt`, `q_ref.txt`, `dq_ref.txt`, `u_ref.txt`, `K_TV.txt`, `tau_gravity.txt` to the `references/` folder.
+This writes: `time_ref.txt`, `q_ref.txt`, `dq_ref.txt`, `u_ref.txt`, `K_TV.txt` to the `references/` folder.
 
 **Step 2 — Configure `sim_init_config.yaml`**
 

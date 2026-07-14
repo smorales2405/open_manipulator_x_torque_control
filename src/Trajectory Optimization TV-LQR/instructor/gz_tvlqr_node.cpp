@@ -6,7 +6,12 @@
 //    x(t)    = [q; dq]                                 (8 x 1)
 //    x_ref,k = [q_ref_k; dq_ref_k]                    (8 x 1)
 //    tau     = u_ref_k - K_k * (x(t) - x_ref,k)       (4 x 1)
+//            + tau_fric (feedforward de friccion del URDF, siempre activo)
 //    tau_sat = clamp(tau, -TAU_MAX, TAU_MAX)
+//
+//  Arranque: TV-LQR inicia directamente (sin warmup de compensacion
+//  gravitatoria) — mismo comportamiento que hw_tvlqr_node. La ganancia K_k
+//  corrige la desviacion inicial respecto a x_ref,0.
 //
 //  Referencias precargadas desde archivos de texto en reference_dir/:
 //    time_ref.txt   N x 1    — instantes de muestreo [s]
@@ -54,7 +59,20 @@ using namespace std::chrono_literals;
 #endif
 
 static constexpr int    NARM    = 4;
-static constexpr double TAU_MAX = 1.0;   // [N·m] limite de torque por articulacion
+static constexpr double TAU_MAX = 1.2;   // [N·m] limite de torque por articulacion
+                                         // (alineado con hw_tvlqr_node; da headroom
+                                         // sobre |u_ref|<=1.0 para el feedback y el
+                                         // feedforward de friccion)
+
+// ── Friccion articular del URDF (<dynamics> de joint1..4) ────────────────────
+// Gazebo la simula, pero el modelo de la optimizacion en MATLAB (OM4dof,
+// bf=0.001) no la incluye → se compensa SIEMPRE con feedforward:
+//   tau_fric_i = b_i*dq_i + fc_i*tanh(dq_ref_i/FRIC_EPS)
+// Valores nominales de urdf/open_manipulator_x.urdf; asume friction_scale=1.0
+// y damping_scale=1.0 en config/sim_init_config.yaml.
+static constexpr double FRIC_EPS = 0.05;                              // [rad/s]
+static const Eigen::Vector4d FRIC_DAMPING(0.0367, 0.0,    0.0,    0.005);
+static const Eigen::Vector4d FRIC_COULOMB(0.0146, 0.0830, 0.1143, 0.0413);
 
 // ── Cinematica directa analitica (equivalente a open_manx_fkin.m) ────────────
 //   Entrada: q = [q1 q2 q3 q4]^T [rad]
@@ -105,13 +123,11 @@ public:
   TVLQRSimNode()
   : Node("gz_tvlqr_node"),
     t_(0.0), refs_loaded_(false), N_(0), Ts_(0.05),
-    warmup_ticks_(0), tau_gravity_(Eigen::Vector4d::Zero()),
     js_updated_(false)
   {
     // ── Parametros ──────────────────────────────────────────────────────────
     this->declare_parameter<int>        ("test_num",      1);
     this->declare_parameter<double>     ("t_sim",         0.0);
-    this->declare_parameter<double>     ("t_warmup",      3.0);
     this->declare_parameter<std::string>("reference_dir",
       "src/Trajectory Optimization TV-LQR/references");
 
@@ -187,29 +203,11 @@ public:
 
     refs_loaded_ = true;
     RCLCPP_INFO(get_logger(), "Referencias cargadas: N=%d  Ts=%.3f s", N_, Ts_);
-
-    // Compensacion gravitatoria en x0: preferir tau_gravity.txt (OMDyn(x0,0)),
-    // que es el torque exacto para sostener el robot en x0 durante el warmup.
-    // Si no existe, usar u_ref[0] como fallback (puede causar deriva en warmup).
-    {
-      std::vector<std::vector<double>> rows;
-      const std::string grav_path = ref_dir_ + "/tau_gravity.txt";
-      if (load_matrix(grav_path, 4, rows) && !rows.empty()) {
-        tau_gravity_ = Eigen::Vector4d(rows[0][0], rows[0][1], rows[0][2], rows[0][3]);
-        RCLCPP_INFO(get_logger(),
-          "tau_gravity.txt cargado: [%.3f %.3f %.3f %.3f] Nm",
-          tau_gravity_[0], tau_gravity_[1], tau_gravity_[2], tau_gravity_[3]);
-      } else {
-        tau_gravity_ = u_ref_[0];
-        RCLCPP_WARN(get_logger(),
-          "tau_gravity.txt no encontrado — usando u_ref[0]: [%.3f %.3f %.3f %.3f] Nm",
-          tau_gravity_[0], tau_gravity_[1], tau_gravity_[2], tau_gravity_[3]);
-      }
-    }
-
-    const double t_warmup = this->get_parameter("t_warmup").as_double();
-    warmup_ticks_ = static_cast<int>(std::round(t_warmup / 0.01));
-    RCLCPP_INFO(get_logger(), "Warmup: %.1f s  (tau_gravity aplicado)", t_warmup);
+    RCLCPP_INFO(get_logger(),
+      "Feedforward de friccion URDF ACTIVO: damping=[%.4f %.4f %.4f %.4f]  "
+      "coulomb=[%.4f %.4f %.4f %.4f]",
+      FRIC_DAMPING[0], FRIC_DAMPING[1], FRIC_DAMPING[2], FRIC_DAMPING[3],
+      FRIC_COULOMB[0], FRIC_COULOMB[1], FRIC_COULOMB[2], FRIC_COULOMB[3]);
 
     open_csv(test_num);
 
@@ -283,20 +281,6 @@ private:
   {
     if (!last_js_ || !refs_loaded_) { return; }
 
-    // ── Fase de inicializacion: compensacion gravitatoria ─────────────────
-    if (warmup_ticks_ > 0) {
-      js_updated_ = false;   // reiniciar flag al terminar warmup en el ultimo tick
-      std_msgs::msg::Float64MultiArray cmd;
-      cmd.data.assign(tau_gravity_.data(), tau_gravity_.data() + NARM);
-      torque_pub_->publish(cmd);
-      --warmup_ticks_;
-      if (warmup_ticks_ == 0) {
-        js_updated_ = false;  // forzar espera de estado fresco al iniciar TV-LQR
-        RCLCPP_INFO(get_logger(), "Compensacion gravitatoria completada. Iniciando TV-LQR.");
-      }
-      return;
-    }
-
     // Esperar al menos un mensaje nuevo de joint_states antes de arrancar
     if (!js_updated_) { return; }
     js_updated_ = false;
@@ -316,7 +300,15 @@ private:
     x_state << q, dq;
     x_ref_k << q_ref_[k], dq_ref_[k];
 
-    const Eigen::Vector4d tau = u_ref_[k] - K_TV_[k] * (x_state - x_ref_k);
+    Eigen::Vector4d tau = u_ref_[k] - K_TV_[k] * (x_state - x_ref_k);
+
+    // Feedforward de friccion del URDF (siempre activo): viscosa con la
+    // velocidad medida; Coulomb con la velocidad DESEADA (senal limpia,
+    // mismo criterio que los nodos de Feedback Linearization).
+    for (int i = 0; i < NARM; ++i) {
+      tau[i] += FRIC_DAMPING[i] * dq[i]
+              + FRIC_COULOMB[i] * std::tanh(dq_ref_[k][i] / FRIC_EPS);
+    }
 
     // ── Seccion 4: Saturacion de torque ───────────────────────────────────
     const Eigen::Vector4d tau_sat = tau.cwiseMin(TAU_MAX).cwiseMax(-TAU_MAX);
@@ -373,8 +365,6 @@ private:
   std::vector<Eigen::Vector4d>                           u_ref_;
   std::vector<Eigen::Matrix<double,4,8,Eigen::ColMajor>> K_TV_;
 
-  int             warmup_ticks_;
-  Eigen::Vector4d tau_gravity_;
   bool            js_updated_;
 
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr torque_pub_;

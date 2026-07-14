@@ -15,7 +15,6 @@
 %   dq_ref.txt       N x 4    velocidades articulares de referencia [rad/s]
 %   u_ref.txt        N x 4    entradas optimizadas (torques) [N.m]
 %   K_TV.txt         N x 32   ganancias TV-LQR (reshape col-major de K_k 4x8)
-%   tau_gravity.txt  1 x 4    torque gravitatorio en x0 [N.m]
 
 clc;
 
@@ -41,11 +40,6 @@ fprintf('Workspace OK: N=%d  Ts=%.4f s  (tiempo total: %.2f s)\n', N, Ts, N*Ts);
 %% ========================================================================
 %  2. Verificar dependencias
 %  ========================================================================
-if ~exist('OMDyn', 'file')
-    error(['OMDyn.m no encontrado en el MATLAB path.\n' ...
-           'Copie OMDyn.m a esta carpeta o ejecute:\n' ...
-           '  addpath(''<ruta_a_OMDyn>'')']);
-end
 if ~exist('open_manx_fkin', 'file')
     error(['open_manx_fkin.m no encontrado en el MATLAB path.\n' ...
            'Copie open_manx_fkin.m a esta carpeta o ejecute:\n' ...
@@ -93,9 +87,6 @@ q_ref  = Xref(1:4,:)';     % N x 4
 dq_ref = Xref(5:8,:)';     % N x 4
 u_ref  = Uref';             % N x 4
 
-[~, tau_grav_vec] = OMDyn(x0(1:4), zeros(4,1));
-tau_grav = tau_grav_vec(:)';   % 1 x 4
-
 K_TV_vec = zeros(N, nu*nx);
 for k = 1:N
     K_TV_vec(k,:) = reshape(K_TV(:,:,k), 1, []);
@@ -106,14 +97,11 @@ writematrix(q_ref,    fullfile(ref_dir, 'q_ref.txt'),       'Delimiter', ' ');
 writematrix(dq_ref,   fullfile(ref_dir, 'dq_ref.txt'),      'Delimiter', ' ');
 writematrix(u_ref,    fullfile(ref_dir, 'u_ref.txt'),       'Delimiter', ' ');
 writematrix(K_TV_vec, fullfile(ref_dir, 'K_TV.txt'),        'Delimiter', ' ');
-writematrix(tau_grav, fullfile(ref_dir, 'tau_gravity.txt'), 'Delimiter', ' ');
-
-fprintf('tau_gravity en x0: [%.4f %.4f %.4f %.4f] N.m\n', tau_grav);
 
 %% ========================================================================
 %  5. Verificacion de archivos generados
 %  ========================================================================
-files_out = {'time_ref.txt','q_ref.txt','dq_ref.txt','u_ref.txt','K_TV.txt','tau_gravity.txt'};
+files_out = {'time_ref.txt','q_ref.txt','dq_ref.txt','u_ref.txt','K_TV.txt'};
 for f = files_out
     fpath = fullfile(ref_dir, f{1});
     assert(exist(fpath, 'file') == 2, 'No se creo: %s', fpath);
