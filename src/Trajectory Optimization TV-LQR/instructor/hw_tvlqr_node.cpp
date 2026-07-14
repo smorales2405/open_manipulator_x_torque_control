@@ -11,20 +11,36 @@
  *
  * Infraestructura proporcionada (NO modificar):
  *   - Inicializacion Dynamixel SDK (init_hardware, shutdown_hardware)
- *   - Lectura de estado SyncRead: q, dq, corriente medida (read_state)
+ *   - Lectura de estado en UN SOLO SyncRead del bloque contiguo 126-135
+ *     (corriente + velocidad + posicion): una transaccion USB por tick,
+ *     habilita el lazo a 200 Hz (read_state)
+ *   - Filtro α-β sobre la posicion medida: estima dq_hat sin la cuantizacion
+ *     ni el retardo del registro de velocidad Dynamixel (defaults validados
+ *     en el Lab 4: α=0.2, β=0.02 @ 200 Hz)
  *   - Escritura de corriente SyncWrite (send_currents)
- *   - Conversion torque -> corriente via modelo OLS identificado (motor_params.yaml)
+ *   - Conversion torque -> corriente via modelo OLS identificado (motor_params.yaml);
+ *     la compensacion de Coulomb usa la velocidad DESEADA dq_ref (leccion del
+ *     Lab 4: sin chattering por ruido de dq y empuje de despegue al arrancar)
  *   - Verificacion de corriente medida (parada de emergencia)
+ *   - Deteccion de overrun del lazo
  *   - Publicador /hw/joint_states para monitoreo
+ *
+ * Arranque: el nodo inicia TV-LQR directamente, SIN warmup de compensacion
+ * gravitatoria. La posicion inicial q_init = [pi/2, 0, pi/6, pi/3] es
+ * autoestable (la reductora la sostiene sin torque) y aplicar tau_gravity en
+ * escalon solo producia un impulso inicial indeseado.
  *
  * Parametros ROS 2 (--ros-args -p nombre:=valor):
  *   port_name              [string]    "/dev/ttyUSB0"
- *   t_warmup               [double]    0.0   (warmup con tau_gravity antes de TV-LQR, 0 = sin warmup)
  *   torque_scale           [double]    1.0   (escala de seguridad, rango 0..1)
  *   t_run                  [double]    1.5   (duracion en segundos, 0 = sin limite)
  *   test_num               [int]       1     (identificador del CSV)
  *   reference_dir          [string]    "src/Trajectory Optimization TV-LQR/references"
- *   vel_cutoff_hz          [double]    0.0   (filtro EMA velocidad; 0 = desactivado)
+ *   ab_alpha               [double]    0.2   (filtro α-β: ganancia de posicion)
+ *   ab_beta                [double]    0.02  (filtro α-β: ganancia de velocidad)
+ *   loop_rate_hz           [double]    200.0 (frecuencia del lazo [Hz], rango 50..400;
+ *                                             requiere latency_timer=1 en el FTDI)
+ *   friction_fc_scale      [double]    0.95  (fraccion de Fc compensada)
  *
  * USO TIPICO:
  *   ros2 run open_manipulator_x_torque_control hw_tvlqr_node --ros-args -p t_run:=1.5 -p test_num:=1
@@ -34,7 +50,7 @@
  * ADVERTENCIA: No ejecutar junto a hardware.launch.py ni ningun proceso
  * que acceda al puerto USB (ros2_control_node, dynamixel_hardware_interface).
  *
- * CSV generado: data/real/lab5/data_log_real_lab5_<test_num>.csv
+ * CSV generado: data/lab5/real/data_log_real_lab5_<test_num>.csv
  */
 
 #include <array>
@@ -89,6 +105,11 @@ static constexpr uint16_t LEN_GOAL_CURRENT     = 2;
 static constexpr uint16_t LEN_PRESENT_CURRENT  = 2;
 static constexpr uint16_t LEN_PRESENT_VELOCITY = 4;
 static constexpr uint16_t LEN_PRESENT_POSITION = 4;
+
+// Bloque contiguo 126-135: Present Current (2B) + Velocity (4B) + Position (4B).
+// Un solo SyncRead del bloque reemplaza 3 transacciones USB por tick.
+static constexpr uint16_t ADDR_STATE_BLOCK = ADDR_PRESENT_CURRENT;
+static constexpr uint16_t LEN_STATE_BLOCK  = 10;
 
 static constexpr uint8_t CURRENT_CONTROL_MODE = 0;
 static constexpr uint8_t TORQUE_ENABLE_VAL    = 1;
@@ -180,12 +201,10 @@ class HWTVLQRNode : public rclcpp::Node
 public:
   explicit HWTVLQRNode(const rclcpp::NodeOptions & opts = rclcpp::NodeOptions())
   : Node("hw_tvlqr_node", opts),
-    hw_active_(false), refs_loaded_(false), N_(0), Ts_(0.05),
-    tau_gravity_(Vec4::Zero()), warmup_ticks_(0), warmup_active_(false)
+    hw_active_(false), refs_loaded_(false), N_(0), Ts_(0.05)
   {
     // ── Parametros ──────────────────────────────────────────────────────────
     this->declare_parameter<std::string>("port_name",     "/dev/ttyUSB0");
-    this->declare_parameter<double>     ("t_warmup",       0.0);
     this->declare_parameter<double>     ("torque_scale",   1.0);
     this->declare_parameter<double>     ("t_run",          1.5);
     this->declare_parameter<int>        ("test_num",        1);
@@ -198,10 +217,12 @@ public:
     this->declare_parameter<dvec>("motor_Fc",               dvec{0.0,   0.0,   0.0,   0.0  });
     this->declare_parameter<dvec>("motor_I_offset",         dvec{0.0,   0.0,   0.0,   0.0  });
     this->declare_parameter<double>("motor_epsilon_friction", 0.05);
-    this->declare_parameter<double>("vel_cutoff_hz",          0.0);
+    this->declare_parameter<double>("friction_fc_scale",      0.95);
+    this->declare_parameter<double>("ab_alpha",     0.2);
+    this->declare_parameter<double>("ab_beta",      0.02);
+    this->declare_parameter<double>("loop_rate_hz", 200.0);
 
     port_name_        = this->get_parameter("port_name").as_string();
-    const double t_warmup_sec = this->get_parameter("t_warmup").as_double();
     torque_scale_     = std::min(std::max(this->get_parameter("torque_scale").as_double(), 0.0), 1.0);
     t_run_            = this->get_parameter("t_run").as_double();
     const int test_num = this->get_parameter("test_num").as_int();
@@ -217,24 +238,23 @@ public:
     motor_Fc_       = load_vec4("motor_Fc");
     motor_I_offset_ = load_vec4("motor_I_offset");
     motor_epsilon_  = get_parameter("motor_epsilon_friction").as_double();
+    fc_scale_       = get_parameter("friction_fc_scale").as_double();
 
-    vel_cutoff_hz_    = get_parameter("vel_cutoff_hz").as_double();
-    vel_filter_alpha_ = (vel_cutoff_hz_ > 0.0)
-        ? std::exp(-2.0 * PI * vel_cutoff_hz_ * 0.01)
-        : 0.0;
+    ab_alpha_     = get_parameter("ab_alpha").as_double();
+    ab_beta_      = get_parameter("ab_beta").as_double();
+    loop_rate_hz_ = std::min(std::max(get_parameter("loop_rate_hz").as_double(), 50.0), 400.0);
+    Ts_loop_      = 1.0 / loop_rate_hz_;
 
     RCLCPP_INFO(get_logger(),
       "puerto=%s  scale=%.2f  t_run=%.1fs  id=%d",
       port_name_.c_str(), torque_scale_, t_run_, test_num);
     RCLCPP_INFO(get_logger(),
-      "motor α=[%.1f %.1f %.1f %.1f]  Fv=[%.2f %.2f %.2f %.2f]  ε=%.3f",
+      "motor α=[%.1f %.1f %.1f %.1f]  Fv=[%.2f %.2f %.2f %.2f]  ε=%.3f  fc_scale=%.2f",
       motor_alpha_(0), motor_alpha_(1), motor_alpha_(2), motor_alpha_(3),
-      motor_Fv_(0), motor_Fv_(1), motor_Fv_(2), motor_Fv_(3), motor_epsilon_);
-    if (vel_cutoff_hz_ > 0.0)
-      RCLCPP_INFO(get_logger(),
-        "Filtro velocidad: fc=%.1f Hz  α=%.4f", vel_cutoff_hz_, vel_filter_alpha_);
-    else
-      RCLCPP_WARN(get_logger(), "Filtro velocidad DESACTIVADO (vel_cutoff_hz=0).");
+      motor_Fv_(0), motor_Fv_(1), motor_Fv_(2), motor_Fv_(3), motor_epsilon_, fc_scale_);
+    RCLCPP_INFO(get_logger(),
+      "Filtro α-β: α=%.3f  β=%.3f  |  lazo: %.0f Hz (Ts=%.1f ms)",
+      ab_alpha_, ab_beta_, loop_rate_hz_, 1e3 * Ts_loop_);
     RCLCPP_INFO(get_logger(), "reference_dir: %s", ref_dir_.c_str());
 
     // ── Seccion 1: Carga de referencias ─────────────────────────────────────
@@ -299,28 +319,6 @@ public:
     refs_loaded_ = true;
     RCLCPP_INFO(get_logger(), "Referencias cargadas: N=%d  Ts=%.3f s", N_, Ts_);
 
-    // tau_gravity.txt — 1 fila x 4 columnas (opcional, fallback a u_ref_[0])
-    {
-      std::vector<std::vector<double>> rows;
-      const std::string grav_path = ref_dir_ + "/tau_gravity.txt";
-      if (load_matrix(grav_path, 4, rows) && !rows.empty()) {
-        tau_gravity_ = Vec4(rows[0][0], rows[0][1], rows[0][2], rows[0][3]);
-        RCLCPP_INFO(get_logger(),
-          "tau_gravity.txt cargado: [%.3f %.3f %.3f %.3f] Nm",
-          tau_gravity_[0], tau_gravity_[1], tau_gravity_[2], tau_gravity_[3]);
-      } else {
-        tau_gravity_ = u_ref_[0];
-        RCLCPP_WARN(get_logger(),
-          "tau_gravity.txt no encontrado — usando u_ref[0]: [%.3f %.3f %.3f %.3f] Nm",
-          tau_gravity_[0], tau_gravity_[1], tau_gravity_[2], tau_gravity_[3]);
-      }
-    }
-
-    warmup_ticks_ = (t_warmup_sec > 0.0) ? static_cast<int>(std::round(t_warmup_sec / 0.01)) : 0;
-    warmup_active_ = (warmup_ticks_ > 0);
-    if (warmup_active_)
-      RCLCPP_INFO(get_logger(), "Warmup: %.1f s  (tau_gravity sin torque_scale)", t_warmup_sec);
-
     // ── CSV ──────────────────────────────────────────────────────────────────
     std::filesystem::create_directories(std::string(PACKAGE_DATA_DIR) + "/lab5/real");
     csv_path_ = std::string(PACKAGE_DATA_DIR) + "/lab5/real/data_log_real_lab5_"
@@ -345,8 +343,11 @@ public:
     }
 
     start_time_ = std::chrono::high_resolution_clock::now();
-    timer_ = this->create_wall_timer(10ms, [this]() { tick(); });
-    RCLCPP_INFO(get_logger(), "Control TV-LQR activo a 100 Hz. Ctrl+C para detener.");
+    const auto period = std::chrono::microseconds(
+      static_cast<int64_t>(std::lround(1e6 / loop_rate_hz_)));
+    timer_ = this->create_wall_timer(period, [this]() { tick(); });
+    RCLCPP_INFO(get_logger(), "Control TV-LQR activo a %.0f Hz (Ts=%.1f ms). Ctrl+C para detener.",
+      loop_rate_hz_, 1e3 * Ts_loop_);
   }
 
   ~HWTVLQRNode()
@@ -389,19 +390,14 @@ private:
       RCLCPP_INFO(get_logger(), "DXL ID %d listo", static_cast<int>(id));
     }
 
-    grp_pos_  = std::make_unique<dynamixel::GroupSyncRead>(
-      port_handler_, packet_handler_, ADDR_PRESENT_POSITION, LEN_PRESENT_POSITION);
-    grp_vel_  = std::make_unique<dynamixel::GroupSyncRead>(
-      port_handler_, packet_handler_, ADDR_PRESENT_VELOCITY, LEN_PRESENT_VELOCITY);
-    grp_cur_  = std::make_unique<dynamixel::GroupSyncRead>(
-      port_handler_, packet_handler_, ADDR_PRESENT_CURRENT,  LEN_PRESENT_CURRENT);
+    // SyncRead unico del bloque contiguo corriente+velocidad+posicion
+    grp_read_ = std::make_unique<dynamixel::GroupSyncRead>(
+      port_handler_, packet_handler_, ADDR_STATE_BLOCK, LEN_STATE_BLOCK);
     grp_wcur_ = std::make_unique<dynamixel::GroupSyncWrite>(
       port_handler_, packet_handler_, ADDR_GOAL_CURRENT, LEN_GOAL_CURRENT);
 
     for (const auto id : DXL_ID) {
-      grp_pos_->addParam(id);
-      grp_vel_->addParam(id);
-      grp_cur_->addParam(id);
+      grp_read_->addParam(id);
     }
 
     hw_active_ = true;
@@ -450,26 +446,24 @@ private:
 
   bool read_state(Vec4 & q, Vec4 & dq, std::array<int16_t, NUM_JOINTS> & cur)
   {
-    if (grp_pos_->txRxPacket() != COMM_SUCCESS ||
-        grp_vel_->txRxPacket() != COMM_SUCCESS ||
-        grp_cur_->txRxPacket() != COMM_SUCCESS) {
+    if (grp_read_->txRxPacket() != COMM_SUCCESS) {
       RCLCPP_ERROR(get_logger(), "SyncRead fallo");
       return false;
     }
     for (int i = 0; i < NUM_JOINTS; ++i) {
       const uint8_t id = DXL_ID[i];
-      if (!grp_pos_->isAvailable(id, ADDR_PRESENT_POSITION, LEN_PRESENT_POSITION) ||
-          !grp_vel_->isAvailable(id, ADDR_PRESENT_VELOCITY, LEN_PRESENT_VELOCITY) ||
-          !grp_cur_->isAvailable(id, ADDR_PRESENT_CURRENT,  LEN_PRESENT_CURRENT)) {
+      if (!grp_read_->isAvailable(id, ADDR_PRESENT_POSITION, LEN_PRESENT_POSITION) ||
+          !grp_read_->isAvailable(id, ADDR_PRESENT_VELOCITY, LEN_PRESENT_VELOCITY) ||
+          !grp_read_->isAvailable(id, ADDR_PRESENT_CURRENT,  LEN_PRESENT_CURRENT)) {
         RCLCPP_ERROR(get_logger(), "[ID %d] dato no disponible", id);
         return false;
       }
       const int32_t rp = toSigned32(static_cast<uint32_t>(
-        grp_pos_->getData(id, ADDR_PRESENT_POSITION, LEN_PRESENT_POSITION)));
+        grp_read_->getData(id, ADDR_PRESENT_POSITION, LEN_PRESENT_POSITION)));
       const int32_t rv = toSigned32(static_cast<uint32_t>(
-        grp_vel_->getData(id, ADDR_PRESENT_VELOCITY, LEN_PRESENT_VELOCITY)));
+        grp_read_->getData(id, ADDR_PRESENT_VELOCITY, LEN_PRESENT_VELOCITY)));
       const int16_t rc = toSigned16(static_cast<uint32_t>(
-        grp_cur_->getData(id, ADDR_PRESENT_CURRENT,  LEN_PRESENT_CURRENT)));
+        grp_read_->getData(id, ADDR_PRESENT_CURRENT,  LEN_PRESENT_CURRENT)));
 
       q(i)   = ENCODER_SIGN[i] * static_cast<double>(wrappedTickDiff(rp, JOINT_ZERO_TICK[i])) * POS_UNIT_RAD;
       dq(i)  = ENCODER_SIGN[i] * static_cast<double>(rv) * VEL_UNIT_RAD_S;
@@ -494,7 +488,11 @@ private:
     return true;
   }
 
-  std::array<int16_t, NUM_JOINTS> torque_to_current(const Vec4 & tau, const Vec4 & dq)
+  // Fv usa la velocidad medida (término suave); Fc usa la velocidad DESEADA:
+  // señal sin ruido → sin chattering, y aporta el empuje de despegue justo
+  // cuando la referencia arranca (mismo criterio que hw_fl_control_node).
+  std::array<int16_t, NUM_JOINTS> torque_to_current(const Vec4 & tau, const Vec4 & dq,
+                                                    const Vec4 & dq_des)
   {
     static const std::array<int16_t, NUM_JOINTS> cur_lim = {
       CURRENT_CMD_LIMIT_J123, CURRENT_CMD_LIMIT_J123,
@@ -504,7 +502,7 @@ private:
     for (int i = 0; i < NUM_JOINTS; ++i) {
       const double I_model = motor_alpha_(i) * tau(i)
                            + motor_Fv_(i)    * dq(i)
-                           + motor_Fc_(i)    * std::tanh(dq(i) / motor_epsilon_)
+                           + fc_scale_ * motor_Fc_(i) * std::tanh(dq_des(i) / motor_epsilon_)
                            + motor_I_offset_(i);
       cmd[i] = clampCurrent(CURRENT_SIGN[i] * ENCODER_SIGN[i] * I_model, cur_lim[i]);
     }
@@ -521,45 +519,14 @@ private:
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  //  Callback del timer (100 Hz)
+  //  Callback del timer (loop_rate_hz)
   // ─────────────────────────────────────────────────────────────────────────
 
   void tick()
   {
     if (!hw_active_ || !refs_loaded_) return;
 
-    // ── Fase warmup: compensacion gravitatoria ────────────────────────────
-    if (warmup_active_) {
-      Vec4 q, dq;
-      std::array<int16_t, NUM_JOINTS> cur_meas{};
-      if (!read_state(q, dq, cur_meas)) {
-        emergency_stop("SyncRead fallido en warmup"); return;
-      }
-      if (!dq_filter_initialized_) {
-        dq_filtered_           = dq;
-        dq_filter_initialized_ = true;
-      } else {
-        dq_filtered_ = vel_filter_alpha_ * dq_filtered_ + (1.0 - vel_filter_alpha_) * dq;
-      }
-      for (int i = 0; i < NUM_JOINTS; ++i) {
-        if (q(i) < JOINT_LOWER[i] || q(i) > JOINT_UPPER[i]) {
-          emergency_stop("Articulacion " + std::to_string(i+1)
-                         + " fuera de limites en warmup: " + std::to_string(q(i)) + " rad");
-          return;
-        }
-      }
-      auto cur_cmd = torque_to_current(tau_gravity_, dq_filtered_);
-      if (!send_currents(cur_cmd)) {
-        emergency_stop("SyncWrite fallido en warmup"); return;
-      }
-      if (--warmup_ticks_ == 0) {
-        warmup_active_ = false;
-        start_time_ = std::chrono::high_resolution_clock::now();
-        RCLCPP_INFO(get_logger(), "Warmup completado. Iniciando TV-LQR.");
-      }
-      return;
-    }
-
+    const auto tick_t0 = std::chrono::steady_clock::now();
     const auto tp = std::chrono::high_resolution_clock::now();
     const double t = std::chrono::duration<double>(tp - start_time_).count();
 
@@ -580,12 +547,22 @@ private:
       return;
     }
 
-    // ── 1b. Filtro EMA sobre velocidad medida ─────────────────────────────
-    if (!dq_filter_initialized_) {
-      dq_filtered_           = dq;
-      dq_filter_initialized_ = true;
+    // ── 1b. Filtro α-β: estimacion conjunta de posicion y velocidad ───────
+    //   prediccion: q_pred = q_hat + Ts·dq_hat,  dq_pred = dq_hat
+    //   residuo:    r      = q_meas - q_pred
+    //   correccion: q_hat  = q_pred + α·r,        dq_hat = dq_pred + (β/Ts)·r
+    //   dq_hat evita la cuantizacion (~0.024 rad/s) y el retardo del registro
+    //   de velocidad Dynamixel (defaults validados en el Lab 4).
+    if (!ab_initialized_) {
+      q_hat_          = q;
+      dq_hat_         = dq;
+      ab_initialized_ = true;
     } else {
-      dq_filtered_ = vel_filter_alpha_ * dq_filtered_ + (1.0 - vel_filter_alpha_) * dq;
+      const Vec4 q_pred  = q_hat_ + Ts_loop_ * dq_hat_;
+      const Vec4 dq_pred = dq_hat_;
+      const Vec4 r       = q - q_pred;
+      q_hat_  = q_pred  + ab_alpha_ * r;
+      dq_hat_ = dq_pred + (ab_beta_ / Ts_loop_) * r;
     }
 
     // ── 2. Verificar limites articulares ──────────────────────────────────
@@ -601,8 +578,10 @@ private:
     int k = static_cast<int>(std::floor(t / Ts_));
     k = std::max(0, std::min(k, N_ - 1));
 
+    // Estado para el feedback: posicion medida (cuantizacion fina, 0.088°)
+    // y velocidad estimada por el filtro α-β.
     Eigen::Matrix<double,8,1> x_state, x_ref_k;
-    x_state << q, dq;
+    x_state << q, dq_hat_;
     x_ref_k << q_ref_[k], dq_ref_[k];
 
     // ── Seccion 3: Ley de control TV-LQR ─────────────────────────────────
@@ -611,7 +590,7 @@ private:
     // ── Seccion 4: Saturacion y escala de seguridad ───────────────────────
     const Vec4 tau_sat = tau.cwiseMin(TAU_MAX).cwiseMax(-TAU_MAX);
     const Vec4 tau_cmd = torque_scale_ * tau_sat;
-    auto cur_cmd = torque_to_current(tau_cmd, dq_filtered_);
+    auto cur_cmd = torque_to_current(tau_cmd, dq_hat_, dq_ref_[k]);
 
     // ── 5. Enviar corriente ────────────────────────────────────────────────
     if (!send_currents(cur_cmd)) {
@@ -650,7 +629,7 @@ private:
            << t                       << ","
            << q(0)  << "," << q(1)  << "," << q(2)  << "," << q(3)  << ","
            << dq(0) << "," << dq(1) << "," << dq(2) << "," << dq(3) << ","
-           << dq_filtered_(0) << "," << dq_filtered_(1) << "," << dq_filtered_(2) << "," << dq_filtered_(3) << ","
+           << dq_hat_(0) << "," << dq_hat_(1) << "," << dq_hat_(2) << "," << dq_hat_(3) << ","
            << q_ref_[k](0)  << "," << q_ref_[k](1)  << "," << q_ref_[k](2)  << "," << q_ref_[k](3)  << ","
            << dq_ref_[k](0) << "," << dq_ref_[k](1) << "," << dq_ref_[k](2) << "," << dq_ref_[k](3) << ","
            << tau_sat(0) << "," << tau_sat(1) << "," << tau_sat(2) << "," << tau_sat(3) << ","
@@ -659,13 +638,25 @@ private:
            << "\n";
     }
 
-    if (++log_cnt_ % 100 == 0) {
+    if (++log_cnt_ % static_cast<int>(std::lround(loop_rate_hz_)) == 0) {
       if (csv_.is_open()) csv_.flush();
       RCLCPP_INFO(get_logger(),
         "t=%.2fs  k=%d/%d  q=[%.3f %.3f %.3f %.3f]  |e|=%.4f  i=[%d %d %d %d]",
         t, k, N_-1, q(0), q(1), q(2), q(3),
         (q - q_ref_[k]).norm(),
         cur_cmd[0], cur_cmd[1], cur_cmd[2], cur_cmd[3]);
+    }
+
+    // ── 8. Deteccion de overrun: si el ciclo (bus + control) no cabe en el
+    //    periodo, el lazo real corre mas lento de lo configurado → bajar
+    //    loop_rate_hz o revisar el latency_timer del adaptador USB-serial.
+    const double tick_ms = std::chrono::duration<double, std::milli>(
+      std::chrono::steady_clock::now() - tick_t0).count();
+    if (tick_ms > 1e3 * Ts_loop_) {
+      if (++overrun_cnt_ % 50 == 1) {
+        RCLCPP_WARN(get_logger(), "Overrun del lazo: tick=%.2f ms > Ts=%.1f ms (n=%d)",
+          tick_ms, 1e3 * Ts_loop_, overrun_cnt_);
+      }
     }
   }
 
@@ -678,19 +669,20 @@ private:
   double      torque_scale_, t_run_;
   Vec4        motor_alpha_, motor_Fv_, motor_Fc_, motor_I_offset_;
   double      motor_epsilon_;
-  double      vel_cutoff_hz_;
-  double      vel_filter_alpha_;
-  Vec4        dq_filtered_;
-  bool        dq_filter_initialized_{false};
+  double      fc_scale_;
+
+  // Filtro α-β y lazo de control
+  double ab_alpha_{0.2}, ab_beta_{0.02};
+  double loop_rate_hz_{200.0};
+  double Ts_loop_{0.005};          // periodo del lazo (≠ Ts_ de la referencia)
+  Vec4   q_hat_{Vec4::Zero()}, dq_hat_{Vec4::Zero()};
+  bool   ab_initialized_{false};
+  int    overrun_cnt_{0};
 
   bool hw_active_;
   bool refs_loaded_;
   int    N_;
   double Ts_;
-
-  Vec4 tau_gravity_;
-  int  warmup_ticks_;
-  bool warmup_active_;
 
   std::vector<double>                                    t_ref_;
   std::vector<Vec4>                                      q_ref_;
@@ -700,7 +692,7 @@ private:
 
   dynamixel::PortHandler*   port_handler_{nullptr};
   dynamixel::PacketHandler* packet_handler_{nullptr};
-  std::unique_ptr<dynamixel::GroupSyncRead>  grp_pos_, grp_vel_, grp_cur_;
+  std::unique_ptr<dynamixel::GroupSyncRead>  grp_read_;
   std::unique_ptr<dynamixel::GroupSyncWrite> grp_wcur_;
 
   std::chrono::high_resolution_clock::time_point start_time_;
