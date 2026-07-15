@@ -22,9 +22,12 @@ clear; clc; close all;
 mode        = 'sim';    % 'sim'  = simulacion Gazebo (gz_smc_cart_node)
                         % 'real' = implementacion hardware (hw_smc_cart_node)
 
-rho_func    = 'sign';   % Funcion de conmutacion: 'sign' | 'sat'
+rho_func    = 'sat';   % Funcion de conmutacion: 'sign' | 'sat'
 
-test_num    = 3;        % Identificador del ensayo (test_num usado al lanzar el nodo)
+controller  = 'smci';    % 'smc'  = gz_smc_cart_node (SMC clasico)
+                        % 'smci' = gz_SMCI_cart_node (SMC integral; mismo CSV + xi1..xi4)
+
+test_num    = 2;        % Identificador del ensayo (test_num usado al lanzar el nodo)
 
 EXPORT_FIGS = true;    % true  = guardar PNG (300 dpi) y EPS vectorial (600 dpi)
                         % false = solo visualizar
@@ -35,18 +38,27 @@ TAU_MAX     = 1.2;      % [N·m] limite de torque (debe coincidir con el nodo)
 pkg_dir = '/home/utec/open_manx_ws/src/open_manipulator_x_torque_control';
 
 %% ── Rutas dinamicas ──────────────────────────────────────────────────────────
+% Sufijo del controlador: '' para SMC clasico, '_smci' para SMC integral
+if strcmp(controller, 'smci')
+    ctrl_suffix = '_smci';
+elseif strcmp(controller, 'smc')
+    ctrl_suffix = '';
+else
+    error('controller debe ser ''smc'' o ''smci''.');
+end
+
 switch mode
     case 'sim'
         csv_file   = fullfile(pkg_dir, 'data', 'lab6', 'sim', 'act2', ...
-                              sprintf('gz_smc_cart_%s_%d.csv', rho_func, test_num));
+                              sprintf('gz_%s_cart_%s_%d.csv', controller, rho_func, test_num));
         output_dir = fullfile(pkg_dir, 'plots', 'lab6', 'sim', 'act2', ...
-                              sprintf('test%d_%s', test_num, rho_func));
+                              sprintf('test%d_%s%s', test_num, rho_func, ctrl_suffix));
         mode_label = 'Simulacion';
     case 'real'
         csv_file   = fullfile(pkg_dir, 'data', 'lab6', 'real', 'act2', ...
-                              sprintf('hw_smc_cart_%s_%d.csv', rho_func, test_num));
+                              sprintf('hw_%s_cart_%s_%d.csv', controller, rho_func, test_num));
         output_dir = fullfile(pkg_dir, 'plots', 'lab6', 'real', 'act2', ...
-                              sprintf('test%d_%s', test_num, rho_func));
+                              sprintf('test%d_%s%s', test_num, rho_func, ctrl_suffix));
         mode_label = 'Implementacion';
     otherwise
         error('mode debe ser ''sim'' o ''real''.');
@@ -142,7 +154,11 @@ if isfield(rho_tex, rho_func)
 else
     rho_label = rho_func;
 end
-sub_label = sprintf('[%s | \\rho = %s]', mode_label, rho_label);
+if strcmp(controller, 'smci')
+    sub_label = sprintf('[%s | ISMC | \\rho = %s]', mode_label, rho_label);
+else
+    sub_label = sprintf('[%s | \\rho = %s]', mode_label, rho_label);
+end
 
 %% ── Figura 1 — Seguimiento cartesiano ───────────────────────────────────────
 figure(1); clf;

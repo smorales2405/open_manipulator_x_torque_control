@@ -34,39 +34,54 @@
 //      J_y * qddot_cmd = sddot_cmd − eta_I
 //      v_s = yddot_d − Lambda*edot − Jdot_y*qdot − K_D*sdot − K_P*s − K_sw*rho(s)
 //      qddot_cmd = J_y^# * v_s
-//      tau   = M(q)*qddot_cmd + Phi(q,qdot) + B_FRIC.cwiseProduct(qdot)
+//      tau   = M(q)*qddot_cmd + Phi(q,qdot) + tau_fric
 //      tau_sat = clamp(tau, -TAU_MAX, TAU_MAX)
+//
+//  Feedforward de friccion del URDF:
+//    tau_fric = Fv·dq + Fc·tanh(dq_d/eps)
+//      Fv, Fc : <dynamics damping/friction> de joint1..4, leidos del modelo
+//               Pinocchio — los mismos valores que simula Gazebo con
+//               damping_scale = 1.0 y friction_scale = 1.0.
+//      dq_d   : velocidad articular DESEADA = J_y^# * ydot_d (senal limpia).
 //
 //  Pseudo-inversa amortiguada DLS:
 //    J_y^# = J_y^T (J_y*J_y^T + lambda_DLS^2 * I)^{-1}
 //
-//  ── Trayectoria (identica a gz_SMC_cart_node) ─────────────────────────────
-//    Fase transicion quintica [0, T_TRANS):  y0 → Y_START
-//    Fase seguimiento [T_TRANS, inf):        t' = t − T_TRANS
-//      y_d    = [0.20+0.03 sin(w t'), 0.03 cos(w t'),
-//                0.18+0.015 sin(2w t'), -0.77-0.02 sin(2w t')]
-//      ydot_d = [0.03w cos,  −0.03w sin,  0.03w cos(2wt'), -0.04w cos(2wt')]
-//      yddot_d= [−0.03w² sin, −0.03w² cos, −0.06w² sin(2wt'), +0.08w² sin(2wt')]
-//      phi=-0.77: solucion DLS minima norma desde q_init=[0,0.81,0.76,-1.66] a [x=0.20,z=0.18]
-//      w = 0.5 rad/s
+//  Manejo del estado integral xi:
+//    · xi se integra SOLO en la fase de seguimiento (durante la transicion
+//      quintica el error es transitorio y sesgaria el integrador).
+//    · anti-windup: |xi_i| <= XI_MAX (limita la contribucion Lambda*xi a s).
+//
+//  ── Trayectoria (identica a gz_SMC_cart_node, serie de Fourier w=1 rad/s) ─
+//    Fase transicion quintica [0, T_TRANS):  y0 → Y_START con empalme C2
+//    (posicion, velocidad y aceleracion de la serie en t'=0).
+//    Fase seguimiento [T_TRANS, inf), t' = t − T_TRANS:
+//      x_d   = 0.172 + 0.032*sin(t') + 0.027*cos(2t') + 0.003*sin(3t')
+//      y_d   = 0.015 + 0.136*sin(t') - 0.014*cos(2t') + 0.003*sin(3t') - 0.001*cos(4t')
+//      z_d   = 0.128 - 0.008*sin(t') + 0.006*cos(2t')
+//      phi_d = 0.685 + 0.250*sin(t')
+//
+//  Lazo de control: 200 Hz (Ts = 5 ms), alineado con los nodos gz de FL/SMC.
 //
 //  ── CSV ───────────────────────────────────────────────────────────────────
 //    data/lab6/sim/act2/gz_smci_cart_<rho_func>_<test_num>.csv
 //    Columnas: t, q1..q4, x,y,z,phi, x_des,y_des,z_des,phi_des,
 //              xdot,ydot,zdot,phidot, xdot_des,ydot_des,zdot_des,phidot_des,
-//              s1,s2,s3,s4, tau1..tau4, sat1..sat4, cond_J, xi1..xi4
+//              s1,s2,s3,s4, tau1..tau4, cond_J, xi1..xi4
+//    (Solo fase de seguimiento; Sat% se calcula en MATLAB desde tau.)
+//    Mismas columnas que gz_smc_cart_*.csv (+xi): plots_SMC_cart.m puede
+//    leerlo seleccionando controller = 'smci'.
 //
-//  Nota: usar sim_init_config.yaml con use_fixed_init: false.
-//        El brazo cae al equilibrio elbow-down con phi≈-0.08 rad en [x=0.20, z=0.18].
-//        La trayectoria phi_d esta disenada para este equilibrio.
+//  Nota: usar sim_init_config.yaml con use_fixed_init: false y escalas
+//        nominales mass_inertia/damping/friction = 1.0.
 //
 //  Ejemplos de uso:
 //
 //    ros2 run open_manipulator_x_torque_control gz_SMCI_cart_node
-//      --ros-args -p rho_func:=sign -p test_num:=1 -p t_sim:=35.0
+//      --ros-args -p rho_func:=sign -p test_num:=1 -p t_sim:=30.0
 //
 //    ros2 run open_manipulator_x_torque_control gz_SMCI_cart_node
-//      --ros-args -p rho_func:=sat -p phi:=0.02 -p test_num:=2 -p t_sim:=35.0
+//      --ros-args -p rho_func:=sat -p phi:=0.02 -p test_num:=2 -p t_sim:=30.0
 //
 // ============================================================================
 
@@ -105,22 +120,28 @@ using namespace std::chrono_literals;
 static constexpr double PI      = M_PI;
 static constexpr int    NARM    = 4;
 static constexpr double TAU_MAX = 1.2;    // [N·m]
-static const Eigen::Vector4d B_FRIC =
-  (Eigen::Vector4d() << 0.0230, 0.0194, 0.0229, 0.0158).finished();  // [N·m·s/rad] damping joint1..4 (URDF)
-static constexpr double DT      = 0.01;   // [s] periodo de control 100 Hz
+static constexpr double DT      = 0.005;  // [s] periodo de control 200 Hz
+// Suavizado del tanh de Coulomb del feedforward de friccion.
+// Se alimenta con la velocidad DESEADA (sin ruido): eps pequeno es seguro.
+static constexpr double FRIC_EPS = 0.05;  // [rad/s]
 
 // DLS: valor pequeno = solucion mas exacta; aumentar solo si kappa(J) > 100
 static constexpr double LAMBDA_DLS    = 0.01;
 static constexpr double LAMBDA_DLS_SQ = LAMBDA_DLS * LAMBDA_DLS;
 
 // Duracion de la transicion quintica
-static constexpr double T_TRANS = 10.0;   // [s]
+static constexpr double T_TRANS = 3.0;   // [s]
+
+// Anti-windup del estado integral: |xi_i| <= XI_MAX
+// (limita la contribucion Lambda*xi a la superficie a Lambda*XI_MAX)
+static constexpr double XI_MAX = 0.05;   // [m·s | rad·s]
 
 // Frame del efector final (definido en el URDF)
 static constexpr char EFF_FRAME[] = "end_effector_link";
 
-// Punto final de la transicion (inicio de la trayectoria cartesiana)
-static const Eigen::Vector4d Y_START {0.20, 0.03, 0.18, -0.77};
+// Y_START = FK(q_d(0)) = FK([0, -0.45, 0.35, pi/4]) — inicio de la
+// trayectoria de referencia (identico a gz_SMC_cart_node)
+static const Eigen::Vector4d Y_START {0.1988, 0.0, 0.1348, 0.6854};
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  GANANCIAS ISMC CARTESIANO  [x, y, z, phi]
@@ -133,11 +154,20 @@ static const Eigen::Vector4d Y_START {0.20, 0.03, 0.18, -0.77};
 //  Dinamica de s (parte lineal): sddot + K_D*sdot + K_P*s = 0
 //    omega_n = sqrt(K_P)    [rad/s]
 //    zeta    = K_D / (2*omega_n)
+//
+//  Criterio de sintonia (lazo discreto a 200 Hz, Ts = 5 ms):
+//   · omega_n*Ts <= ~0.15 y K_D <= (0.2~0.3)/Ts.
+//   · Lambda < omega_n/2 (separar el polo integral de la dinamica de s).
+//   · K_sw solo domina la incertidumbre acotada; con sat, la pendiente
+//     adicional K_sw/phi [1/s²] se suma a K_P — mantener K_sw/phi ~ K_P.
+//   · Canal phi mas rigido: el residual de Coulomb de la muneca (M44
+//     diminuta) equivale a ~10-20 rad/s² de perturbacion; el integrador
+//     absorbe su componente lenta.
 // ═══════════════════════════════════════════════════════════════════════════
-static const Eigen::Vector4d LAMBDA_I = {  5.0,   5.0,   5.0,  5.0};
-static const Eigen::Vector4d K_P      = { 25.0,  25.0,  25.0, 25.0};  // omega_n = {5,5,5,15} rad/s
-static const Eigen::Vector4d K_D      = { 10.0,  10.0,  10.0,  10.0};  // zeta = 1 (critico)
-static const Eigen::Vector4d K_sw     = { 25.0,  25.0,  25.0, 25.0};
+static const Eigen::Vector4d LAMBDA_I = {  2.5,   2.5,   2.5,   4.0};
+static const Eigen::Vector4d K_P      = { 36.0,  36.0,  36.0, 100.0};  // omega_n = {6,6,6,10} rad/s
+static const Eigen::Vector4d K_D      = { 12.0,  12.0,  12.0,  20.0};  // zeta = 1 (critico)
+static const Eigen::Vector4d K_sw     = {  1.0,   1.0,   1.0,   4.0};
 // ═══════════════════════════════════════════════════════════════════════════
 
 // ── Referencia cartesiana ────────────────────────────────────────────────────
@@ -147,54 +177,71 @@ struct CartRef {
   Eigen::Vector4d yddot;
 };
 
-// Trayectoria activa (identica a gz_SMC_cart_node), t' = t - T_TRANS
+// Trayectoria activa (identica a gz_SMC_cart_node: serie de Fourier,
+// w = 1.0 rad/s, derivadas analiticas exactas), t' = t - T_TRANS
 static CartRef desiredTrajectory(double t)
 {
-  const double w = 0.5;
-  CartRef ref;
+  const double s1 = std::sin(t);
+  const double c1 = std::cos(t);
+  const double s2 = std::sin(2.0 * t);
+  const double c2 = std::cos(2.0 * t);
+  const double s3 = std::sin(3.0 * t);
+  const double c3 = std::cos(3.0 * t);
+  const double s4 = std::sin(4.0 * t);
+  const double c4 = std::cos(4.0 * t);
 
+  CartRef ref;
   ref.y <<
-      0.20 + 0.03  * std::sin(w * t),
-      0.03         * std::cos(w * t),
-      0.18 + 0.015 * std::sin(2.0 * w * t),
-      -0.77 - 0.02 * std::sin(2.0 * w * t);
+      0.172 + 0.032*s1 + 0.027*c2 + 0.003*s3,
+      0.015 + 0.136*s1 - 0.014*c2 + 0.003*s3 - 0.001*c4,
+      0.128 - 0.008*s1 + 0.006*c2,
+      0.685 + 0.250*s1;
 
   ref.ydot <<
-       0.03  * w * std::cos(w * t),
-      -0.03  * w * std::sin(w * t),
-       0.03  * w * std::cos(2.0 * w * t),
-      -0.04  * w * std::cos(2.0 * w * t);
+       0.032*c1 - 0.054*s2 + 0.009*c3,
+       0.136*c1 + 0.028*s2 + 0.009*c3 + 0.004*s4,
+      -0.008*c1 - 0.012*s2,
+       0.250*c1;
 
   ref.yddot <<
-      -0.03  * w * w * std::sin(w * t),
-      -0.03  * w * w * std::cos(w * t),
-      -0.06  * w * w * std::sin(2.0 * w * t),
-      +0.08  * w * w * std::sin(2.0 * w * t);
+      -0.032*s1 - 0.108*c2 - 0.027*s3,
+      -0.136*s1 + 0.056*c2 - 0.027*s3 + 0.016*c4,
+       0.008*s1 - 0.024*c2,
+      -0.250*s1;
 
   return ref;
 }
 
-// Transicion quintica: y0 → y_goal en [0, T] con vel y aceleracion nulas en extremos
+// Transicion quintica generalizada: y0 (reposo) → goal en [0, T].
+// Condiciones de borde: p(0)=y0, dp(0)=0, ddp(0)=0;
+//                       p(T)=goal.y, dp(T)=goal.ydot, ddp(T)=goal.yddot.
+// El empalme C2 con la trayectoria evita el escalon de ydot_d/yddot_d al
+// iniciar la fase de seguimiento (la serie arranca con ydot_d(0) != 0).
 static CartRef transitionTrajectory(double t,
                                     const Eigen::Vector4d & y0,
-                                    const Eigen::Vector4d & y_goal,
+                                    const CartRef & goal,
                                     double T)
 {
-  const double tau  = std::min(1.0, t / T);
-  const double tau2 = tau  * tau;
-  const double tau3 = tau2 * tau;
-  const double tau4 = tau3 * tau;
-  const double tau5 = tau4 * tau;
+  const double tc = std::min(t, T);
+  const double T2 = T * T;
 
-  const double s   =  10*tau3 - 15*tau4 +  6*tau5;
-  const double sd  = (30*tau2 - 60*tau3 + 30*tau4) / T;
-  const double sdd = (60*tau  - 180*tau2 + 120*tau3) / (T * T);
-
-  const Eigen::Vector4d delta = y_goal - y0;
   CartRef ref;
-  ref.y     = y0 + s   * delta;
-  ref.ydot  =      sd  * delta;
-  ref.yddot =      sdd * delta;
+  for (int i = 0; i < NARM; ++i) {
+    const double D  = goal.y[i] - y0[i];
+    const double vf = goal.ydot[i];
+    const double af = goal.yddot[i];
+
+    const double a3 = ( 20.0*D -  8.0*vf*T +       af*T2) / (2.0*T*T2);
+    const double a4 = (-30.0*D + 14.0*vf*T - 2.0*af*T2) / (2.0*T2*T2);
+    const double a5 = ( 12.0*D -  6.0*vf*T +       af*T2) / (2.0*T2*T2*T);
+
+    const double t2 = tc * tc;
+    const double t3 = t2 * tc;
+
+    ref.y[i]     = y0[i] +      a3*t3 +      a4*t3*tc +      a5*t3*t2;
+    ref.ydot[i]  =          3.0*a3*t2 +  4.0*a4*t3    +  5.0*a5*t2*t2;
+    ref.yddot[i] =          6.0*a3*tc + 12.0*a4*t2    + 20.0*a5*t3;
+  }
   return ref;
 }
 
@@ -270,6 +317,12 @@ public:
     }
     frame_id_ = model_.getFrameId(EFF_FRAME);
 
+    // Friccion articular del URDF (<dynamics damping/friction> joint1..4):
+    // feedforward de viscosa + Coulomb, mismos valores que simula Gazebo
+    // con damping_scale = 1.0 y friction_scale = 1.0.
+    fric_damping_ = model_.damping.head<NARM>();
+    fric_coulomb_ = model_.friction.head<NARM>();
+
     RCLCPP_INFO(this->get_logger(),
       "SMCI cart — rho=%s  phi=%.4f  tau_max=%.2f N·m",
       rho_str_.c_str(), phi_, TAU_MAX);
@@ -281,10 +334,17 @@ public:
       K_D[0],      K_D[1],      K_D[2],      K_D[3],
       K_sw[0],     K_sw[1],     K_sw[2],     K_sw[3]);
     RCLCPP_INFO(this->get_logger(),
-      "lambda_DLS=%.3f  B_fric=[%.4f %.4f %.4f %.4f] N·m·s/rad  T_trans=%.1f s",
-      LAMBDA_DLS, B_FRIC[0], B_FRIC[1], B_FRIC[2], B_FRIC[3], T_TRANS);
+      "lambda_DLS=%.3f  T_trans=%.1f s  XI_max=%.2f  Friccion URDF — "
+      "Fv=[%.4f %.4f %.4f %.4f] N·m·s/rad  Fc=[%.4f %.4f %.4f %.4f] N·m",
+      LAMBDA_DLS, T_TRANS, XI_MAX,
+      fric_damping_[0], fric_damping_[1], fric_damping_[2], fric_damping_[3],
+      fric_coulomb_[0], fric_coulomb_[1], fric_coulomb_[2], fric_coulomb_[3]);
     if (t_sim_ > 0.0) {
-      RCLCPP_INFO(this->get_logger(), "t_sim = %.1f s", t_sim_);
+      RCLCPP_INFO(this->get_logger(),
+        "t_sim (seguimiento) = %.1f s  |  total = %.1f s (T_trans=%.1f + t_sim=%.1f)",
+        t_sim_, T_TRANS + t_sim_, T_TRANS, t_sim_);
+    } else {
+      RCLCPP_INFO(this->get_logger(), "t_sim = ilimitado  (T_trans=%.1f s)", T_TRANS);
     }
 
     open_csv(test_num);
@@ -298,7 +358,7 @@ public:
         last_js_ = msg;
       });
 
-    timer_ = this->create_wall_timer(10ms, [this]() { tick(); });
+    timer_ = this->create_wall_timer(5ms, [this]() { tick(); });
   }
 
   ~SMCICartSimNode()
@@ -331,7 +391,6 @@ private:
          << "xdot_des,ydot_des,zdot_des,phidot_des,"
          << "s1,s2,s3,s4,"
          << "tau1,tau2,tau3,tau4,"
-         << "sat1,sat2,sat3,sat4,"
          << "cond_J,"
          << "xi1,xi2,xi3,xi4\n";
     RCLCPP_INFO(this->get_logger(), "CSV: %s", csv_path_.c_str());
@@ -357,7 +416,7 @@ private:
     }
   }
 
-  // ── Tick de control a 100 Hz ──────────────────────────────────────────────
+  // ── Tick de control a 200 Hz ──────────────────────────────────────────────
   void tick()
   {
     if (!last_js_) { return; }
@@ -406,7 +465,6 @@ private:
     pinocchio::nonLinearEffects(model_, data_, q_pin, dq_pin);
     const Eigen::Matrix4d M4   = data_.M.topLeftCorner<NARM, NARM>();
     const Eigen::Vector4d nle4 = data_.nle.head<NARM>();
-    const Eigen::Vector4d tau_fric = B_FRIC.cwiseProduct(dq);
 
     // 5. Pose cartesiana actual + captura de condicion inicial
     const Eigen::Vector4d y {p_ee[0], p_ee[1], p_ee[2], phi_ee};
@@ -419,18 +477,42 @@ private:
         y0_[0], y0_[1], y0_[2], y0_[3]);
     }
 
-    // 6. Referencia segun fase
+    // 6. Referencia segun fase. La transicion quintica empalma en C2 con la
+    //    trayectoria: posicion Y_START (= FK(q_d(0))) y velocidad/aceleracion
+    //    de la serie de Fourier en t'=0.
+    CartRef goal0 = desiredTrajectory(0.0);
+    goal0.y = Y_START;
     const bool in_trans = (t_ < T_TRANS);
     const CartRef ref = in_trans
-      ? transitionTrajectory(t_, y0_, Y_START, T_TRANS)
+      ? transitionTrajectory(t_, y0_, goal0, T_TRANS)
       : desiredTrajectory(t_ - T_TRANS);
+
+    // 6b. Factorizacion DLS: A = J_y J_y^T + lambda^2 I (se reutiliza en el
+    //     feedforward de friccion y en la aceleracion articular comandada)
+    const Eigen::Matrix4d A =
+      J4 * J4.transpose() + LAMBDA_DLS_SQ * Eigen::Matrix4d::Identity();
+    const Eigen::LDLT<Eigen::Matrix4d> A_ldlt = A.ldlt();
+
+    // 6c. Feedforward de friccion del URDF (Coulomb con la velocidad
+    //     articular DESEADA, mapeada de ydot_d via la pseudo-inversa DLS)
+    const Eigen::Vector4d dq_des = J4.transpose() * A_ldlt.solve(ref.ydot);
+    Eigen::Vector4d tau_fric;
+    for (int i = 0; i < NARM; ++i) {
+      tau_fric[i] = fric_damping_[i] * dq[i]
+                  + fric_coulomb_[i] * std::tanh(dq_des[i] / FRIC_EPS);
+    }
 
     // 7. Errores cartesianos
     const Eigen::Vector4d e_y    = y    - ref.y;
     const Eigen::Vector4d edot_y = ydot - ref.ydot;
 
-    // 8. Integracion del estado integral: xi += e * dt  (Euler forward)
-    xi_ += e_y * DT;
+    // 8. Estado integral: xi += e * dt  (Euler forward).
+    //    Solo durante el seguimiento (el transitorio de la transicion
+    //    sesgaria el integrador) y con anti-windup |xi_i| <= XI_MAX.
+    if (!in_trans) {
+      xi_ += e_y * DT;
+      xi_ = xi_.cwiseMax(-XI_MAX).cwiseMin(XI_MAX);
+    }
 
     // 9. Superficie deslizante integral:
     //      s    = e + Lambda * xi
@@ -456,9 +538,7 @@ private:
         - K_sw.asDiagonal() * rho;
 
     // 12. Aceleracion articular comandada via pseudo-inversa DLS
-    const Eigen::Matrix4d A =
-      J4 * J4.transpose() + LAMBDA_DLS_SQ * Eigen::Matrix4d::Identity();
-    const Eigen::Vector4d qddot_cmd = J4.transpose() * A.ldlt().solve(v_s);
+    const Eigen::Vector4d qddot_cmd = J4.transpose() * A_ldlt.solve(v_s);
 
     // 13. Torque nominal y saturado
     const Eigen::Vector4d tau     = M4 * qddot_cmd + nle4 + tau_fric;
@@ -482,8 +562,8 @@ private:
       phase, t_, s_y.norm(), e_y.norm(), xi_.norm(), cond_J,
       tau_sat[0], tau_sat[1], tau_sat[2], tau_sat[3]);
 
-    // 16. Registro CSV
-    if (csv_.is_open()) {
+    // 16. Registro CSV (solo fase de seguimiento, sin transicion quintica)
+    if (!in_trans && csv_.is_open()) {
       csv_ << std::fixed << std::setprecision(6)
            << t_
            << ',' << q[0]           << ',' << q[1]           << ',' << q[2]           << ',' << q[3]
@@ -493,10 +573,6 @@ private:
            << ',' << ref.ydot[0]    << ',' << ref.ydot[1]    << ',' << ref.ydot[2]    << ',' << ref.ydot[3]
            << ',' << s_y[0]         << ',' << s_y[1]         << ',' << s_y[2]         << ',' << s_y[3]
            << ',' << tau_sat[0]     << ',' << tau_sat[1]     << ',' << tau_sat[2]     << ',' << tau_sat[3]
-           << ',' << (std::abs(tau[0]) > TAU_MAX ? 1 : 0)
-           << ',' << (std::abs(tau[1]) > TAU_MAX ? 1 : 0)
-           << ',' << (std::abs(tau[2]) > TAU_MAX ? 1 : 0)
-           << ',' << (std::abs(tau[3]) > TAU_MAX ? 1 : 0)
            << ',' << cond_J
            << ',' << xi_[0]         << ',' << xi_[1]         << ',' << xi_[2]         << ',' << xi_[3]
            << '\n';
@@ -504,9 +580,10 @@ private:
 
     t_ += DT;
 
-    if (t_sim_ > 0.0 && t_ >= t_sim_) {
+    if (t_sim_ > 0.0 && t_ >= T_TRANS + t_sim_) {
       RCLCPP_INFO(this->get_logger(),
-        "Simulacion completada (%.1f s). Deteniendo.", t_sim_);
+        "Simulacion completada: T_trans=%.1f s + t_sim=%.1f s = %.1f s total. Deteniendo.",
+        T_TRANS, t_sim_, T_TRANS + t_sim_);
       std_msgs::msg::Float64MultiArray zero;
       zero.data.assign(NARM, 0.0);
       torque_pub_->publish(zero);
@@ -523,6 +600,9 @@ private:
   pinocchio::Data       data_;
   pinocchio::FrameIndex frame_id_;
 
+  Eigen::Vector4d fric_damping_;   // Fv del URDF [N·m·s/rad]
+  Eigen::Vector4d fric_coulomb_;   // Fc del URDF [N·m]
+
   double      t_;
   double      t_sim_;
   RhoFunc     rho_func_;
@@ -531,7 +611,7 @@ private:
 
   Eigen::Vector4d y0_;
   bool            y0_initialized_;
-  Eigen::Vector4d xi_;           // estado integral: ∫e dt
+  Eigen::Vector4d xi_;           // estado integral: ∫e dt (solo fase de seguimiento)
 
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr torque_pub_;
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr  joint_sub_;

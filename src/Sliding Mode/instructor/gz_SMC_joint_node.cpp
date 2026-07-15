@@ -29,6 +29,12 @@
 //    q_d   = [ (pi/4)*sin(w*t), -0.45+0.5*sin(w*t), 0.35-0.5*sin(w*t), pi/4+0.25*sin(w*t) ]
 //    dq_d, ddq_d : derivadas analiticas exactas
 //
+//  Transicion inicial: quintica generalizada de duracion T_TRANS desde la
+//  pose medida al arrancar (el brazo cae por gravedad entre el spawn de
+//  Gazebo y el inicio del nodo) hasta q_d(0), empalmando posicion, velocidad
+//  Y aceleracion con la trayectoria (empalme C2). El CSV registra solo la
+//  fase de seguimiento.
+//
 //  Lazo de control: 200 Hz (Ts = 5 ms), alineado con los nodos gz de FL.
 //
 //  Suscriptor : /joint_states                   (sensor_msgs/JointState)
@@ -36,9 +42,10 @@
 //
 //  Parametros ROS 2 (--ros-args -p nombre:=valor):
 //    test_num  [int]     1       — identificador del CSV generado
-//    t_sim     [double]  0.0     — duracion en segundos (0 = ilimitado)
+//    t_sim     [double]  0.0     — duracion del seguimiento en segundos
+//                                  (0 = ilimitado); total = T_TRANS + t_sim
 //    rho_func  [string]  "sign"  — funcion de conmutacion: "sign" | "sat"
-//    phi       [double]  0.1     — capa limite para sat(s/phi)  [rad/s]
+//    phi       [double]  0.15    — capa limite para sat(s/phi)  [rad/s]
 //
 //  CSV generado: data/lab6/sim/act1/gz_smc_joint_<rho_func>_<test_num>.csv
 //  Columnas: t, q1..q4, dq1..dq4, q1_des..q4_des, dq1_des..dq4_des,
@@ -55,9 +62,9 @@
 //    ros2 run open_manipulator_x_torque_control gz_smc_joint_node
 //      --ros-args -p rho_func:=sign -p test_num:=1 -p t_sim:=30.0
 //
-//    # Saturacion con capa limite phi = 0.1 rad/s:
+//    # Saturacion con capa limite phi = 0.15 rad/s:
 //    ros2 run open_manipulator_x_torque_control gz_smc_joint_node
-//      --ros-args -p rho_func:=sat -p phi:=0.1 -p test_num:=2 -p t_sim:=30.0
+//      --ros-args -p rho_func:=sat -p phi:=0.15 -p test_num:=2 -p t_sim:=30.0
 //
 // ============================================================================
 
@@ -97,6 +104,9 @@ static constexpr double TAU_MAX = 1.2;    // [N·m] limite de torque por articul
 // Se alimenta con la velocidad DESEADA (sin ruido): eps pequeno es seguro.
 static constexpr double FRIC_EPS = 0.05;  // [rad/s]
 
+// Duracion de la transicion quintica desde la pose medida hasta q_d(0)
+static constexpr double T_TRANS = 3.0;   // [s]
+
 // ═══════════════════════════════════════════════════════════════════════════
 //  GANANCIAS SMC — ajustar aqui para cada articulacion
 //  Indice: [joint1, joint2, joint3, joint4]
@@ -108,10 +118,14 @@ static constexpr double FRIC_EPS = 0.05;  // [rad/s]
 //     |s| ~ K_S*Ts que nunca entra en la capa limite, y sat(s/phi)
 //     degenera en sign(s).
 //   · Ganancia efectiva dentro de la capa: K_V + K_S/phi <= (0.2~0.3)/Ts.
+//   · joint4: el residual de Coulomb entre la friccion discontinua de la
+//     planta y el tanh del feedforward, dividido por su inercia diminuta
+//     (M44 ~ 0.001 kg·m²), equivale a ~10-20 rad/s² de perturbacion.
+//     Por eso K_S4 > K_S1..3 y Lambda4 alto (e_ss ~ s_ss/Lambda).
 // ═══════════════════════════════════════════════════════════════════════════
-static const Eigen::Vector4d LAMBDA_Q = {10.0, 10.0, 10.0, 12.0};   // superficie [1/s]
+static const Eigen::Vector4d LAMBDA_Q = {10.0, 10.0, 10.0, 15.0};   // superficie [1/s]
 static const Eigen::Vector4d K_V      = { 8.0,  8.0,  8.0, 10.0};   // alcance exponencial (proporcional a s)
-static const Eigen::Vector4d K_S      = { 2.0,  3.0,  3.0,  3.0};   // ganancia conmutacion rho(s) [rad/s²]
+static const Eigen::Vector4d K_S      = { 3.0,  4.5,  4.5,  6.0};   // ganancia conmutacion rho(s) [rad/s²]
 // ═══════════════════════════════════════════════════════════════════════════
 
 // ── Trayectoria de referencia articular ──────────────────────────────────────
@@ -142,6 +156,40 @@ static Reference desiredTrajectory(double t)
        0.5 * w * w * std::sin(w * t),
       -0.25 * w * w * std::sin(w * t);
 
+  return ref;
+}
+
+// Transicion quintica generalizada: q0 (reposo) → goal en [0, T].
+// Condiciones de borde: p(0)=q0, dp(0)=0, ddp(0)=0;
+//                       p(T)=goal.q, dp(T)=goal.dq, ddp(T)=goal.ddq.
+// El empalme C2 con la trayectoria evita un escalon de dq_d al iniciar el
+// seguimiento (dq_d(0) = B*w != 0) y absorbe la caida por gravedad del brazo
+// entre el spawn de Gazebo y el arranque del nodo.
+static Reference transitionTrajectory(double t,
+                                      const Eigen::Vector4d & q0,
+                                      const Reference & goal,
+                                      double T)
+{
+  const double tc = std::min(t, T);
+  const double T2 = T * T;
+
+  Reference ref;
+  for (int i = 0; i < NARM; ++i) {
+    const double D  = goal.q[i] - q0[i];
+    const double vf = goal.dq[i];
+    const double af = goal.ddq[i];
+
+    const double a3 = ( 20.0*D -  8.0*vf*T +       af*T2) / (2.0*T*T2);
+    const double a4 = (-30.0*D + 14.0*vf*T - 2.0*af*T2) / (2.0*T2*T2);
+    const double a5 = ( 12.0*D -  6.0*vf*T +       af*T2) / (2.0*T2*T2*T);
+
+    const double t2 = tc * tc;
+    const double t3 = t2 * tc;
+
+    ref.q[i]   = q0[i] +      a3*t3 +      a4*t3*tc +      a5*t3*t2;
+    ref.dq[i]  =          3.0*a3*t2 +  4.0*a4*t3    +  5.0*a5*t2*t2;
+    ref.ddq[i] =          6.0*a3*tc + 12.0*a4*t2    + 20.0*a5*t3;
+  }
   return ref;
 }
 
@@ -181,7 +229,7 @@ public:
     this->declare_parameter<int>        ("test_num", 1);
     this->declare_parameter<double>     ("t_sim",    0.0);
     this->declare_parameter<std::string>("rho_func", "sign");
-    this->declare_parameter<double>     ("phi",      0.1);
+    this->declare_parameter<double>     ("phi",      0.15);
 
     const int         test_num = this->get_parameter("test_num").as_int();
     t_sim_                     = this->get_parameter("t_sim").as_double();
@@ -232,9 +280,11 @@ public:
       fric_coulomb_[0], fric_coulomb_[1], fric_coulomb_[2], fric_coulomb_[3],
       FRIC_EPS);
     if (t_sim_ > 0.0) {
-      RCLCPP_INFO(this->get_logger(), "t_sim = %.1f s", t_sim_);
+      RCLCPP_INFO(this->get_logger(),
+        "t_sim (seguimiento) = %.1f s  |  total = %.1f s (T_trans=%.1f + t_sim=%.1f)",
+        t_sim_, T_TRANS + t_sim_, T_TRANS, t_sim_);
     } else {
-      RCLCPP_INFO(this->get_logger(), "t_sim = ilimitado");
+      RCLCPP_INFO(this->get_logger(), "t_sim = ilimitado  (T_trans=%.1f s)", T_TRANS);
     }
 
     open_csv(test_num);
@@ -312,7 +362,22 @@ private:
     Eigen::Vector4d q, dq;
     read_js(q, dq);
 
-    const Reference ref = desiredTrajectory(t_);
+    // Captura de la pose inicial (el brazo pudo caer por gravedad antes de
+    // arrancar el nodo) + referencia segun fase: transicion quintica con
+    // empalme C2 hacia q_d(0), luego trayectoria de seguimiento.
+    if (!q0_initialized_) {
+      q0_ = q;
+      q0_initialized_ = true;
+      RCLCPP_INFO(this->get_logger(),
+        "Pose inicial capturada: q=[%.3f %.3f %.3f %.3f] rad",
+        q0_[0], q0_[1], q0_[2], q0_[3]);
+    }
+
+    const Reference goal0 = desiredTrajectory(0.0);
+    const bool in_trans   = (t_ < T_TRANS);
+    const Reference ref   = in_trans
+      ? transitionTrajectory(t_, q0_, goal0, T_TRANS)
+      : desiredTrajectory(t_ - T_TRANS);
 
     // ── Dinamica nominal via Pinocchio ─────────────────────────────────────
     Eigen::VectorXd q_pin  = Eigen::VectorXd::Zero(model_.nv);
@@ -355,13 +420,14 @@ private:
     cmd.data.assign(tau_sat.data(), tau_sat.data() + NARM);
     torque_pub_->publish(cmd);
 
+    const char * phase = in_trans ? "TRANS" : "TRAY ";
     RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-      "t=%.2fs  |s|=%.4f  |e|=%.4f rad  tau=[%.3f %.3f %.3f %.3f] N·m",
-      t_, s_q.norm(), e_q.norm(),
+      "[%s] t=%.2fs  |s|=%.4f  |e|=%.4f rad  tau=[%.3f %.3f %.3f %.3f] N·m",
+      phase, t_, s_q.norm(), e_q.norm(),
       tau_sat[0], tau_sat[1], tau_sat[2], tau_sat[3]);
 
-    // ── Registro CSV ───────────────────────────────────────────────────────
-    if (csv_.is_open()) {
+    // ── Registro CSV (solo fase de seguimiento, sin transicion quintica) ───
+    if (!in_trans && csv_.is_open()) {
       csv_ << std::fixed << std::setprecision(6)
            << t_
            << ',' << q[0]        << ',' << q[1]        << ',' << q[2]        << ',' << q[3]
@@ -375,9 +441,10 @@ private:
 
     t_ += 0.005;
 
-    if (t_sim_ > 0.0 && t_ >= t_sim_) {
+    if (t_sim_ > 0.0 && t_ >= T_TRANS + t_sim_) {
       RCLCPP_INFO(this->get_logger(),
-        "Simulacion completada (%.1f s). Deteniendo control.", t_sim_);
+        "Simulacion completada: T_trans=%.1f s + t_sim=%.1f s = %.1f s total. Deteniendo control.",
+        T_TRANS, t_sim_, T_TRANS + t_sim_);
       std_msgs::msg::Float64MultiArray zero;
       zero.data.assign(NARM, 0.0);
       torque_pub_->publish(zero);
@@ -395,6 +462,9 @@ private:
 
   Eigen::Vector4d fric_damping_;   // Fv del URDF [N·m·s/rad]
   Eigen::Vector4d fric_coulomb_;   // Fc del URDF [N·m]
+
+  Eigen::Vector4d q0_ {0.0, 0.0, 0.0, 0.0};  // pose medida al arrancar
+  bool            q0_initialized_ = false;
 
   double      t_;
   double      t_sim_;

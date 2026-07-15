@@ -55,7 +55,7 @@
 //    test_num  [int]     1        — identificador del CSV
 //    t_sim     [double]  0.0      — duracion SMC en segundos (0 = ilimitado); total = T_TRANS + t_sim
 //    rho_func  [string]  "sign"   — funcion de conmutacion: "sign" | "sat"
-//    phi       [double]  0.05     — capa limite [m/s o rad/s]
+//    phi       [double]  0.15     — capa limite [m/s o rad/s]
 //
 //  CSV: data/lab6/sim/act2/gz_smc_cart_<rho_func>_<test_num>.csv
 //  Columnas: t, q1..q4, x,y,z,phi, x_des,y_des,z_des,phi_des,
@@ -73,7 +73,7 @@
 //      --ros-args -p rho_func:=sign -p test_num:=1 -p t_sim:=30.0
 //
 //    ros2 run open_manipulator_x_torque_control gz_smc_cart_node
-//      --ros-args -p rho_func:=sat -p phi:=0.05 -p test_num:=2 -p t_sim:=30.0
+//      --ros-args -p rho_func:=sat -p phi:=0.15 -p test_num:=2 -p t_sim:=30.0
 //
 // ============================================================================
 
@@ -138,13 +138,17 @@ static const Eigen::Vector4d Y_START {0.1988, 0.0, 0.1348, 0.6854};
 //     solo debe dominar la INCERTIDUMBRE acotada, no la dinamica completa.
 //     Un K_S grande produce chattering |s| ~ K_S*Ts fuera de la capa limite
 //     y sat(s/phi) degenera en sign(s).
-//   · Lambda_y alto (>10) demanda aceleraciones imposibles con tau_max=1.2:
-//     saturacion permanente y vibracion del robot.
 //   · Ganancia efectiva dentro de la capa: K_V + K_S/phi <= (0.2~0.3)/Ts.
+//   · Canal phi: dominado por joint4 (fila [0,1,1,1] del Jacobiano). El
+//     residual de Coulomb de la muneca dividido por su inercia diminuta
+//     (M44 ~ 0.001 kg·m²) equivale a ~10-20 rad/s² de perturbacion; por eso
+//     Lambda4/K_V4/K_S4 > que en x,y,z (e_ss ~ s_ss/Lambda). Subir Lambda
+//     mas alla de ~15 vuelve a demandar aceleraciones imposibles con
+//     tau_max = 1.2 (saturacion y vibracion).
 // ═══════════════════════════════════════════════════════════════════════════
-static const Eigen::Vector4d LAMBDA_Y = {5.0, 5.0, 5.0, 8.0};   // superficie [1/s]
-static const Eigen::Vector4d K_V      = {5.0, 5.0, 5.0, 8.0};   // proporcional a superficie (alcance exponencial)
-static const Eigen::Vector4d K_S      = {0.5, 0.5, 0.5, 2.0};   // ganancia de conmutacion [m/s² | rad/s²]
+static const Eigen::Vector4d LAMBDA_Y = {5.0, 5.0, 5.0, 12.0};   // superficie [1/s]
+static const Eigen::Vector4d K_V      = {5.0, 5.0, 5.0, 10.0};   // proporcional a superficie (alcance exponencial)
+static const Eigen::Vector4d K_S      = {1.5, 1.5, 1.5,  6.0};   // ganancia de conmutacion [m/s² | rad/s²]
 // ═══════════════════════════════════════════════════════════════════════════
 
 // ── Referencia cartesiana ────────────────────────────────────────────────────
@@ -260,7 +264,7 @@ public:
     this->declare_parameter<int>        ("test_num", 1);
     this->declare_parameter<double>     ("t_sim",    0.0);
     this->declare_parameter<std::string>("rho_func", "sign");
-    this->declare_parameter<double>     ("phi",      0.05);
+    this->declare_parameter<double>     ("phi",      0.15);
 
     const int         test_num = this->get_parameter("test_num").as_int();
     t_sim_                     = this->get_parameter("t_sim").as_double();

@@ -39,7 +39,7 @@
 //    test_num  [int]     1        — identificador del CSV
 //    t_sim     [double]  0.0      — duracion SMC en segundos (0 = ilimitado); total = T_TRANS + t_sim
 //    rho_func  [string]  "sign"   — funcion de conmutacion: "sign" | "sat"
-//    phi       [double]  0.05     — capa limite [m/s o rad/s]
+//    phi       [double]  0.15     — capa limite [m/s o rad/s]
 //
 //  CSV: data/lab6/sim/act2/gz_smc_cart_<rho_func>_<test_num>.csv
 //  Columnas: t, q1..q4, x,y,z,phi, x_des,y_des,z_des,phi_des,
@@ -55,7 +55,7 @@
 //
 //    ros2 run open_manipulator_x_torque_control gz_smc_cart_node_base --ros-args -p rho_func:=sign -p test_num:=1 -p t_sim:=20.0
 //
-//    ros2 run open_manipulator_x_torque_control gz_smc_cart_node_base --ros-args -p rho_func:=sat -p phi:=0.05 -p test_num:=2 -p t_sim:=20.0
+//    ros2 run open_manipulator_x_torque_control gz_smc_cart_node_base --ros-args -p rho_func:=sat -p phi:=0.15 -p test_num:=2 -p t_sim:=20.0
 //
 //  ──────────────────────────────────────────────────────────────────────────
 //  SECCIONES A COMPLETAR:
@@ -137,9 +137,12 @@ static const Eigen::Vector4d Y_START {0.0, 0.0, 0.0, 0.0};  // COMPLETAR
 //  Criterio: K_S esta en unidades de aceleracion cartesiana y solo debe
 //  dominar la INCERTIDUMBRE acotada, no la dinamica completa. Un K_S grande
 //  produce chattering |s| ~ K_S*Ts fuera de la capa limite (sat degenera en
-//  sign) y un Lambda_Y alto (>10) demanda aceleraciones imposibles con
+//  sign) y un Lambda_Y muy alto demanda aceleraciones imposibles con
 //  tau_max = 1.2 N·m (saturacion permanente y vibracion del robot).
 //  Ganancia efectiva dentro de la capa: K_V + K_S/phi <= (0.2~0.3)/Ts.
+//  Sugerencia: el canal phi (dominado por joint4, de inercia diminuta y
+//  friccion de Coulomb relativamente grande) tolera Lambda, K_V y K_S
+//  mayores que x, y, z.
 // ═══════════════════════════════════════════════════════════════════════════
 static const Eigen::Vector4d LAMBDA_Y = {0.0, 0.0, 0.0, 0.0};  // COMPLETAR
 static const Eigen::Vector4d K_V      = {0.0, 0.0, 0.0, 0.0};  // COMPLETAR
@@ -282,7 +285,7 @@ public:
     this->declare_parameter<int>        ("test_num", 1);
     this->declare_parameter<double>     ("t_sim",    0.0);
     this->declare_parameter<std::string>("rho_func", "sign");
-    this->declare_parameter<double>     ("phi",      0.05);
+    this->declare_parameter<double>     ("phi",      0.15);
 
     const int         test_num = this->get_parameter("test_num").as_int();
     t_sim_                     = this->get_parameter("t_sim").as_double();
