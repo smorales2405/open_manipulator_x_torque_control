@@ -3,8 +3,13 @@
 //  Control por Modo Deslizante en espacio articular — OpenMANIPULATOR-X (Gazebo)
 //
 //  Modelo dinamico nominal (Guia Lab 6, Sec. 6.1):
-//    M(q)*ddq + Phi(q,dq) = tau - tau_fric(dq)
-//    tau_fric   = B_FRIC.cwiseProduct(dq)   (B_FRIC = [0.0230, 0.0194, 0.0229, 0.0158] N·m·s/rad)
+//    M(q)*ddq + Phi(q,dq) = tau - tau_fric
+//    tau_fric = Fv·dq + Fc·tanh(dq_d/eps)    (feedforward de friccion del URDF)
+//      Fv, Fc : <dynamics damping/friction> de joint1..4, leidos del modelo
+//               Pinocchio — los mismos valores que simula Gazebo con
+//               damping_scale = 1.0 y friction_scale = 1.0.
+//      El Coulomb usa la velocidad DESEADA dq_d (senal limpia): con dq medida
+//      el tanh conmutaria con el ruido cerca de velocidad cero.
 //
 //  Superficie deslizante articular:
 //    e_q  = q  - q_d               (error de posicion)
@@ -13,7 +18,7 @@
 //
 //  Ley de control SMC (ley de alcance exponencial + conmutacion):
 //    v_q  = ddq_d - Lambda_q*e_dq - K_v*s_q - K_s*rho(s_q)
-//    tau  = M(q)*v_q + Phi(q,dq) + tau_fric(dq)
+//    tau  = M(q)*v_q + Phi(q,dq) + tau_fric
 //    tau_sat = clamp(tau, -TAU_MAX, TAU_MAX)
 //
 //  Funciones de conmutacion (aplicadas elemento a elemento):
@@ -21,9 +26,10 @@
 //    "sat"   ->  rho(s) = sat(s / phi)        phi: capa limite [rad/s]
 //
 //  Trayectoria articular de referencia (omega = 1.0 rad/s):
-//    q_d   = [ (pi/4)*sin(w*t),  -0.5+0.5*sin(w*t),  0.3-0.5*sin(w*t),  pi/4 ]
-//    dq_d  = [ (pi/4)w*cos(w*t), 0.5w*cos(w*t),      -0.5w*cos(w*t),      0   ]
-//    ddq_d = [-(pi/4)w²*sin(w*t),-0.5w²*sin(w*t),    0.5w²*sin(w*t),       0   ]
+//    q_d   = [ (pi/4)*sin(w*t), -0.45+0.5*sin(w*t), 0.35-0.5*sin(w*t), pi/4+0.25*sin(w*t) ]
+//    dq_d, ddq_d : derivadas analiticas exactas
+//
+//  Lazo de control: 200 Hz (Ts = 5 ms), alineado con los nodos gz de FL.
 //
 //  Suscriptor : /joint_states                   (sensor_msgs/JointState)
 //  Publicador : /arm_effort_controller/commands  (std_msgs/Float64MultiArray)
@@ -32,14 +38,16 @@
 //    test_num  [int]     1       — identificador del CSV generado
 //    t_sim     [double]  0.0     — duracion en segundos (0 = ilimitado)
 //    rho_func  [string]  "sign"  — funcion de conmutacion: "sign" | "sat"
-//    phi       [double]  0.05    — capa limite para sat(s/phi)  [rad/s]
+//    phi       [double]  0.1     — capa limite para sat(s/phi)  [rad/s]
 //
 //  CSV generado: data/lab6/sim/act1/gz_smc_joint_<rho_func>_<test_num>.csv
 //  Columnas: t, q1..q4, dq1..dq4, q1_des..q4_des, dq1_des..dq4_des,
-//            s1..s4, tau1..tau4, sat1..sat4
+//            s1..s4, tau1..tau4
+//  (Sat% se calcula en MATLAB desde tau con el criterio >= 0.99*tau_max.)
 //
-//  Nota: usar sim_init_config.yaml con use_fixed_init: true
-//        y q_init: [0.0, -0.5, 0.3, 0.785] para arrancar en q_d(0).
+//  Nota: usar sim_init_config.yaml con use_fixed_init: true,
+//        q_init: [0.0, -0.45, 0.35, 0.785] (= q_d(0)) y escalas nominales
+//        mass_inertia/damping/friction = 1.0.
 //
 //  Ejemplos de uso:
 //
@@ -47,9 +55,9 @@
 //    ros2 run open_manipulator_x_torque_control gz_smc_joint_node
 //      --ros-args -p rho_func:=sign -p test_num:=1 -p t_sim:=30.0
 //
-//    # Saturacion con capa limite phi = 0.05 rad/s:
+//    # Saturacion con capa limite phi = 0.1 rad/s:
 //    ros2 run open_manipulator_x_torque_control gz_smc_joint_node
-//      --ros-args -p rho_func:=sat -p phi:=0.05 -p test_num:=2 -p t_sim:=30.0
+//      --ros-args -p rho_func:=sat -p phi:=0.1 -p test_num:=2 -p t_sim:=30.0
 //
 // ============================================================================
 
@@ -85,16 +93,25 @@ using namespace std::chrono_literals;
 static constexpr double PI      = M_PI;
 static constexpr int    NARM    = 4;
 static constexpr double TAU_MAX = 1.2;    // [N·m] limite de torque por articulacion
-static const Eigen::Vector4d B_FRIC =
-  (Eigen::Vector4d() << 0.0230, 0.0194, 0.0229, 0.0158).finished();  // [N·m·s/rad] damping joint1..4 (URDF)
+// Suavizado del tanh de Coulomb del feedforward de friccion.
+// Se alimenta con la velocidad DESEADA (sin ruido): eps pequeno es seguro.
+static constexpr double FRIC_EPS = 0.05;  // [rad/s]
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  GANANCIAS SMC — ajustar aqui para cada articulacion
 //  Indice: [joint1, joint2, joint3, joint4]
+//
+//  Criterio de sintonia (lazo discreto a 200 Hz, Ts = 5 ms):
+//   · K_S solo debe dominar la INCERTIDUMBRE acotada (±20% de masa en la
+//     Parte B, carga de 100 g en la Parte C), no la dinamica completa.
+//     Un K_S grande produce un ciclo limite de chattering de amplitud
+//     |s| ~ K_S*Ts que nunca entra en la capa limite, y sat(s/phi)
+//     degenera en sign(s).
+//   · Ganancia efectiva dentro de la capa: K_V + K_S/phi <= (0.2~0.3)/Ts.
 // ═══════════════════════════════════════════════════════════════════════════
-static const Eigen::Vector4d LAMBDA_Q = {15.0,  15.0,  15.0,  25.0};   // superficie [1/s]
-static const Eigen::Vector4d K_V      = {5.0,  5.0,  10.0,  25.0};   // alcance exponencial (proporcional a s)
-static const Eigen::Vector4d K_S      = {50.0, 30.0, 100.0, 200.0};  // ganancia conmutacion rho(s)
+static const Eigen::Vector4d LAMBDA_Q = {10.0, 10.0, 10.0, 12.0};   // superficie [1/s]
+static const Eigen::Vector4d K_V      = { 8.0,  8.0,  8.0, 10.0};   // alcance exponencial (proporcional a s)
+static const Eigen::Vector4d K_S      = { 2.0,  3.0,  3.0,  3.0};   // ganancia conmutacion rho(s) [rad/s²]
 // ═══════════════════════════════════════════════════════════════════════════
 
 // ── Trayectoria de referencia articular ──────────────────────────────────────
@@ -164,7 +181,7 @@ public:
     this->declare_parameter<int>        ("test_num", 1);
     this->declare_parameter<double>     ("t_sim",    0.0);
     this->declare_parameter<std::string>("rho_func", "sign");
-    this->declare_parameter<double>     ("phi",      0.05);
+    this->declare_parameter<double>     ("phi",      0.1);
 
     const int         test_num = this->get_parameter("test_num").as_int();
     t_sim_                     = this->get_parameter("t_sim").as_double();
@@ -194,6 +211,12 @@ public:
     }
     data_ = pinocchio::Data(model_);
 
+    // Friccion articular del URDF (<dynamics damping/friction> joint1..4):
+    // feedforward de viscosa + Coulomb, mismos valores que simula Gazebo
+    // con damping_scale = 1.0 y friction_scale = 1.0.
+    fric_damping_ = model_.damping.head<NARM>();
+    fric_coulomb_ = model_.friction.head<NARM>();
+
     RCLCPP_INFO(this->get_logger(),
       "SMC articular — rho=%s  phi=%.3f  tau_max=%.2f N·m",
       rho_str_.c_str(), phi_, TAU_MAX);
@@ -203,8 +226,11 @@ public:
       K_V[0],      K_V[1],      K_V[2],      K_V[3],
       K_S[0],      K_S[1],      K_S[2],      K_S[3]);
     RCLCPP_INFO(this->get_logger(),
-      "B_fric=[%.4f %.4f %.4f %.4f] N·m·s/rad  (damping URDF)",
-      B_FRIC[0], B_FRIC[1], B_FRIC[2], B_FRIC[3]);
+      "Friccion URDF — Fv=[%.4f %.4f %.4f %.4f] N·m·s/rad  "
+      "Fc=[%.4f %.4f %.4f %.4f] N·m  (eps=%.2f)",
+      fric_damping_[0], fric_damping_[1], fric_damping_[2], fric_damping_[3],
+      fric_coulomb_[0], fric_coulomb_[1], fric_coulomb_[2], fric_coulomb_[3],
+      FRIC_EPS);
     if (t_sim_ > 0.0) {
       RCLCPP_INFO(this->get_logger(), "t_sim = %.1f s", t_sim_);
     } else {
@@ -222,7 +248,7 @@ public:
         last_js_ = msg;
       });
 
-    timer_ = this->create_wall_timer(10ms, [this]() { tick(); });
+    timer_ = this->create_wall_timer(5ms, [this]() { tick(); });
   }
 
   ~SMCJointSimNode()
@@ -253,8 +279,7 @@ private:
          << "q1_des,q2_des,q3_des,q4_des,"
          << "dq1_des,dq2_des,dq3_des,dq4_des,"
          << "s1,s2,s3,s4,"
-         << "tau1,tau2,tau3,tau4,"
-         << "sat1,sat2,sat3,sat4\n";
+         << "tau1,tau2,tau3,tau4\n";
     RCLCPP_INFO(this->get_logger(), "CSV: %s", csv_path_.c_str());
   }
 
@@ -279,7 +304,7 @@ private:
     }
   }
 
-  // ── Tick de control a 100 Hz ──────────────────────────────────────────────
+  // ── Tick de control a 200 Hz ──────────────────────────────────────────────
   void tick()
   {
     if (!last_js_) { return; }
@@ -303,7 +328,12 @@ private:
     pinocchio::nonLinearEffects(model_, data_, q_pin, dq_pin);
     const Eigen::Vector4d phi_nle = data_.nle.head<NARM>();
 
-    const Eigen::Vector4d tau_fric = B_FRIC.cwiseProduct(dq);
+    // Feedforward de friccion del URDF (Coulomb con la velocidad DESEADA)
+    Eigen::Vector4d tau_fric;
+    for (int i = 0; i < NARM; ++i) {
+      tau_fric[i] = fric_damping_[i] * dq[i]
+                  + fric_coulomb_[i] * std::tanh(ref.dq[i] / FRIC_EPS);
+    }
 
     // ── Ley SMC articular ──────────────────────────────────────────────────
     const Eigen::Vector4d e_q  = q  - ref.q;
@@ -340,14 +370,10 @@ private:
            << ',' << ref.dq[0]   << ',' << ref.dq[1]   << ',' << ref.dq[2]   << ',' << ref.dq[3]
            << ',' << s_q[0]      << ',' << s_q[1]      << ',' << s_q[2]      << ',' << s_q[3]
            << ',' << tau_sat[0]  << ',' << tau_sat[1]  << ',' << tau_sat[2]  << ',' << tau_sat[3]
-           << ',' << (std::abs(tau[0]) > TAU_MAX ? 1 : 0)
-           << ',' << (std::abs(tau[1]) > TAU_MAX ? 1 : 0)
-           << ',' << (std::abs(tau[2]) > TAU_MAX ? 1 : 0)
-           << ',' << (std::abs(tau[3]) > TAU_MAX ? 1 : 0)
            << '\n';
     }
 
-    t_ += 0.01;
+    t_ += 0.005;
 
     if (t_sim_ > 0.0 && t_ >= t_sim_) {
       RCLCPP_INFO(this->get_logger(),
@@ -366,6 +392,9 @@ private:
   // ── Miembros ───────────────────────────────────────────────────────────────
   pinocchio::Model model_;
   pinocchio::Data  data_;
+
+  Eigen::Vector4d fric_damping_;   // Fv del URDF [N·m·s/rad]
+  Eigen::Vector4d fric_coulomb_;   // Fc del URDF [N·m]
 
   double      t_;
   double      t_sim_;

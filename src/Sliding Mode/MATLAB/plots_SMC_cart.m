@@ -24,9 +24,9 @@ mode        = 'sim';    % 'sim'  = simulacion Gazebo (gz_smc_cart_node)
 
 rho_func    = 'sign';   % Funcion de conmutacion: 'sign' | 'sat'
 
-test_num    = 1;        % Identificador del ensayo (test_num usado al lanzar el nodo)
+test_num    = 3;        % Identificador del ensayo (test_num usado al lanzar el nodo)
 
-EXPORT_FIGS = false;    % true  = guardar PNG (300 dpi) y EPS vectorial (600 dpi)
+EXPORT_FIGS = true;    % true  = guardar PNG (300 dpi) y EPS vectorial (600 dpi)
                         % false = solo visualizar
 
 TAU_MAX     = 1.2;      % [N·m] limite de torque (debe coincidir con el nodo)
@@ -76,9 +76,9 @@ ydot_des = [T.xdot_des, T.ydot_des, T.zdot_des, T.phidot_des];
 % Superficies deslizantes cartesianas
 s_y = [T.s1, T.s2, T.s3, T.s4];
 
-% Torques y banderas de saturacion
+% Torques y banderas de saturacion (criterio de la guia: >= 0.99*tau_max)
 tau = [T.tau1, T.tau2, T.tau3, T.tau4];
-sat = [T.sat1, T.sat2, T.sat3, T.sat4];
+sat = abs(tau) >= 0.99 * TAU_MAX;
 
 % Condicionamiento del Jacobiano
 cond_J = T.cond_J;

@@ -15,8 +15,11 @@
 use_fixed_init: true
 #q_init: [0.0, 0.0, 0.0, 0.0]             # x0 = [0, 0, 0, 0]
 #q_init: [1.5708, 0.0, 0.5236, 1.0472]    # x0 = [pi/2, 0, pi/6, pi/3]
-q_init: [0.0, -0.55, 0.10, 0.50]          # MRAC 12p: centros del multiseno seguro (z_EE>=83mm)
+#q_init: [0.0, -0.55, 0.10, 0.50]          # MRAC 12p: centros del multiseno seguro (z_EE>=83mm)
 #q_init: [0.0, -0.30, 0.30, 0.80]         # Lab7 Act2 MRAC 8p: centros del multiseno original
+#q_init: [0.0, 0.91, 0.54, -1.68]         # Lab5 TV-LQR: pose inicial de la trayectoria optimizada
+q_init: [0.0, -0.45, 0.35, 0.785]         # Lab6 Act1 SMC articular: q_d(0)
+# Lab6 Act2 SMC cartesiano: usar use_fixed_init: false (equilibrio bajo gravedad)
 
 # ─── Obstáculo MDF ───────────────────────────────────────────────────────────
 #
@@ -57,6 +60,10 @@ obstacle_pose: [0.1125, 0.0, 0.0, 0.0, 0.0, 1.5708]
 # MRAC 12p — C1 gemelo digital: 1.0/1.0/1.0 (friccion Coulomb ENCENDIDA).
 #   C2: friction/damping en {0.5, 1.5} | C3: ej. 1.1/1.3/0.7
 # Act2 MRAC 8p usa: mass 1.2, damping 1.1, friction 0.0 (restaurar para ese lab).
+# Lab6 SMC (los nodos compensan la friccion del URDF con feedforward):
+#   Parte A nominal        : 1.0 / 1.0 / 1.0
+#   Parte B inc. parametrica: 1.2 / 1.1 / 1.0
+#   Parte C carga adicional : 1.0 / 1.0 / 1.0 + spawn_load: true
 mass_inertia_scale: 1.0
 damping_scale: 1.0
 friction_scale: 1.0

@@ -86,7 +86,7 @@ for k = 1:2
     data(k).q_des = [Tk.q1_des, Tk.q2_des, Tk.q3_des, Tk.q4_des];
     data(k).e_q   = data(k).q - data(k).q_des;
     data(k).tau   = [Tk.tau1,   Tk.tau2,   Tk.tau3,   Tk.tau4  ];
-    data(k).sat   = [Tk.sat1,   Tk.sat2,   Tk.sat3,   Tk.sat4  ];
+    data(k).sat   = abs(data(k).tau) >= 0.99 * TAU_MAX;   % criterio de la guia
 end
 
 %% ── Metricas comparativas ────────────────────────────────────────────────────
