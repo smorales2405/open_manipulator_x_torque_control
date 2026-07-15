@@ -16,12 +16,12 @@
 clear; clc; close all;
 
 %% ── Configuracion ────────────────────────────────────────────────────────────
-mode        = 'sim';    % 'sim'  = simulacion Gazebo (gz_SMC_q_node)
+mode        = 'real';    % 'sim'  = simulacion Gazebo (gz_SMC_q_node)
                         % 'real' = implementacion hardware (hw_smc_q_node)
 
-rho_func    = 'sign';   % Funcion de conmutacion usada: 'sign' | 'sat'
+rho_func    = 'sat';   % Funcion de conmutacion usada: 'sign' | 'sat'
 
-test_num    = 3;        % Identificador del ensayo (test_num usado al lanzar el nodo)
+test_num    = 1;        % Identificador del ensayo (test_num usado al lanzar el nodo)
 
 EXPORT_FIGS = true;    % true  = guardar PNG (300 dpi) y EPS vectorial (600 dpi)
                         % false = solo visualizar
@@ -41,7 +41,7 @@ switch mode
         mode_label = 'Simulacion';
     case 'real'
         csv_file   = fullfile(pkg_dir, 'data', 'lab6', 'real', 'act1', ...
-                              sprintf('hw_smc_art_%s_%d.csv', rho_func, test_num));
+                              sprintf('hw_smc_joint_%s_%d.csv', rho_func, test_num));
         output_dir = fullfile(pkg_dir, 'plots', 'lab6', 'real', 'act1', ...
                               sprintf('test%d_%s', test_num, rho_func));
         mode_label = 'Implementacion';
