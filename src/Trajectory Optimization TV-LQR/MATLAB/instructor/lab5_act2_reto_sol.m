@@ -19,8 +19,19 @@
 % trayectorias (Seccion 3). Costo, restricciones y opciones son IDENTICOS a
 % lab5_act2_sol.m.
 %
-% Obstaculo, marco link1 y caja de exclusion: identicos a lab5_act2_sol.m
-% (ver la derivacion completa en su cabecera y su Seccion 2).
+% Obstaculo, marco link1 y caja de exclusion EE: identicos a lab5_act2_sol.m
+% (ver la derivacion completa en su cabecera y su Seccion 2). El reto agrega
+% DOS correcciones tras el incidente sim test5 / hw test7 (2026-07-14, el
+% gripper golpeo el techo al salir y tumbo el arco en hardware):
+%   1) dq_max 10 → 3.5 rad/s: la solucion anterior exigia dq2_ref = 9.7
+%      rad/s al remontar la esquina — el XM430-W350 topa en ~4.1 rad/s bajo
+%      carga (URDF: velocity=4.8) → J2 acumulo 0.72 rad de error y el EE
+%      subio 33 mm sobre la referencia aun bajo el techo.
+%   2) Constraint adicional (restr): la esquina superior-TRASERA del cuerpo
+%      del gripper (d_rear=106 mm tras el punto EE, h_up=40 mm — medido en
+%      las mallas) debe quedar fuera de la banda del techo. La caja EE sola
+%      asumia el tope a +40 mm, valido solo con pitch φ≈0; la referencia
+%      cruzaba la fase baja con φ hasta +0.47 → esquina real a +79 mm.
 %
 % Figuras:
 %   Fig 1 — Trayectorias articulares optimizadas q_ref
@@ -39,8 +50,10 @@ rng(1);
 EXPORT_FIGS = false;
 
 % ── Identificadores de sesión (editar antes de cada ejecución) ───────────────
-trial_num          = 1;     % número de prueba — nombra el log y el zmin
-use_saved_solution = false; % true → carga N, Ts, x0, yf y zmin desde el .mat
+trial_num          = 2;     % número de prueba — nombra el log y el zmin
+use_saved_solution = true; % true → carga N, Ts, x0, yf y zmin desde el .mat
+                            % (trial 1 = golpeo el techo: dq_ref infactible
+                            %  y esquina del gripper sin modelar — no usar)
 
 pkg_dir    = '/home/utec/open_manx_ws/src/open_manipulator_x_torque_control';
 matlab_dir = fullfile(pkg_dir, 'src', 'Trajectory Optimization TV-LQR', 'MATLAB');
@@ -73,11 +86,9 @@ USE_PARALLEL = true;
 %  1. Parámetros generales  (iguales a Act. 1)
 %  ========================================================================
 
-N  = 100;   % 1200 variables de decision: N*(nx+nu). Horizonte 5 s (el rodeo
-            % es ~3x mas largo que la trayectoria de la Act. 2). u_ref toca
-            % |u|=1 solo 1 muestra en J2 y J3 (t~3 s, al remontar la esquina
-            % frontal con el brazo extendido) — puntual y aceptable; tambien
-            % converge con N=80/4 s con la misma saturacion puntual.
+N  = 120;   % 1440 variables de decision: N*(nx+nu). Horizonte 6 s: con
+            % dq_max = 3.5 rad/s el retroceso necesita mas tiempo que los
+            % 5 s del trial 1 (que ademas explotaba dq infactibles).
 Ts = 0.05;
 nx = 8;
 nu = 4;
@@ -107,7 +118,11 @@ ukmin = -1.0;
 q_lower = [-3/4*pi; -11/18*pi; -11/18*pi;  -5/9*pi];
 %q_lower = [-3/4*pi; -11/18*pi; -11/18*pi;  -deg2rad(106)];
 q_upper = [ 3/4*pi;   5/9*pi;     pi/2; 23/36*pi];
-dq_max  = 10;
+% Velocidad articular maxima FISICA: el XM430-W350 topa en 4.8 rad/s sin
+% carga (URDF velocity=4.8; medido bajo carga ~4.1 en hw test7). Con el
+% bound anterior (10) el optimizador planifico dq2_ref = 9.7 rad/s que el
+% motor no puede seguir → 0.72 rad de error de J2 y golpe contra el techo.
+dq_max  = 3.5;
 
 %% ========================================================================
 %  2. Parámetros del obstáculo MDF
@@ -151,6 +166,25 @@ EPS_CLR   = 0.002;   % [m] holgura minima exigida fuera de la caja
 box_x = [x_lo - g_fwd - m_clr,   x_hi + g_fwd + m_clr];    % [0.1335, 0.3455]
 box_z = [z_ceil - 0.003 - h_grip_up - m_clr, ...           %  0.095 (bajo techo)
          z_ceil + h_grip + m_clr];                         %  0.194 (sobre techo)
+
+% ── Esquina superior-trasera del gripper (paso por debajo, pitch-aware) ──
+% La banda inferior de box_z asume el tope del gripper a h_grip_up = 40 mm
+% sobre el eje — valido solo con pitch φ≈0. Perfil medido en las mallas
+% (link5.stl + palmas, marco link5): la zona alta (~35-40 mm) se extiende
+% de 56 a 106 mm POR DETRAS del punto EE (tope del servo del gripper). Con
+% pitch φ>0 (punta abajo) esa esquina sube d_rear·sinφ + h_up·cosφ sobre el
+% z del EE: a φ=+0.47 (trial 1) son +79 mm, no 40 → golpe contra el techo
+% (hw test7 tumbo el arco; Gazebo test5 rozo). Se agrega en restr un
+% constraint para el punto esquina:
+%   p_top = (x - d_rear·cosφ + h_up·sinφ,  z + d_rear·sinφ + h_up·cosφ)
+% que debe quedar FUERA de la banda fisica del techo inflada con m_top:
+d_rear = 0.106;   % [m] esquina trasera de la zona alta, tras el punto EE
+m_top  = 0.015;   % [m] margen banda del techo: 10 diseño + 5 seguimiento hw
+box2_x = [x_lo - m_top,           x_hi + m_top];            % [0.1495, 0.3295]
+box2_z = [z_ceil - 0.003 - m_top, z_ceil + m_top];          % [0.130,  0.163]
+% A φ=0 esto equivale a EE z <= 0.088 bajo el techo (antes 0.093); con
+% φ>0 el limite baja automaticamente. x0 y yf siguen factibles:
+% c_top(x0) = -0.072, c_top(yf) = -0.072.
 
 % Constraint (ver restr): fuera de la caja en x O en z, con holgura EPS_CLR:
 %   c = EPS_CLR - max( max(box_x(1)-x, x-box_x(2)), max(box_z(1)-z, z-box_z(2)) ) ≤ 0
@@ -216,16 +250,17 @@ for k = 1:N
     z0(nx*N + (k-1)*nu + (1:nu)) = max(min(ugk(:), ukmax), ukmin);
 end
 
-% La ruta seed debe quedar completamente FUERA de la caja (c <= 0 en todos
-% los nodos); si esto falla, revisar q_exit/q_up contra la geometria.
-c_box_seed = @(y) EPS_CLR - max(max(box_x(1)-y(1), y(1)-box_x(2)), ...
-                                max(box_z(1)-y(3), y(3)-box_z(2)));
-c_seed_max = -inf;
+% La ruta seed debe quedar completamente FUERA de la caja EE y de la banda
+% del techo (esquina superior-trasera); si falla, revisar q_exit/q_up.
+c_seed_max = -inf;  c_top_seed_max = -inf;
 for k = 1:N+1
-    c_seed_max = max(c_seed_max, c_box_seed(open_manx_fkin(q_seed(:,k))));
+    ys = open_manx_fkin(q_seed(:,k));
+    c_seed_max = max(c_seed_max, c_out_box(ys(1), ys(3), box_x, box_z, EPS_CLR));
+    [cxs, czs] = top_corner(ys, d_rear, h_grip_up);
+    c_top_seed_max = max(c_top_seed_max, c_out_box(cxs, czs, box2_x, box2_z, EPS_CLR));
 end
-fprintf('Warm start: semilla 3 tramos alrededor de la caja (max c_seed = %+.4f)\n\n', ...
-        c_seed_max);
+fprintf('Warm start: semilla 3 tramos (max c_seed EE = %+.4f | esquina = %+.4f)\n\n', ...
+        c_seed_max, c_top_seed_max);
 
 % ── Aceleracion: estado del MEX + pool paralelo ──────────────────────────
 if endsWith(which('OMDyn'), mexext)
@@ -269,7 +304,8 @@ if ~use_saved_solution
     [zmin, ~, exitflag, output] = fmincon( ...
         @(z) Jcosto(z, Ts, N, nx, nu, x0, yf), ...
         z0, [], [], [], [], lb, ub, ...
-        @(z) restr(z, Ts, N, nx, nu, x0, box_x, box_z, EPS_CLR), ...
+        @(z) restr(z, Ts, N, nx, nu, x0, box_x, box_z, box2_x, box2_z, ...
+                   EPS_CLR, d_rear, h_grip_up), ...
         options);
     save(zmin_file, 'zmin', 'exitflag', 'output', 'N', 'Ts', 'x0', 'yf');
     fprintf('Guardado: %s\n', zmin_file);
@@ -305,38 +341,48 @@ Qchk = [x0(1:4), Xref(1:4,:)];                              % nodos 0..N
 Qchk = [Qchk(:,1), reshape([0.5*(Qchk(:,1:N) + Qchk(:,2:N+1)); ...
                             Qchk(:,2:N+1)], 4, [])];        % + puntos medios
 max_cxz       = -inf;
+max_ctop      = -inf;   % constraint de la esquina superior-trasera
 min_over_ee   = inf;    % fase alta: EE sobre el techo fisico
 min_over_grip = inf;    % fase alta: esquina de dedos sobre el techo
-min_under_top = inf;    % fase baja: tope del gripper bajo la cara inferior
+min_under_top = inf;    % fase baja: esquina sup-trasera bajo la cara inferior
 min_floor     = inf;    % dedos sobre la placa (toda la trayectoria)
 for k = 1:size(Qchk, 2)
     yk = open_manx_fkin(Qchk(:,k));
     max_cxz = max(max_cxz, c_box_chk(yk));
+    [cxk, czk] = top_corner(yk, d_rear, h_grip_up);
+    max_ctop = max(max_ctop, c_out_box(cxk, czk, box2_x, box2_z, EPS_CLR));
     h_eff = h_fing*cos(yk(4)) + g_fwd*max(sin(yk(4)), 0);
     min_floor = min(min_floor, yk(3) - h_eff);
-    if yk(1) >= x_lo && yk(1) <= x_hi && abs(yk(2)) <= ry_obs
-        if yk(3) >= z_ceil
-            min_over_ee   = min(min_over_ee,   yk(3) - z_ceil);
-            min_over_grip = min(min_over_grip, yk(3) - h_eff - z_ceil);
-        elseif yk(3) < z_roof_inf
-            min_under_top = min(min_under_top, z_roof_inf - (yk(3) + h_grip_up));
-        end
+    if cxk >= x_lo && cxk <= x_hi && czk < z_roof_inf
+        min_under_top = min(min_under_top, z_roof_inf - czk);   % pitch-aware
+    end
+    if yk(1) >= x_lo && yk(1) <= x_hi && abs(yk(2)) <= ry_obs && yk(3) >= z_ceil
+        min_over_ee   = min(min_over_ee,   yk(3) - z_ceil);
+        min_over_grip = min(min_over_grip, yk(3) - h_eff - z_ceil);
     end
 end
 
-fprintf('--- Verificación obstáculo (caja de exclusion, nodos + medios) ---\n');
-if max_cxz <= 1e-4    % ConstraintTolerance de fmincon
-    fprintf('  OK — constraint satisfecho (max c = %.2e)\n\n', max_cxz);
+fprintf('--- Verificación obstáculo (caja EE + esquina, nodos + medios) ---\n');
+if max(max_cxz, max_ctop) <= 1e-4    % ConstraintTolerance de fmincon
+    fprintf('  OK — constraints satisfechos (max c EE = %.2e | esquina = %.2e)\n\n', ...
+            max_cxz, max_ctop);
 else
-    fprintf('  ADVERTENCIA: constraint violado (max c = %.2e > 1e-4)\n', max_cxz);
-    fprintf('  EE entra a la caja de exclusion del techo. Re-optimizar.\n\n');
+    fprintf('  ADVERTENCIA: constraint violado (c EE = %.2e | esquina = %.2e)\n', ...
+            max_cxz, max_ctop);
+    fprintf('  El gripper entra a la zona de exclusion del techo. Re-optimizar.\n\n');
 end
-fprintf('  Fase baja : tope del gripper vs cara inferior del techo  min %+.1f mm\n', ...
-        1e3*min_under_top);
+if isinf(min_under_top)
+    fprintf('  Fase baja : esquina sup-trasera nunca entra bajo el techo\n');
+else
+    fprintf('  Fase baja : esquina sup-trasera vs cara inferior del techo  min %+.1f mm\n', ...
+            1e3*min_under_top);
+end
 fprintf('  Fase alta : EE %+.1f mm | esquina de dedos %+.1f mm sobre el techo\n', ...
         1e3*min_over_ee, 1e3*min_over_grip);
-fprintf('  Dedos vs placa (toda la trayectoria)                     min %+.1f mm\n\n', ...
+fprintf('  Dedos vs placa (toda la trayectoria)                        min %+.1f mm\n', ...
         1e3*min_floor);
+fprintf('  Max |dq_ref|: [%s] rad/s (bound %.1f, motor ~4.8)\n\n', ...
+        num2str(max(abs(Xref(5:8,:)), [], 2)', ' %.2f'), dq_max);
 
 %% ========================================================================
 %  7. Métricas optimización
@@ -720,23 +766,27 @@ end
 
 % ─────────────────────────────────────────────────────────────────────────
 
-function [c_des, c_eq] = restr(z, Ts, N, nx, nu, x0, box_x, box_z, eps_clr)
+function [c_des, c_eq] = restr(z, Ts, N, nx, nu, x0, box_x, box_z, ...
+                               box2_x, box2_z, eps_clr, d_rear, h_up)
 % Restricciones del problema de optimización.
-% Constraint de obstáculo: el EE debe quedar FUERA de la caja de exclusion
-% del techo (inflada con la geometria del gripper) en x O en z:
-%   c = eps_clr - max(dx_out, dz_out) ≤ 0
-%   dx_out = max(box_x(1)-x, x-box_x(2))   (>0 si esta fuera de la caja en x)
-%   dz_out = max(box_z(1)-z, z-box_z(2))   (>0 si esta fuera de la caja en z)
-% Dentro de la caja ambos son negativos → c > 0 (violado, magnitud =
-% penetracion + eps_clr). Se evalúa en cada nodo Y en el punto medio
-% articular de cada intervalo: con Ts=0.05 el EE recorre hasta ~15 mm entre
-% nodos y podría "cortar" la esquina del techo entre dos nodos factibles.
+% Constraint de obstáculo (2 por punto evaluado):
+%  (a) el punto EE debe quedar FUERA de la caja de exclusion del techo
+%      (inflada con la geometria de los DEDOS del gripper) en x O en z:
+%        c = eps_clr - max(dx_out, dz_out) ≤ 0
+%        dx_out = max(box_x(1)-x, x-box_x(2))  (>0 si esta fuera en x)
+%        dz_out = max(box_z(1)-z, z-box_z(2))  (>0 si esta fuera en z)
+%      Dentro de la caja ambos son negativos → c > 0 (violado, magnitud =
+%      penetracion + eps_clr).
+%  (b) la esquina superior-TRASERA del cuerpo del gripper (d_rear tras el
+%      EE, h_up sobre el eje — sube d_rear·sinφ extra con pitch φ>0) debe
+%      quedar FUERA de la banda fisica del techo (box2). Sin esto, el plan
+%      del trial 1 rozo/golpeo el techo al salir con φ hasta +0.47.
+% Ambos se evalúan en cada nodo Y en el punto medio articular de cada
+% intervalo: con Ts=0.05 el EE recorre hasta ~15 mm entre nodos y podría
+% "cortar" la esquina del techo entre dos nodos factibles.
 
     c_eq  = zeros(nx*N, 1);
-    c_des = zeros(2*N, 1);
-
-    c_box = @(y) eps_clr - max(max(box_x(1) - y(1), y(1) - box_x(2)), ...
-                               max(box_z(1) - y(3), y(3) - box_z(2)));
+    c_des = zeros(4*N, 1);
 
     for k = 0:N-1
         if k == 0, xk = x0; else, xk = z(nx*(k-1) + (1:nx)); end
@@ -750,10 +800,34 @@ function [c_des, c_eq] = restr(z, Ts, N, nx, nu, x0, box_x, box_z, eps_clr)
         k4 = OM4dof(k*Ts + Ts,   xk + Ts*k3,   uk);
         c_eq(nx*k + (1:nx)) = xkp1 - (xk + Ts*(k1 + 2*k2 + 2*k3 + k4)/6);
 
-        % Evasión del techo del arco MDF: nodo k+1 y punto medio del intervalo
-        c_des(2*k+1) = c_box(open_manx_fkin(xkp1(1:4)));
-        c_des(2*k+2) = c_box(open_manx_fkin(0.5*(xk(1:4) + xkp1(1:4))));
+        % Evasión del techo: nodo k+1 y punto medio, EE + esquina superior
+        yk = open_manx_fkin(xkp1(1:4));
+        ym = open_manx_fkin(0.5*(xk(1:4) + xkp1(1:4)));
+        c_des(4*k+1) = c_out_box(yk(1), yk(3), box_x, box_z, eps_clr);
+        c_des(4*k+2) = c_out_box(ym(1), ym(3), box_x, box_z, eps_clr);
+        [cx, cz]     = top_corner(yk, d_rear, h_up);
+        c_des(4*k+3) = c_out_box(cx, cz, box2_x, box2_z, eps_clr);
+        [cx, cz]     = top_corner(ym, d_rear, h_up);
+        c_des(4*k+4) = c_out_box(cx, cz, box2_x, box2_z, eps_clr);
     end
+end
+
+% ─────────────────────────────────────────────────────────────────────────
+
+function c = c_out_box(px, pz, bx, bz, eps_clr)
+% c ≤ 0 si el punto (px,pz) queda FUERA de la caja bx×bz con holgura eps_clr.
+    c = eps_clr - max(max(bx(1) - px, px - bx(2)), max(bz(1) - pz, pz - bz(2)));
+end
+
+% ─────────────────────────────────────────────────────────────────────────
+
+function [cx, cz] = top_corner(y, d_rear, h_up)
+% Esquina superior-trasera del cuerpo del gripper en el plano XZ.
+% y = [x; y; z; φ] del EE (open_manx_fkin). El punto esta d_rear por detras
+% del EE a lo largo del eje del gripper y h_up por encima; con pitch φ>0
+% (punta abajo) la esquina trasera SUBE.
+    cx = y(1) - d_rear*cos(y(4)) + h_up*sin(y(4));
+    cz = y(3) + d_rear*sin(y(4)) + h_up*cos(y(4));
 end
 
 % ─────────────────────────────────────────────────────────────────────────
