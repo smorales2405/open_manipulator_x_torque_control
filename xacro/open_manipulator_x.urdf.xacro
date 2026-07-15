@@ -15,8 +15,10 @@
     damping_scale      : factor multiplicativo para damping de joint1..joint4
     friction_scale     : factor multiplicativo para friction de joint1..joint4
 
+  Cambios adicionales:
+    - Meshes: ahora se cargan desde este mismo paquete (meshes/), ya no desde open_manipulator_x_description
+
   Sin cambios:
-    - Meshes (mismo paquete open_manipulator_x_description)
     - Origenes y ejes articulares
     - Gripper links inertial (masa dummy)
     - Estructura dummy_mimic_fix
@@ -29,7 +31,7 @@
 
     <xacro:property
       name="meshes_file_direction"
-      value="package://open_manipulator_x_description/meshes"/>
+      value="package://open_manipulator_x_torque_control/meshes"/>
 
     <link name="${prefix}link1">
       <visual>

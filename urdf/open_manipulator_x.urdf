@@ -168,14 +168,14 @@
     <visual>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="package://open_manipulator_description/meshes/chain_link1.stl" scale="0.001 0.001 0.001"/>
+        <mesh filename="package://open_manipulator_x_torque_control/meshes/link1.stl" scale="0.001 0.001 0.001"/>
       </geometry>
       <material name="grey"/>
     </visual>
     <collision>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="package://open_manipulator_description/meshes/chain_link1.stl" scale="0.001 0.001 0.001"/>
+        <mesh filename="package://open_manipulator_x_torque_control/meshes/link1.stl" scale="0.001 0.001 0.001"/>
       </geometry>
     </collision>
     <inertial>
@@ -198,14 +198,14 @@
     <visual>
       <origin rpy="0 0 0" xyz="0 0 0.019"/>
       <geometry>
-        <mesh filename="package://open_manipulator_description/meshes/chain_link2.stl" scale="0.001 0.001 0.001"/>
+        <mesh filename="package://open_manipulator_x_torque_control/meshes/link2.stl" scale="0.001 0.001 0.001"/>
       </geometry>
       <material name="grey"/>
     </visual>
     <collision>
       <origin rpy="0 0 0" xyz="0 0 0.019"/>
       <geometry>
-        <mesh filename="package://open_manipulator_description/meshes/chain_link2.stl" scale="0.001 0.001 0.001"/>
+        <mesh filename="package://open_manipulator_x_torque_control/meshes/link2.stl" scale="0.001 0.001 0.001"/>
       </geometry>
     </collision>
     <!-- Updated from ROBOTIS e-Manual inertial data, using mass/CoG/Inertia Tensor at CENTER OF GRAVITY, transformed from C1 frame to URDF link frame. R = I (no rotation). -->
@@ -229,14 +229,14 @@
     <visual>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="package://open_manipulator_description/meshes/chain_link3.stl" scale="0.001 0.001 0.001"/>
+        <mesh filename="package://open_manipulator_x_torque_control/meshes/link3.stl" scale="0.001 0.001 0.001"/>
       </geometry>
       <material name="grey"/>
     </visual>
     <collision>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="package://open_manipulator_description/meshes/chain_link3.stl" scale="0.001 0.001 0.001"/>
+        <mesh filename="package://open_manipulator_x_torque_control/meshes/link3.stl" scale="0.001 0.001 0.001"/>
       </geometry>
     </collision>
     <!-- Updated from ROBOTIS e-Manual inertial data, using mass/CoG/Inertia Tensor at CENTER OF GRAVITY, transformed from C2 frame to URDF link frame. R = Rz(180deg): r_urdf=(-x,-y,z); Ixz->-Ixz, Iyz->-Iyz. -->
@@ -260,14 +260,14 @@
     <visual>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="package://open_manipulator_description/meshes/chain_link4.stl" scale="0.001 0.001 0.001"/>
+        <mesh filename="package://open_manipulator_x_torque_control/meshes/link4.stl" scale="0.001 0.001 0.001"/>
       </geometry>
       <material name="grey"/>
     </visual>
     <collision>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="package://open_manipulator_description/meshes/chain_link4.stl" scale="0.001 0.001 0.001"/>
+        <mesh filename="package://open_manipulator_x_torque_control/meshes/link4.stl" scale="0.001 0.001 0.001"/>
       </geometry>
     </collision>
     <!-- Updated from ROBOTIS e-Manual inertial data, using mass/CoG/Inertia Tensor at CENTER OF GRAVITY, transformed from C3 frame to URDF link frame. R = R_alt: C3_z->URDF_x, C3_y->-URDF_y, C3_x->+URDF_z; I_urdf=[Izz,-Iyz,Ixz; -Iyz,Iyy,-Ixy; Ixz,-Ixy,Ixx]. -->
@@ -291,14 +291,14 @@
     <visual>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="package://open_manipulator_description/meshes/chain_link5.stl" scale="0.001 0.001 0.001"/>
+        <mesh filename="package://open_manipulator_x_torque_control/meshes/link5.stl" scale="0.001 0.001 0.001"/>
       </geometry>
       <material name="grey"/>
     </visual>
     <collision>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="package://open_manipulator_description/meshes/chain_link5.stl" scale="0.001 0.001 0.001"/>
+        <mesh filename="package://open_manipulator_x_torque_control/meshes/link5.stl" scale="0.001 0.001 0.001"/>
       </geometry>
     </collision>
     <!-- Updated from ROBOTIS e-Manual inertial data, using mass/CoG/Inertia Tensor at CENTER OF GRAVITY, transformed from C4 frame to URDF link frame. R = R_alt: C4_z->URDF_x, C4_y->-URDF_y, C4_x->+URDF_z; I_urdf=[Izz,-Iyz,Ixz; -Iyz,Iyy,-Ixy; Ixz,-Ixy,Ixx]. -->
@@ -322,14 +322,14 @@
     <visual>
       <origin rpy="0 0 0" xyz="0.0 0.0 0"/>
       <geometry>
-        <mesh filename="package://open_manipulator_description/meshes/chain_link_grip_l.stl" scale="0.001 0.001 0.001"/>
+        <mesh filename="package://open_manipulator_x_torque_control/meshes/gripper_left_palm.stl" scale="0.001 0.001 0.001"/>
       </geometry>
       <material name="grey"/>
     </visual>
     <collision>
       <origin rpy="0 0 0" xyz="0.0 0.0 0"/>
       <geometry>
-        <mesh filename="package://open_manipulator_description/meshes/chain_link_grip_l.stl" scale="0.001 0.001 0.001"/>
+        <mesh filename="package://open_manipulator_x_torque_control/meshes/gripper_left_palm.stl" scale="0.001 0.001 0.001"/>
       </geometry>
     </collision>
     <inertial>
@@ -353,14 +353,14 @@
     <visual>
       <origin rpy="0 0 0" xyz="0.0 -0.0 0"/>
       <geometry>
-        <mesh filename="package://open_manipulator_description/meshes/chain_link_grip_r.stl" scale="0.001 0.001 0.001"/>
+        <mesh filename="package://open_manipulator_x_torque_control/meshes/gripper_right_palm.stl" scale="0.001 0.001 0.001"/>
       </geometry>
       <material name="grey"/>
     </visual>
     <collision>
       <origin rpy="0 0 0" xyz="0.0 -0.0 0"/>
       <geometry>
-        <mesh filename="package://open_manipulator_description/meshes/chain_link_grip_r.stl" scale="0.001 0.001 0.001"/>
+        <mesh filename="package://open_manipulator_x_torque_control/meshes/gripper_right_palm.stl" scale="0.001 0.001 0.001"/>
       </geometry>
     </collision>
     <inertial>
