@@ -20,6 +20,7 @@ set(FL_INSTR   "src/Feedback Linearization/instructor")
 set(FL_STUD    "src/Feedback Linearization/student")
 set(TO_INSTR   "src/Trajectory Optimization TV-LQR/instructor")
 set(GC_SRC     "src/Gravity Compensation")
+set(IMP_SRC    "src/Impedance")
 set(IDENT_SRC  "src/Identification")
 set(SMC_INSTR  "src/Sliding Mode/instructor")
 set(SMC_STUD   "src/Sliding Mode/student")
@@ -166,6 +167,22 @@ target_link_libraries(hw_gravity_comp_node
   Eigen3::Eigen)
 target_compile_features(hw_gravity_comp_node PUBLIC cxx_std_17)
 target_compile_definitions(hw_gravity_comp_node PRIVATE
+  "PACKAGE_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\""
+  "PACKAGE_URDF_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/urdf\""
+  "PACKAGE_CONFIG_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/config\""
+  COAL_DISABLE_HPP_FCL_WARNINGS)
+
+# ── hw_impedance_control_node ────────────────────────────────────────────────
+add_executable(hw_impedance_control_node "${IMP_SRC}/hw_impedance_control_node.cpp")
+ament_target_dependencies(hw_impedance_control_node rclcpp sensor_msgs)
+target_include_directories(hw_impedance_control_node PRIVATE ${dynamixel_sdk_INCLUDE_DIRS})
+target_link_libraries(hw_impedance_control_node
+  ${dynamixel_sdk_LIBRARIES}
+  pinocchio::pinocchio_default
+  pinocchio::pinocchio_parsers
+  Eigen3::Eigen)
+target_compile_features(hw_impedance_control_node PUBLIC cxx_std_17)
+target_compile_definitions(hw_impedance_control_node PRIVATE
   "PACKAGE_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\""
   "PACKAGE_URDF_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/urdf\""
   "PACKAGE_CONFIG_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/config\""
@@ -393,6 +410,7 @@ install(TARGETS
     hw_tvlqr_node
     gz_gravity_comp_node
     hw_gravity_comp_node
+    hw_impedance_control_node
     hw_fkin_node
     hw_sinusoidal_torque_node
     hw_torque_probe_node
