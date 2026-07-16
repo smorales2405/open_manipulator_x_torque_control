@@ -289,6 +289,22 @@ target_compile_definitions(hw_smc_cart_node PRIVATE
   "PACKAGE_CONFIG_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/config\""
   COAL_DISABLE_HPP_FCL_WARNINGS)
 
+# ── hw_smci_cart_node (ISMC cartesiano en hardware real) ─────────────────────
+add_executable(hw_smci_cart_node "${SMC_INSTR}/hw_SMCI_cart_node.cpp")
+ament_target_dependencies(hw_smci_cart_node rclcpp sensor_msgs)
+target_include_directories(hw_smci_cart_node PRIVATE ${dynamixel_sdk_INCLUDE_DIRS})
+target_link_libraries(hw_smci_cart_node
+  ${dynamixel_sdk_LIBRARIES}
+  pinocchio::pinocchio_default
+  pinocchio::pinocchio_parsers
+  Eigen3::Eigen)
+target_compile_features(hw_smci_cart_node PUBLIC cxx_std_17)
+target_compile_definitions(hw_smci_cart_node PRIVATE
+  "PACKAGE_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\""
+  "PACKAGE_URDF_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/urdf\""
+  "PACKAGE_CONFIG_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/config\""
+  COAL_DISABLE_HPP_FCL_WARNINGS)
+
 # ── gz_SMCI_cart_node ────────────────────────────────────────────────────────
 add_executable(gz_SMCI_cart_node "${SMC_INSTR}/gz_SMCI_cart_node.cpp")
 ament_target_dependencies(gz_SMCI_cart_node rclcpp std_msgs sensor_msgs)
@@ -381,7 +397,7 @@ install(TARGETS
     hw_sinusoidal_torque_node
     hw_torque_probe_node
     gz_smc_joint_node gz_smc_cart_node gz_SMCI_cart_node
-    hw_smc_joint_node hw_smc_cart_node
+    hw_smc_joint_node hw_smc_cart_node hw_smci_cart_node
     gz_smc_joint_node_base gz_smc_cart_node_base
     gz_mrac_joint_node
     gz_mrac_joint_12p_node
