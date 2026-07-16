@@ -28,7 +28,9 @@
  *           pi/4+0.25*sin(w*t') ],   t' = t - T_TRANS
  * Transicion inicial: quintica generalizada [0, T_TRANS) desde la pose
  * medida hasta q_d(0) con empalme C2 (dq_d(0) = B*w != 0).
- * El CSV registra solo la fase de seguimiento.
+ * El CSV registra TAMBIEN la transicion (en hardware las fallas suelen
+ * ocurrir ahi); plots_SMC_joint.m en modo 'real' descarta t < T_TRANS
+ * para que las metricas sean solo de seguimiento.
  *
  * Parametros ROS 2 (--ros-args -p nombre:=valor):
  *   port_name          [string]  "/dev/ttyUSB0"
@@ -37,7 +39,7 @@
  *                                        total = T_TRANS + t_imp)
  *   test_num           [int]     1      (CSV: hw_smc_joint_<rho_func>_<test_num>.csv)
  *   rho_func           [string]  "sat"  (funcion de conmutacion: "sign" | "sat")
- *   phi                [double]  0.15   (capa limite para sat(s/phi) [rad/s])
+ *   phi                [double]  0.3    (capa limite para sat(s/phi) [rad/s])
  *   ab_alpha           [double]  0.2    (filtro α-β: ganancia de posicion)
  *   ab_beta            [double]  0.02   (filtro α-β: ganancia de velocidad)
  *   friction_fc_scale  [double]  0.95   (fraccion de Fc compensada; Fc usa dq DESEADA)
@@ -61,7 +63,7 @@
  *     --ros-args -p rho_func:=sign -p test_num:=1 -p t_imp:=30.0
  *
  *   ros2 run open_manipulator_x_torque_control hw_smc_joint_node \
- *     --ros-args -p rho_func:=sat -p phi:=0.15 -p test_num:=2 -p t_imp:=30.0
+ *     --ros-args -p rho_func:=sat -p phi:=0.3 -p test_num:=2 -p t_imp:=30.0
  *
  * ADVERTENCIA: No ejecutar junto a hardware.launch.py ni ningun proceso
  * que acceda a /dev/ttyUSB0 (ros2_control_node, dynamixel_hardware_interface).
@@ -153,16 +155,18 @@ using Vec4 = Eigen::Matrix<double, NUM_JOINTS, 1>;
 //  GANANCIAS SMC — ajustar aqui para cada articulacion
 //  Indice: [joint1, joint2, joint3, joint4]
 //
-//  Punto de partida: ganancias validadas en Gazebo (gz_SMC_joint_node).
-//  En hardware el residual de stiction (lo que el modelo Fc del motor no
-//  cubre) puede exigir mas autoridad — subir con gain_scale antes de tocar
-//  estos valores. Criterio discreto a 200 Hz: K_V + K_S/phi <= (0.2~0.3)/Ts.
-//  joint4: K_S y Lambda mayores (inercia diminuta, friccion de Coulomb
-//  relativamente grande).
+//  Mapeadas a la rigidez validada por FL en hardware (hw_fl: kp=[400,400,
+//  600,3000], la stiction real exige M_ii*kp varias veces mayor que el
+//  breakaway). Dentro de la capa el SMC equivale a un PD con:
+//    kp_eq = Lambda*(K_V + K_S/phi)   kd_eq = Lambda + K_V + K_S/phi
+//  Con phi=0.3: kp_eq = [413, 413, 617, 3000], kd_eq = [41, 41, 50, 115].
+//  (Las ganancias de Gazebo, 20x menores en joint4, dejaban la muneca
+//  pegada: v*M44 ~ 0.08 N.m = 18 ticks, bajo el breakaway — test1 hw.)
+//  gain_scale escala K_V y K_S: usar 0.5 en el primer run.
 // ═══════════════════════════════════════════════════════════════════════════
-static const Vec4 LAMBDA_Q = (Vec4() << 10.0, 10.0, 10.0, 15.0).finished();  // superficie [1/s]
-static const Vec4 K_V      = (Vec4() <<  8.0,  8.0,  8.0, 10.0).finished();  // alcance exponencial
-static const Vec4 K_S      = (Vec4() <<  3.0,  4.5,  4.5,  6.0).finished();  // conmutacion [rad/s²]
+static const Vec4 LAMBDA_Q = (Vec4() << 20.0, 20.0, 25.0, 40.0).finished();  // superficie [1/s]
+static const Vec4 K_V      = (Vec4() << 14.0, 14.0, 18.0, 55.0).finished();  // alcance exponencial
+static const Vec4 K_S      = (Vec4() <<  2.0,  2.0,  2.0,  6.0).finished();  // conmutacion [rad/s²]
 // ═══════════════════════════════════════════════════════════════════════════
 
 // ============================================================
@@ -305,7 +309,7 @@ public:
     this->declare_parameter<double>     ("t_imp",          20.0);
     this->declare_parameter<int>        ("test_num",       1);
     this->declare_parameter<std::string>("rho_func",       "sat");
-    this->declare_parameter<double>     ("phi",            0.15);
+    this->declare_parameter<double>     ("phi",            0.3);
 
     using dvec = std::vector<double>;
     this->declare_parameter<dvec>("motor_alpha",            dvec{208.5, 208.5, 208.5, 208.5});
@@ -774,8 +778,9 @@ private:
       js_pub_->publish(js);
     }
 
-    // 9. CSV (solo fase de seguimiento, sin transicion quintica)
-    if (!in_trans && csv_.is_open()) {
+    // 9. CSV (incluye la transicion: en hardware las fallas suelen ocurrir
+    //    ahi; plots_SMC_joint.m modo 'real' descarta t < T_TRANS)
+    if (csv_.is_open()) {
       csv_ << std::fixed << std::setprecision(6) << t
            << ',' << q(0)       << ',' << q(1)       << ',' << q(2)       << ',' << q(3)
            << ',' << dq(0)      << ',' << dq(1)      << ',' << dq(2)      << ',' << dq(3)

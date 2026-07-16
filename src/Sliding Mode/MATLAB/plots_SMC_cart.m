@@ -19,12 +19,12 @@
 clear; clc; close all;
 
 %% ── Configuracion ────────────────────────────────────────────────────────────
-mode        = 'sim';    % 'sim'  = simulacion Gazebo (gz_smc_cart_node)
+mode        = 'real';    % 'sim'  = simulacion Gazebo (gz_smc_cart_node)
                         % 'real' = implementacion hardware (hw_smc_cart_node)
 
 rho_func    = 'sat';   % Funcion de conmutacion: 'sign' | 'sat'
 
-controller  = 'smci';    % 'smc'  = gz_smc_cart_node (SMC clasico)
+controller  = 'smc';    % 'smc'  = gz_smc_cart_node (SMC clasico)
                         % 'smci' = gz_SMCI_cart_node (SMC integral; mismo CSV + xi1..xi4)
 
 test_num    = 2;        % Identificador del ensayo (test_num usado al lanzar el nodo)
@@ -33,6 +33,9 @@ EXPORT_FIGS = true;    % true  = guardar PNG (300 dpi) y EPS vectorial (600 dpi)
                         % false = solo visualizar
 
 TAU_MAX     = 1.2;      % [N·m] limite de torque (debe coincidir con el nodo)
+
+T_TRANS_S   = 5.0;      % [s] transicion quintica del nodo hw (debe coincidir);
+                        % en modo 'real' se descartan las muestras t < T_TRANS_S
 
 % Directorio raiz del paquete ROS 2
 pkg_dir = '/home/utec/open_manx_ws/src/open_manipulator_x_torque_control';
@@ -71,6 +74,14 @@ end
 T = readtable(csv_file);
 fprintf('[%s | rho=%s | test=%d]  Cargado: %s  (%d muestras)\n', ...
         mode_label, rho_func, test_num, csv_file, height(T));
+
+% El CSV de hardware incluye la transicion quintica (diagnostico de fallas):
+% descartarla para que metricas y graficas sean solo de seguimiento
+if strcmp(mode, 'real')
+    T = T(T.t >= T_TRANS_S, :);
+    fprintf('  (modo real: descartadas muestras t < %.1f s de transicion; quedan %d)\n', ...
+            T_TRANS_S, height(T));
+end
 
 t = T.t - T.t(1);
 

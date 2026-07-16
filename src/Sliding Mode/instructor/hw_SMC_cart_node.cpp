@@ -36,13 +36,27 @@
  *   phi_d = 0.685 + 0.250*sin(t')
  * Transicion inicial [0, T_TRANS): quintica generalizada desde la pose
  * medida hasta Y_START = FK(q_d(0)) con empalme C2 (velocidad y aceleracion
- * de la serie en t'=0). El CSV registra solo la fase de seguimiento.
+ * de la serie en t'=0). El CSV registra TAMBIEN la transicion (en hardware
+ * las fallas suelen ocurrir ahi); plots_SMC_cart.m en modo 'real' descarta
+ * t < T_TRANS para que las metricas sean solo de seguimiento.
+ *
+ * PROCEDIMIENTO DE ARRANQUE: posicionar el brazo a mano cerca de Y_START
+ * (codo arriba, efector a ~0.20 m y ~0.13 m de altura) antes de lanzar el
+ * nodo. Arrancar desde la pose de reposo caida (brazo extendido-bajo) exige
+ * levantar el brazo extendido contra gravedad+stiction durante la
+ * transicion y fue la causa de la divergencia del test1 hw.
  *
  * Guardas de altura mínima (placa metálica de la base):
  *   La referencia y el efector medido nunca pueden bajar de Z_MIN_FLOOR
  *   (0.075 m; la referencia baja hasta 0.114 → margen de tracking de ~4 cm).
  *   Durante la transición solo se exige no descender por debajo de la pose
  *   inicial (el brazo puede arrancar plegado, con z < Z_MIN_FLOOR).
+ *
+ * Guarda de singularidad:
+ *   Parada de emergencia si cond(J4) > COND_J_MAX (150). En el test1 hw la
+ *   configuracion derivo a una singularidad (kJ 23 → 18869) y la DLS
+ *   repartio comandos grandes en direcciones mal condicionadas hasta llevar
+ *   J1 a su limite; esta guarda corta esa divergencia ~1 s antes.
  *
  * Parametros ROS 2 (--ros-args -p nombre:=valor):
  *   port_name          [string]  "/dev/ttyUSB0"
@@ -51,7 +65,7 @@
  *                                        total = T_TRANS + t_imp)
  *   test_num           [int]     1      (CSV: hw_smc_cart_<rho_func>_<test_num>.csv)
  *   rho_func           [string]  "sat"  (funcion de conmutacion: "sign" | "sat")
- *   phi                [double]  0.15   (capa limite para sat(s/phi) [m/s o rad/s])
+ *   phi                [double]  0.3    (capa limite para sat(s/phi) [m/s o rad/s])
  *   ab_alpha           [double]  0.2    (filtro α-β: ganancia de posicion)
  *   ab_beta            [double]  0.02   (filtro α-β: ganancia de velocidad)
  *   friction_fc_scale  [double]  0.95   (fraccion de Fc compensada)
@@ -76,7 +90,7 @@
  *     --ros-args -p rho_func:=sign -p test_num:=1 -p t_imp:=30.0
  *
  *   ros2 run open_manipulator_x_torque_control hw_smc_cart_node \
- *     --ros-args -p rho_func:=sat -p phi:=0.15 -p test_num:=2 -p t_imp:=30.0
+ *     --ros-args -p rho_func:=sat -p phi:=0.3 -p test_num:=2 -p t_imp:=30.0
  *
  * ADVERTENCIA: No ejecutar junto a hardware.launch.py ni ningun proceso
  * que acceda a /dev/ttyUSB0 (ros2_control_node, dynamixel_hardware_interface).
@@ -171,7 +185,12 @@ static constexpr double LAMBDA_DLS_SQ = LAMBDA_DLS * LAMBDA_DLS;
 // Y_START = FK(q_d(0)) = FK([0, -0.45, 0.35, pi/4]) — inicio de la
 // trayectoria de referencia (identico a gz_SMC_cart_node)
 static const Eigen::Vector4d Y_START {0.1988, 0.0, 0.1348, 0.6854};
-static constexpr double T_TRANS = 3.0;   // [s]
+// Transicion mas larga que en sim (5 s vs 3 s): levantar el brazo real
+// contra gravedad+stiction con demandas suaves.
+static constexpr double T_TRANS = 5.0;   // [s]
+
+// Umbral de parada por mal condicionamiento del Jacobiano de tarea
+static constexpr double COND_J_MAX = 150.0;
 
 // Altura mínima del efector sobre la placa metálica de la base [m].
 // Se verifica en cada tick para la referencia y para el efector medido.
@@ -186,15 +205,18 @@ using Vec4 = Eigen::Matrix<double, NUM_JOINTS, 1>;
 // ═══════════════════════════════════════════════════════════════════════════
 //  GANANCIAS SMC CARTESIANO  [x, y, z, phi]
 //
-//  Punto de partida: ganancias validadas en Gazebo (gz_SMC_cart_node).
-//  En hardware el residual de stiction (lo que el modelo Fc del motor no
-//  cubre) puede exigir mas autoridad — subir con gain_scale antes de tocar
-//  estos valores. Criterio discreto a 200 Hz: K_V + K_S/phi <= (0.2~0.3)/Ts.
-//  Canal phi (dominado por joint4, inercia diminuta): Lambda/K_V/K_S mayores.
+//  Mapeadas a la rigidez validada por FL en hardware (hw_io: KP_Y=[400,200,
+//  800,1500] — la stiction real exige rigidez de tarea varias veces mayor
+//  que en sim). Dentro de la capa el SMC equivale a un PD con:
+//    kp_eq = Lambda*(K_V + K_S/phi)   kd_eq = Lambda + K_V + K_S/phi
+//  Con phi=0.3: kp_eq = [400, 195, 775, 1455], kd_eq = [40, 28, 56, 76].
+//  (Las ganancias de Gazebo, 3-5x menores, no levantaron el brazo en el
+//  test1 hw: J2 llego a 126 ticks y la configuracion derivo a singularidad.)
+//  gain_scale escala K_V y K_S: usar 0.5 en el primer run.
 // ═══════════════════════════════════════════════════════════════════════════
-static const Eigen::Vector4d LAMBDA_Y = {5.0, 5.0, 5.0, 12.0};   // superficie [1/s]
-static const Eigen::Vector4d K_V      = {5.0, 5.0, 5.0, 10.0};   // alcance exponencial
-static const Eigen::Vector4d K_S      = {1.5, 1.5, 1.5,  6.0};   // conmutacion [m/s² | rad/s²]
+static const Eigen::Vector4d LAMBDA_Y = {20.0, 14.0, 28.0, 38.0};   // superficie [1/s]
+static const Eigen::Vector4d K_V      = {13.0,  9.0, 21.0, 25.0};   // alcance exponencial
+static const Eigen::Vector4d K_S      = { 2.0,  1.5,  2.0,  4.0};   // conmutacion [m/s² | rad/s²]
 // ═══════════════════════════════════════════════════════════════════════════
 
 // ============================================================
@@ -350,7 +372,7 @@ public:
     this->declare_parameter<double>     ("t_imp",       20.0);
     this->declare_parameter<int>        ("test_num",    1);
     this->declare_parameter<std::string>("rho_func",    "sat");
-    this->declare_parameter<double>     ("phi",         0.15);
+    this->declare_parameter<double>     ("phi",         0.3);
 
     using dvec = std::vector<double>;
     this->declare_parameter<dvec>("motor_alpha",            dvec{208.5, 208.5, 208.5, 208.5});
@@ -880,6 +902,15 @@ private:
       return;
     }
 
+    // 6c. Guarda de singularidad: cerca de una singularidad la DLS reparte
+    //     comandos grandes en direcciones mal condicionadas (test1 hw:
+    //     kJ 23 → 18869 y J1 se fue a su limite).
+    if (ctrl.cond_J > COND_J_MAX) {
+      emergency_stop("Jacobiano mal condicionado: cond(J4)="
+                     + std::to_string(ctrl.cond_J) + " (umbral " + std::to_string(COND_J_MAX) + ")");
+      return;
+    }
+
     // 7. Conversión torque → corriente (Fc con la velocidad articular deseada)
     const auto cur_cmd = torque_to_current(ctrl.tau, dq_hat_, ctrl.dq_des);
 
@@ -914,8 +945,9 @@ private:
       js_pub_->publish(js);
     }
 
-    // 11. CSV (solo fase de seguimiento, sin transicion quintica)
-    if (!in_trans && csv_.is_open()) {
+    // 11. CSV (incluye la transicion: en hardware las fallas suelen ocurrir
+    //     ahi; plots_SMC_cart.m modo 'real' descarta t < T_TRANS)
+    if (csv_.is_open()) {
       csv_ << std::fixed << std::setprecision(6)
            << t
            << ',' << q(0) << ',' << q(1) << ',' << q(2) << ',' << q(3)
