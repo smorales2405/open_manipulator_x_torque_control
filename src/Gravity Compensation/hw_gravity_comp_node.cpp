@@ -9,28 +9,42 @@
  *   con el modelo CAD anterior (openmani.urdf).
  *
  * Ley de control:
- *   tau = gravity_scale * G(q)                                   [N·m]
- * Conversion torque -> corriente con el modelo identificado (por joint):
- *   I = alpha*tau + Fv*dq + Fc*tanh(dq/eps) + I_offset           [ticks]
- *   Los terminos Fv/Fc compensan la friccion del motor (backdrivable).
+ *   tau_i = ramp(t) * gravity_scale * gravity_scale_joint[i] * G_i(q)  [N·m]
+ *   I     = alpha * tau                                                [ticks]
  *
- * El robot comienza quieto en la posicion actual al arrancar el nodo.
- * Al moverlo manualmente a cualquier posicion, la nueva G(q) se calcula
- * en el siguiente tick y lo mantiene en esa nueva posicion.
+ *   · ramp(t): rampa quintica 0→1 en soft_start_s. SOSTENER el brazo durante
+ *     la rampa; al completarse el nodo avisa ("Puede soltar el robot").
+ *   · NO se compensa friccion ni offset del motor (ver torque_to_current):
+ *     la friccion residual del reductor es la que "aparca" el brazo en la
+ *     pose donde se suelta.
  *
- * Parametros del MOTOR (alpha, Fv, Fc, I_offset, epsilon):
- *   Auto-cargados desde config/motorXM430W350T_params.yaml; son FIJOS
- *   (no se pueden sobreescribir por CLI — el YAML tiene prioridad).
+ * Comportamiento: el robot queda sostenido en la pose donde se suelta al
+ * iniciar el nodo; al moverlo manualmente a otra pose articular y soltarlo,
+ * se mantiene ahi (G(q) se recalcula en cada tick a 100 Hz).
+ *
+ * Seguridad: parada (torque off) si un joint sale de sus limites articulares
+ * (margen 0.05 rad), si |dq| supera dq_max (fuga) o si la corriente medida
+ * supera el umbral. Los limites y signos se cargan del YAML de config.
+ *
+ * Parametros del MOTOR (alpha) y config de hardware (joint_zero_tick, signos,
+ * limites articulares): auto-cargados desde config/motorXM430W350T_params.yaml;
+ * son FIJOS (no se pueden sobreescribir por CLI — el YAML tiene prioridad).
  *
  * Parametros propios del nodo (ros2 run ... --ros-args -p nombre:=valor):
- *   port_name       [string]  "/dev/ttyUSB0"
- *   gravity_scale   [double]  1.0   (ajuste fino: <1 si cae, >1 si sube)
- *   duration_s      [double]  0.0   (0 = sin limite de tiempo)
- *   log_id          [int]     1     (CSV: hw_gc_data_<log_id>.csv)
+ *   port_name           [string]   "/dev/ttyUSB0"
+ *   gravity_scale       [double]   1.0    (escala global)
+ *   gravity_scale_joint [double[]] [1.0, 0.85, 1.0, 1.0]  escala por junta.
+ *                        J2=0.85: el URDF sobreestima G2 en ~10-20% (residuo
+ *                        dinamico de hw_gc_data_1/2). Ajuste fino por junta:
+ *                        si SUBE al soltarla → bajar; si CAE → subir.
+ *   soft_start_s        [double]   1.5    (rampa de arranque; 0 = sin rampa)
+ *   dq_max              [double]   2.5    (parada de seguridad [rad/s])
+ *   duration_s          [double]   0.0    (0 = sin limite de tiempo)
+ *   log_id              [int]      1      (CSV: hw_gc_data_<log_id>.csv)
  *
- * Ejemplo de uso (no requiere launch; el motor se auto-carga del YAML):
+ * Ejemplo de uso (no requiere launch; el YAML se auto-carga):
  *   ros2 run open_manipulator_x_torque_control hw_gravity_comp_node \
- *     --ros-args -p gravity_scale:=0.95 -p log_id:=3
+ *     --ros-args -p gravity_scale_joint:="[1.0, 0.85, 1.0, 1.0]" -p log_id:=3
  *
  * Publisher:  /hw/joint_states (sensor_msgs/JointState) — monitoreo
  * CSV output: data/gravity_comp/hw_gc_data_<log_id>.csv
@@ -105,22 +119,12 @@ static constexpr double CURRENT_UNIT_A          = 0.00269;
 static constexpr double TORQUE_CONSTANT_NM_A    = 1.666;
 static constexpr double TORQUE_PER_CURRENT_TICK = TORQUE_CONSTANT_NM_A * CURRENT_UNIT_A;
 
-// Posicion de cero del encoder (ticks) para cada joint
-static const std::array<int32_t, NUM_JOINTS> JOINT_ZERO_TICK = {2048, 2048, 2048, 2048};
+// Config de hardware (joint_zero_tick, encoder_sign, current_sign, limites
+// articulares): se carga de config/motorXM430W350T_params.yaml (auto-load en
+// main). Los defaults declarados en el constructor coinciden con ese YAML.
 
-// Signos para corregir orientacion fisica del encoder y corriente.
-// J4 (ID 14, muneca): motor montado en orientacion opuesta a J1-J3;
-// corriente positiva produce torque NEGATIVO en convencion URDF → CURRENT_SIGN[3]=-1.
-static const std::array<double, NUM_JOINTS> ENCODER_SIGN = {+1.0, +1.0, +1.0, +1.0};
-static const std::array<double, NUM_JOINTS> CURRENT_SIGN = {+1.0, +1.0, +1.0, +1.0};
-
-// Limites articulares [rad] — coinciden con open_manipulator_x.urdf
-static const std::array<double, NUM_JOINTS> JOINT_LOWER = {
-  -2.827433388230814, -1.790707812546182, -0.9424777960769379, -1.790707812546182
-};
-static const std::array<double, NUM_JOINTS> JOINT_UPPER = {
-  +2.827433388230814, +1.5707963267948966, +1.382300767579509, +2.0420352248333655
-};
+// Margen tolerado mas alla del limite articular antes de la parada de seguridad
+static constexpr double LIMIT_MARGIN_RAD = 0.05;
 
 // Limites de corriente de seguridad
 static constexpr uint16_t CURRENT_LIMIT_REGISTER = 350;
@@ -183,40 +187,60 @@ public:
     // ── Parametros propios del nodo (ros2 run ... -p para sobrescribir) ──────
     this->declare_parameter<std::string>("port_name",      "/dev/ttyUSB0");
     this->declare_parameter<double>     ("gravity_scale",   1.0);
+    this->declare_parameter<double>     ("soft_start_s",    1.5);
+    this->declare_parameter<double>     ("dq_max",          2.5);
     this->declare_parameter<double>     ("duration_s",      0.0);
     this->declare_parameter<int>        ("log_id",          1);
 
-    // ── Modelo identificado del motor (config/motorXM430W350T_params.yaml) ──
-    // I = alpha·tau + Fv·dq + Fc·tanh(dq/eps) + I_offset
-    // Defaults: alpha = gain previo (1/TORQUE_PER_CURRENT_TICK), friccion nula
-    // → sin YAML, gravity comp = alpha·tau puro (totalmente backdrivable).
     using dvec = std::vector<double>;
-    const double alpha_def = 1.0 / TORQUE_PER_CURRENT_TICK;
-    this->declare_parameter<dvec>("motor_alpha",    dvec{alpha_def, alpha_def, alpha_def, alpha_def});
-    this->declare_parameter<dvec>("motor_Fv",       dvec{0.0, 0.0, 0.0, 0.0});
-    this->declare_parameter<dvec>("motor_Fc",       dvec{0.0, 0.0, 0.0, 0.0});
-    this->declare_parameter<dvec>("motor_I_offset", dvec{0.0, 0.0, 0.0, 0.0});
-    this->declare_parameter<double>("motor_epsilon_friction", 0.05);
+    // Escala de gravedad POR JUNTA (se multiplica con gravity_scale global).
+    // J2=0.85: el G2 del URDF sobreestima la gravedad real ~10-20% (residuo
+    // dinamico M·ddq+C·dq vs corriente medida en hw_gc_data_1/2); las demas
+    // juntas coinciden con el modelo dentro del margen de friccion.
+    this->declare_parameter<dvec>("gravity_scale_joint", dvec{1.0, 0.85, 1.0, 1.0});
 
-    port_name_      = this->get_parameter("port_name").as_string();
-    gravity_scale_  = this->get_parameter("gravity_scale").as_double();
-    duration_s_     = this->get_parameter("duration_s").as_double();
+    // ── Modelo del motor y config de hardware (motorXM430W350T_params.yaml) ──
+    // De ese YAML solo se usa alpha (I = alpha·tau) y la config de hardware.
+    // Los terminos Fv/Fc/I_offset del modelo identificado NO se aplican en
+    // este nodo, a proposito (ver torque_to_current).
+    const double alpha_def = 1.0 / TORQUE_PER_CURRENT_TICK;
+    this->declare_parameter<dvec>("motor_alpha", dvec{alpha_def, alpha_def, alpha_def, alpha_def});
+    this->declare_parameter<std::vector<int64_t>>("joint_zero_tick",
+      std::vector<int64_t>{2048, 2048, 2048, 2048});
+    this->declare_parameter<dvec>("encoder_sign", dvec{1.0, 1.0, 1.0, 1.0});
+    this->declare_parameter<dvec>("current_sign", dvec{1.0, 1.0, 1.0, 1.0});
+    this->declare_parameter<dvec>("joint_lower",  dvec{-2.356194, -1.919862, -1.919862, -1.8});
+    this->declare_parameter<dvec>("joint_upper",  dvec{ 2.356194,  1.745329,  1.570796,  2.1});
+
+    port_name_     = this->get_parameter("port_name").as_string();
+    gravity_scale_ = this->get_parameter("gravity_scale").as_double();
+    soft_start_s_  = this->get_parameter("soft_start_s").as_double();
+    dq_max_        = this->get_parameter("dq_max").as_double();
+    duration_s_    = this->get_parameter("duration_s").as_double();
     const int log_id = this->get_parameter("log_id").as_int();
 
     auto load_vec4 = [this](const std::string & name) {
       const auto v = this->get_parameter(name).as_double_array();
       Vec4 out; for (int i = 0; i < NUM_JOINTS; ++i) out(i) = v[i]; return out;
     };
-    motor_alpha_    = load_vec4("motor_alpha");
-    motor_Fv_       = load_vec4("motor_Fv");
-    motor_Fc_       = load_vec4("motor_Fc");
-    motor_I_offset_ = load_vec4("motor_I_offset");
-    motor_epsilon_  = this->get_parameter("motor_epsilon_friction").as_double();
+    gscale_joint_ = load_vec4("gravity_scale_joint");
+    motor_alpha_  = load_vec4("motor_alpha");
+    encoder_sign_ = load_vec4("encoder_sign");
+    current_sign_ = load_vec4("current_sign");
+    joint_lower_  = load_vec4("joint_lower");
+    joint_upper_  = load_vec4("joint_upper");
+    {
+      const auto zt = this->get_parameter("joint_zero_tick").as_integer_array();
+      for (int i = 0; i < NUM_JOINTS; ++i)
+        joint_zero_tick_[i] = static_cast<int32_t>(zt[i]);
+    }
 
     RCLCPP_INFO(get_logger(),
-      "puerto=%s  scale=%.2f  dur=%.1fs  id=%d  alpha=[%.0f %.0f %.0f %.0f]",
-      port_name_.c_str(), gravity_scale_, duration_s_, log_id,
-      motor_alpha_(0), motor_alpha_(1), motor_alpha_(2), motor_alpha_(3));
+      "puerto=%s  scale=%.2f  scale_joint=[%.2f %.2f %.2f %.2f]  rampa=%.1fs  "
+      "dq_max=%.1f rad/s  dur=%.1fs  id=%d",
+      port_name_.c_str(), gravity_scale_,
+      gscale_joint_(0), gscale_joint_(1), gscale_joint_(2), gscale_joint_(3),
+      soft_start_s_, dq_max_, duration_s_, log_id);
 
     // ── Pinocchio ────────────────────────────────────────────────────────────
     const std::string urdf = std::string(PACKAGE_URDF_DIR) + "/open_manipulator_x.urdf";
@@ -398,8 +422,8 @@ private:
       const int16_t rc = toSigned16(static_cast<uint32_t>(
         grp_cur_->getData(id, ADDR_PRESENT_CURRENT,  LEN_PRESENT_CURRENT)));
 
-      q(i)   = ENCODER_SIGN[i] * static_cast<double>(wrappedTickDiff(rp, JOINT_ZERO_TICK[i])) * POS_UNIT_RAD;
-      dq(i)  = ENCODER_SIGN[i] * static_cast<double>(rv) * VEL_UNIT_RAD_S;
+      q(i)   = encoder_sign_(i) * static_cast<double>(wrappedTickDiff(rp, joint_zero_tick_[i])) * POS_UNIT_RAD;
+      dq(i)  = encoder_sign_(i) * static_cast<double>(rv) * VEL_UNIT_RAD_S;
       cur[i] = rc;
     }
     return true;
@@ -440,14 +464,27 @@ private:
     const Eigen::VectorXd tau_full =
       pinocchio::rnea(model_, data_, q_pin, zero_v, zero_v);
 
-    return gravity_scale_ * tau_full.head(NUM_JOINTS);
+    const Vec4 g4 = tau_full.head(NUM_JOINTS);
+    return gravity_scale_ * gscale_joint_.cwiseProduct(g4);
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  //  Conversion torque → corriente con deadzone y limites
+  //  Conversion torque → corriente:  I = alpha·tau
+  //
+  //  NOTA: los terminos Fv·dq + Fc·tanh(dq/eps) + I_offset del modelo
+  //  identificado NO se aplican aqui, a proposito (diagnostico hw_gc_data_1/2,
+  //  donde el brazo se fugaba hacia atras-arriba):
+  //   · Fc/Fv con velocidad MEDIDA son realimentacion POSITIVA: empujan en la
+  //     direccion de cualquier movimiento (1 LSB de velocidad = 0.024 rad/s ya
+  //     activa 45% de Fc con eps=0.05) y eliminan el margen de friccion que
+  //     aparca el brazo al soltarlo.
+  //   · I_offset (hasta ~0.1 N·m) se identifico en lazo cerrado (FL), donde el
+  //     feedback lo absorbia; en lazo abierto es un sesgo directo de torque.
+  //  La friccion residual del reductor es la que mantiene la pose al soltar:
+  //  el brazo queda quieto donde |G_real - G_comandada| < stiction (~0.1 N·m).
   // ─────────────────────────────────────────────────────────────────────────
 
-  std::array<int16_t, NUM_JOINTS> torque_to_current(const Vec4 & tau, const Vec4 & dq)
+  std::array<int16_t, NUM_JOINTS> torque_to_current(const Vec4 & tau)
   {
     static const std::array<int16_t, NUM_JOINTS> cur_lim = {
       CURRENT_CMD_LIMIT_J123, CURRENT_CMD_LIMIT_J123,
@@ -455,13 +492,8 @@ private:
     };
     std::array<int16_t, NUM_JOINTS> cmd{};
     for (int i = 0; i < NUM_JOINTS; ++i) {
-      // Modelo identificado: I = alpha·tau + Fv·dq + Fc·tanh(dq/eps) + I_offset
-      // Los terminos de friccion compensan la friccion del motor (backdrivable).
-      const double I = motor_alpha_(i)    * tau(i)
-                     + motor_Fv_(i)       * dq(i)
-                     + motor_Fc_(i)       * std::tanh(dq(i) / motor_epsilon_)
-                     + motor_I_offset_(i);
-      cmd[i] = clampCurrent(CURRENT_SIGN[i] * ENCODER_SIGN[i] * I, cur_lim[i]);
+      const double I = motor_alpha_(i) * tau(i);
+      cmd[i] = clampCurrent(current_sign_(i) * encoder_sign_(i) * I, cur_lim[i]);
     }
     return cmd;
   }
@@ -508,21 +540,47 @@ private:
       return;
     }
 
-    // 2. Log de posicion inicial (primer tick solamente)
+    // 2. Guardas de seguridad: limites articulares y velocidad de fuga
+    for (int i = 0; i < NUM_JOINTS; ++i) {
+      if (q(i) < joint_lower_(i) - LIMIT_MARGIN_RAD ||
+          q(i) > joint_upper_(i) + LIMIT_MARGIN_RAD) {
+        emergency_stop("J" + std::to_string(i + 1) + " fuera de limite articular: q="
+          + std::to_string(q(i)) + " rad");
+        return;
+      }
+      if (std::abs(dq(i)) > dq_max_) {
+        emergency_stop("Velocidad excesiva (posible fuga) en J" + std::to_string(i + 1)
+          + ": dq=" + std::to_string(dq(i)) + " rad/s");
+        return;
+      }
+    }
+
+    // 3. Log de posicion inicial (primer tick solamente)
     if (!init_logged_) {
       init_logged_ = true;
       RCLCPP_INFO(get_logger(),
-        "Posicion inicial capturada: q=[%.3f %.3f %.3f %.3f] rad",
-        q(0), q(1), q(2), q(3));
+        "Posicion inicial capturada: q=[%.3f %.3f %.3f %.3f] rad. "
+        "SOSTENGA el brazo durante la rampa de arranque (%.1f s).",
+        q(0), q(1), q(2), q(3), soft_start_s_);
     }
 
-    // 3. Calcular torque de compensacion gravitacional
+    // 4. Torque de compensacion con rampa quintica de arranque (evita el
+    //    escalon de corriente, cuyo impulso a traves del backlash del
+    //    reductor rompe la stiction y dispara la fuga)
     const Vec4 tau_grav = compute_gravity(q);
+    double ramp = 1.0;
+    if (soft_start_s_ > 0.0 && t < soft_start_s_) {
+      const double x = t / soft_start_s_;
+      ramp = x * x * x * (10.0 + x * (-15.0 + 6.0 * x));
+    } else if (!ramp_done_) {
+      ramp_done_ = true;
+      RCLCPP_INFO(get_logger(),
+        "Rampa completada: compensacion al 100%%. Puede soltar el robot.");
+    }
+    const Vec4 tau_cmd = ramp * tau_grav;
 
-    // 4. Convertir torque a corriente (con deadzone y limites)
-    const auto cur_cmd = torque_to_current(tau_grav, dq);
-
-    // 5. Enviar corriente a motores
+    // 5. Convertir torque a corriente y enviar a motores
+    const auto cur_cmd = torque_to_current(tau_cmd);
     if (!send_currents(cur_cmd)) {
       emergency_stop("SyncWrite fallido");
       return;
@@ -559,7 +617,7 @@ private:
       csv_ << std::fixed << std::setprecision(6) << t
            << ',' << q(0)       << ',' << q(1)       << ',' << q(2)       << ',' << q(3)
            << ',' << dq(0)      << ',' << dq(1)      << ',' << dq(2)      << ',' << dq(3)
-           << ',' << tau_grav(0) << ',' << tau_grav(1) << ',' << tau_grav(2) << ',' << tau_grav(3)
+           << ',' << tau_cmd(0)  << ',' << tau_cmd(1)  << ',' << tau_cmd(2)  << ',' << tau_cmd(3)
            << ',' << cur_cmd[0] << ',' << cur_cmd[1]  << ',' << cur_cmd[2] << ',' << cur_cmd[3]
            << ',' << cur_meas[0]<< ',' << cur_meas[1] << ',' << cur_meas[2]<< ',' << cur_meas[3]
            << '\n';
@@ -574,7 +632,7 @@ private:
         "i_cmd=[%d %d %d %d] ticks",
         t,
         q(0), q(1), q(2), q(3),
-        tau_grav(0), tau_grav(1), tau_grav(2), tau_grav(3),
+        tau_cmd(0), tau_cmd(1), tau_cmd(2), tau_cmd(3),
         cur_cmd[0], cur_cmd[1], cur_cmd[2], cur_cmd[3]);
     }
   }
@@ -588,10 +646,15 @@ private:
 
   std::string port_name_;
   double gravity_scale_;
+  double soft_start_s_;
+  double dq_max_;
   double duration_s_;
-  // Modelo identificado del motor (config/motorXM430W350T_params.yaml)
-  Vec4   motor_alpha_, motor_Fv_, motor_Fc_, motor_I_offset_;
-  double motor_epsilon_;
+  Vec4   gscale_joint_;
+  // Modelo del motor y config de hardware (config/motorXM430W350T_params.yaml)
+  Vec4   motor_alpha_;
+  Vec4   encoder_sign_, current_sign_;
+  Vec4   joint_lower_, joint_upper_;
+  std::array<int32_t, NUM_JOINTS> joint_zero_tick_{};
 
   dynamixel::PortHandler *  port_handler_{nullptr};
   dynamixel::PacketHandler * packet_handler_{nullptr};
@@ -600,6 +663,7 @@ private:
 
   bool hw_active_;
   bool init_logged_;
+  bool ramp_done_{false};
   std::chrono::high_resolution_clock::time_point start_time_;
   int log_cnt_{0};
 
@@ -619,7 +683,8 @@ int main(int argc, char * argv[])
   rclcpp::init(argc, argv);
 
   // Auto-carga config/motorXM430W350T_params.yaml; los -p de la línea de comandos
-  // (gravity_scale, duration_s, log_id, port_name) lo sobrescriben → no requiere launch.
+  // (gravity_scale, gravity_scale_joint, soft_start_s, dq_max, duration_s, log_id,
+  // port_name) lo sobrescriben → no requiere launch.
   rclcpp::NodeOptions opts;
   const std::string cfg = std::string(PACKAGE_CONFIG_DIR) + "/motorXM430W350T_params.yaml";
   if (std::filesystem::exists(cfg)) {
