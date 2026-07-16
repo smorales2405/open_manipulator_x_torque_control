@@ -1,61 +1,63 @@
 /*
- * hw_SMCI_cart_node.cpp
- * Control por Modo Deslizante INTEGRAL (ISMC) en espacio cartesiano —
- * OpenMANIPULATOR-X hardware real vía Dynamixel SDK directo, sin ros2_control.
+ * hw_SMC_cart_node_base.cpp
+ * Control por Modo Deslizante en espacio cartesiano — OpenMANIPULATOR-X
+ * hardware real vía Dynamixel SDK directo, sin ros2_control.
+ * [Archivo base para estudiantes — Lab 6, implementacion]
+ *
+ * Soporta DOS leyes de control, seleccionables con el parametro booleano
+ * use_integral (default: false):
+ *   · use_integral:=false → SMC clasico (superficie en velocidad)
+ *   · use_integral:=true  → ISMC, SMC con termino INTEGRAL (superficie en
+ *     posicion con estado xi = ∫e dt) — elimina los sesgos DC que el SMC
+ *     clasico deja por el residual del modelo de gravedad/COM del robot.
+ *
+ * ──────────────────────────────────────────────────────────────────────────
+ * SECCIONES A COMPLETAR:
+ *   [1] Trayectoria cartesiana de referencia  →  desiredTrajectory()
+ *   [2] Vector Y_START                        →  constante Y_START
+ *   [3] Funciones de conmutacion              →  rho_scalar()
+ *   [4] Ganancias SMC clasico                 →  LAMBDA_Y, K_V, K_S
+ *   [5] Ganancias ISMC                        →  LAMBDA_I, K_P, K_D, K_sw
+ *   [6] Ley SMC clasica                       →  compute_control() (rama false)
+ *   [7] Ley ISMC                              →  compute_control() (rama true)
+ *   [8] Torque                                →  compute_control() (comun)
+ * El resto (hardware Dynamixel, filtro alpha-beta, transicion quintica,
+ * DLS, integracion de xi con anti-windup, conversion torque→corriente,
+ * guardas de seguridad, CSV) es INFRAESTRUCTURA: no modificar.
+ * ──────────────────────────────────────────────────────────────────────────
  *
  * Salida de tarea:  y = [x, y, z, phi]^T
  *   (x,y,z) posición cartesiana del efector final (frame end_effector_link).
  *   phi = q2 + q3 + q4  ángulo de inclinación analítico.
  *
- * ── Formulacion ISMC (identica a gz_SMCI_cart_node) ────────────────────────
- *   Estado integral:  xi = ∫ e dt,   e = y - y_d
- *   Superficie:       s    = e + Lambda*xi        [m, m, m, rad]
- *                     sdot = edot + Lambda*e
- *   Grado relativo 2:  sddot = J_y*qddot + Jdot*qdot - yddot_d + Lambda*edot
- *   Ley PD + conmutacion sobre sddot:
- *     v_s   = yddot_d - Lambda*edot - Jdot*qdot - K_D*sdot - K_P*s - K_sw*rho(s)
- *     qddot = J4^T (J4 J4^T + lambda^2 I)^-1 v_s   [DLS]
- *     tau   = M(q)*qddot + Phi(q,qdot)
- *     tau_sat = clamp(tau, -tau_max, tau_max)
+ * Ley SMC clasica (use_integral:=false):
+ *   e_y  = y - y_d,   edot_y = ydot - ydot_d
+ *   s_y  = edot_y + Lambda_y * e_y                       [m/s | rad/s]
+ *   v_y  = yddot_d - Lambda_y*edot_y - K_v*s_y - K_s*rho(s_y)
+ *   qddot = J4^T (J4 J4^T + lambda^2 I)^-1 (v_y - Jdot*qdot)   [DLS]
+ *   tau   = M(q)*qddot + Phi(q,qdot)
  *
- * MOTIVACION (test2 hw del SMC clasico, gain_scale 1.0): los errores
- * restantes eran SESGOS DC direccion-independientes (x +14 mm, z +15 mm,
- * phi -110 mrad, corr(e_z,e_phi)=-0.89) — residual del modelo de
- * gravedad/COM del robot. Una perturbacion constante acoplada es el caso
- * exacto que el estado integral xi elimina en regimen.
- *
- * Manejo del estado integral xi (calibrado tras el test1 hw, donde xi_phi
- * se trinqueteo hasta un tope holgado y el offset Lambda*xi almacenado
- * desestabilizo el brazo en el pico de phi_des hasta la guarda de cond_J):
- *   · Se integra SOLO en la fase de seguimiento (el transitorio de la
- *     transicion sesgaria el integrador).
- *   · Anti-windup 1: tope POR CANAL |xi_i| <= XI_MAX_i, dimensionado a
- *     ~2-3x el xi de equilibrio esperado por los sesgos medidos en el
- *     test2 del SMC clasico (xi_ss = kp_eq*sesgo/ki_eq: x 0.005, y 0.003,
- *     z 0.004, phi 0.020).
- *   · Anti-windup 2 (condicional, POR CANAL): xi_i solo integra cuando
- *     |s_i| <= XI_S_GATE_i — cerca de la superficie. La compuerta debe ser
- *     por canal y en la escala de cada salida (test2 hw: una compuerta
- *     unica de 0.15 esta siempre abierta para x/y/z en metros, y sus
- *     integradores rebotaban contra el tope durante las rafagas de
- *     saturacion de los picos de phi_des, alargando el transitorio ~2 s).
- *     Para phi la compuerta (0.15) debe superar su sesgo (~0.11) para que
- *     el integrador engrane.
- *   · Anti-windup 3: xi congelado mientras algun torque este saturado en
- *     el tick anterior (rafagas de saturacion en los picos de phi_des).
+ * Ley ISMC (use_integral:=true), formulacion de hw_SMCI_cart_node:
+ *   xi   = ∫ e dt  (lo integra la INFRAESTRUCTURA, con anti-windup)
+ *   s    = e + Lambda_I * xi                             [m | rad]
+ *   sdot = edot + Lambda_I * e
+ *   v_s  = yddot_d - Lambda_I*edot - Jdot*qdot - K_D*sdot - K_P*s - K_sw*rho(s)
+ *   qddot = J4^T (J4 J4^T + lambda^2 I)^-1 v_s           [DLS]
+ *   tau   = M(q)*qddot + Phi(q,qdot)
  *
  * NOTA sobre la friccion: a diferencia de los nodos gz (feedforward del URDF
  * a nivel de torque), en hardware la friccion REAL se compensa en el modelo
  * torque→corriente identificado (Fv, Fc en ticks, con Fc alimentado por la
  * velocidad articular DESEADA qdot_des = J4⁺·ydot_des). NO agregar tau_fric
- * del URDF aqui: seria doble compensacion.
+ * del URDF aqui: seria doble compensacion. El residual de friccion es la
+ * incertidumbre acotada que el termino de conmutacion debe dominar.
  *
  * Funciones de conmutacion (elemento a elemento):
  *   "sign" -> rho(s) = sign(s)
  *   "sat"  -> rho(s) = sat(s/phi)     phi: capa limite [m/s o rad/s]
  *
  * Trayectoria cartesiana de referencia (serie de Fourier w=1.0 rad/s,
- * identica a gz/hw_SMC_cart_node; FK de la trayectoria articular del Lab 6):
+ * identica a gz_SMC_cart_node; FK de la trayectoria articular del Lab 6):
  *   x_d   = 0.172 + 0.032*sin(t') + 0.027*cos(2t') + 0.003*sin(3t')
  *   y_d   = 0.015 + 0.136*sin(t') - 0.014*cos(2t') + 0.003*sin(3t') - 0.001*cos(4t')
  *   z_d   = 0.128 - 0.008*sin(t') + 0.006*cos(2t')      [z ∈ 0.114..0.142 m]
@@ -86,13 +88,18 @@
  *
  * Parametros ROS 2 (--ros-args -p nombre:=valor):
  *   port_name          [string]  "/dev/ttyUSB0"
- *   gain_scale         [double]  1.0    (escala lineal de K_P, K_D y K_sw; Lambda fija)
+ *   use_integral       [bool]    false  (false = SMC clasico | true = ISMC)
+ *   gain_scale         [double]  1.0    (escala lineal de las ganancias de la
+ *                                        ley activa; Lambdas fijas)
  *   t_imp              [double]  20.0   (duracion del SEGUIMIENTO [s];
  *                                        total = T_TRANS + t_imp)
- *   test_num           [int]     1      (CSV: hw_smc_cart_<rho_func>_<test_num>.csv)
+ *   test_num           [int]     1      (CSV: hw_smc_cart_... o hw_smci_cart_...
+ *                                        segun use_integral)
  *   rho_func           [string]  "sat"  (funcion de conmutacion: "sign" | "sat")
- *   phi                [double]  0.02   (capa limite para sat(s/phi); OJO: aqui
- *                                        s esta en unidades de POSICION [m|rad])
+ *   phi                [double]  0.3    (capa limite para sat(s/phi); OJO con
+ *                                        las unidades: SMC clasico s en [m/s |
+ *                                        rad/s] → usar ~0.3; ISMC s en [m |
+ *                                        rad] → usar ~0.02, -p phi:=0.02)
  *   ab_alpha           [double]  0.2    (filtro α-β: ganancia de posicion)
  *   ab_beta            [double]  0.02   (filtro α-β: ganancia de velocidad)
  *   friction_fc_scale  [double]  0.95   (fraccion de Fc compensada)
@@ -103,8 +110,10 @@
  * motor_I_offset, motor_epsilon_friction, joint_zero_tick, encoder_sign,
  * current_sign, joint_lower/upper, current_*_limit, tau_max.
  *
- * CSV: data/lab6/real/act2/hw_smci_cart_<rho_func>_<test_num>.csv
- * Columnas (compatibles con plots_SMC_cart.m, mode='real', controller='smci'):
+ * CSV: data/lab6/real/act2/hw_smc_cart_<rho_func>_<test_num>.csv   (SMC)
+ *      data/lab6/real/act2/hw_smci_cart_<rho_func>_<test_num>.csv  (ISMC)
+ * Columnas (compatibles con plots_SMC_cart.m, mode='real',
+ * controller='smc'|'smci' segun use_integral):
  *   t, q1..q4, x,y,z,phi, x_des..phi_des, xdot..phidot, xdot_des..phidot_des,
  *   s1..s4, tau1..tau4, cond_J, dq1..dq4, dq1_filt..dq4_filt,
  *   curr_cmd1..4, curr_meas1..4, xi1..xi4
@@ -112,12 +121,16 @@
  *
  * Publisher: /hw/joint_states (sensor_msgs/JointState) — monitoreo
  *
- * Ejemplos de ejecucion:
- *   ros2 run open_manipulator_x_torque_control hw_smci_cart_node \
- *     --ros-args -p rho_func:=sat -p test_num:=1 -p t_imp:=30.0
+ * Ejemplos de ejecucion (primer run SIEMPRE con gain_scale:=0.5 y el brazo
+ * pre-posicionado a mano cerca de Y_START):
+ *   # SMC clasico:
+ *   ros2 run open_manipulator_x_torque_control hw_smc_cart_node_base \
+ *     --ros-args -p gain_scale:=0.5 -p rho_func:=sat -p test_num:=1 -p t_imp:=30.0
  *
- *   ros2 run open_manipulator_x_torque_control hw_smci_cart_node \
- *     --ros-args -p rho_func:=sat -p phi:=0.02 -p test_num:=2 -p t_imp:=30.0
+ *   # ISMC (termino integral habilitado; phi en unidades de POSICION):
+ *   ros2 run open_manipulator_x_torque_control hw_smc_cart_node_base \
+ *     --ros-args -p use_integral:=true -p phi:=0.02 -p rho_func:=sat \
+ *     -p test_num:=2 -p t_imp:=30.0
  *
  * ADVERTENCIA: No ejecutar junto a hardware.launch.py ni ningun proceso
  * que acceda a /dev/ttyUSB0 (ros2_control_node, dynamixel_hardware_interface).
@@ -209,28 +222,33 @@ static constexpr double TORQUE_PER_CURRENT_TICK = TORQUE_CONSTANT_NM_A * CURRENT
 static constexpr double LAMBDA_DLS    = 0.01;
 static constexpr double LAMBDA_DLS_SQ = LAMBDA_DLS * LAMBDA_DLS;
 
-// Y_START = FK(q_d(0)) = FK([0, -0.45, 0.35, pi/4]) — inicio de la
-// trayectoria de referencia (identico a gz_SMC_cart_node)
-static const Eigen::Vector4d Y_START {0.1988, 0.0, 0.1348, 0.6854};
+// ─────────────────────────────────────────────────────────────────────────────
+//  [SECCION 2] Vector Y_START — COMPLETAR
+//
+//  Y_START es la pose cartesiana [x, y, z, phi] de inicio de la trayectoria
+//  de referencia, obtenida de la cinematica directa FK evaluada en q_d(0):
+//    Y_START = FK(q_d(0))
+//
+//  Formato: {x [m], y [m], z [m], phi [rad]}
+// ─────────────────────────────────────────────────────────────────────────────
+static const Eigen::Vector4d Y_START {0.0, 0.0, 0.0, 0.0};  // COMPLETAR
+
 // Transicion mas larga que en sim (5 s vs 3 s): levantar el brazo real
-// contra gravedad+stiction con demandas suaves.
+// contra gravedad+stiction con demandas suaves. (No modificar)
 static constexpr double T_TRANS = 5.0;   // [s]
 
 // Umbral de parada por mal condicionamiento del Jacobiano de tarea
+// (no modificar)
 static constexpr double COND_J_MAX = 150.0;
 
-// Anti-windup del estado integral (ver cabecera):
-// tope POR CANAL ~2-3x el xi_ss esperado; el test1 hw mostro que un tope
-// holgado (0.05 uniforme) deja que Lambda*xi almacene una falsa referencia
-// de hasta 0.5 rad en phi y desestabilice el brazo en los picos de demanda.
+// ── Anti-windup del estado integral xi (INFRAESTRUCTURA, no modificar) ──────
+// Tope POR CANAL |xi_i| <= XI_MAX_i (~2-3x el xi de equilibrio esperado por
+// los sesgos del robot; un tope holgado deja que Lambda*xi almacene una
+// falsa referencia y desestabilice el brazo en los picos de demanda).
 static const Eigen::Vector4d XI_MAX = {0.015, 0.015, 0.015, 0.03};  // [m·s | rad·s]
-// Compuerta de integracion POR CANAL: xi_i solo integra con |s_i| <= gate_i.
-// En unidades de POSICION: para x/y/z 0.02 m (sus errores en regimen son de
-// mm -> engrana; durante las rafagas de saturacion de los picos de phi_des
-// se congelan en vez de rebotar contra el tope — test2 hw: xi_y al tope 57%
-// del tiempo en rafaga, inyectando saltos de Lambda*xi de +-0.05 m). Para
-// phi 0.15 rad (su sesgo ~0.11 debe quedar dentro para que el integrador
-// engrane).
+// Compuerta POR CANAL: xi_i solo integra con |s_i| <= gate_i (en unidades de
+// POSICION). x/y/z: 0.02 m (engrana en regimen, se congela en las rafagas de
+// saturacion). phi: 0.15 rad (su sesgo tipico ~0.11 debe quedar dentro).
 static const Eigen::Vector4d XI_S_GATE = {0.02, 0.02, 0.02, 0.15};  // [m | rad]
 
 // Altura mínima del efector sobre la placa metálica de la base [m].
@@ -244,29 +262,51 @@ static constexpr char EFF_FRAME_NAME[] = "end_effector_link";
 using Vec4 = Eigen::Matrix<double, NUM_JOINTS, 1>;
 
 // ═══════════════════════════════════════════════════════════════════════════
-//  GANANCIAS ISMC CARTESIANO  [x, y, z, phi]
+//  [SECCION 4] GANANCIAS SMC CLASICO  [x, y, z, phi] — COMPLETAR
+//  (se usan cuando use_integral:=false)
 //
-//  Lambda: polo de la superficie  s = e + Lambda*xi           [1/s]
-//  K_P:    ganancia proporcional sobre s en sddot             [1/s²]
-//  K_D:    ganancia derivativa  sobre sdot en sddot           [1/s]
-//  K_sw:   ganancia de conmutacion rho(s)                     [m/s² | rad/s²]
+//  En HARDWARE la stiction real exige rigidez de tarea varias veces mayor
+//  que en Gazebo. Dentro de la capa el SMC equivale a un PD con:
+//    kp_eq = Lambda*(K_V + K_S/phi)   kd_eq = Lambda + K_V + K_S/phi
+//  Apuntar a la rigidez validada por FL: kp_eq ~ [400, 200, 800, 1500].
 //
-//  Mapeadas a la rigidez validada por FL/SMC en hardware. Dentro de la capa
-//  (rho = s/phi) la dinamica del error es:
-//    edd + (Lambda+K_D)*ed + (Lambda*K_D + Kb)*e + Kb*Lambda*xi = 0
-//    con Kb = K_P + K_sw/phi
-//  => kp_eq = Lambda*K_D + Kb    kd_eq = Lambda + K_D    ki_eq = Kb*Lambda
-//  Con phi=0.02: kp_eq = [400, 202, 800, 1500], kd_eq = [40, 28, 57, 77]
-//  (hw_io/hw_smc_cart: [400, 200, 800, 1500] / [40, 28, 57, 77]) y
-//  ki_eq = [1125, 406, 3150, 8300] — el integrador elimina los sesgos DC
-//  del test2 hw (x +14 mm, z +15 mm, phi -110 mrad: residual gravedad/COM).
-//  Lambda ~ omega_n/4 separa el polo integral de la dinamica PD.
-//  gain_scale escala K_P, K_D y K_sw: usar 0.5 en el primer run.
+//  Rangos recomendados (con phi = 0.3):
+//    LAMBDA_Y : 10 – 40   [1/s]
+//    K_V      : 8  – 30
+//    K_S      : 1  – 5    [m/s² | rad/s²]
+//  Primer run SIEMPRE con gain_scale:=0.5.
 // ═══════════════════════════════════════════════════════════════════════════
-static const Eigen::Vector4d LAMBDA_I = {  5.0,   3.5,   7.0,  10.0};
-static const Eigen::Vector4d K_P      = {150.0,  65.0, 300.0, 430.0};
-static const Eigen::Vector4d K_D      = { 35.0,  25.0,  50.0,  67.0};
-static const Eigen::Vector4d K_sw     = {  1.5,   1.0,   3.0,   8.0};
+static const Eigen::Vector4d LAMBDA_Y = {0.0, 0.0, 0.0, 0.0};   // COMPLETAR
+static const Eigen::Vector4d K_V      = {0.0, 0.0, 0.0, 0.0};   // COMPLETAR
+static const Eigen::Vector4d K_S      = {0.0, 0.0, 0.0, 0.0};   // COMPLETAR
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  [SECCION 5] GANANCIAS ISMC  [x, y, z, phi] — COMPLETAR
+//  (se usan cuando use_integral:=true)
+//
+//  Lambda_I: polo de la superficie  s = e + Lambda_I*xi        [1/s]
+//  K_P:      ganancia proporcional sobre s en sddot            [1/s²]
+//  K_D:      ganancia derivativa  sobre sdot en sddot          [1/s]
+//  K_sw:     ganancia de conmutacion rho(s)                    [m/s² | rad/s²]
+//
+//  Dentro de la capa (rho = s/phi) la dinamica del error es un PID con:
+//    kp_eq = Lambda_I*K_D + K_P + K_sw/phi     kd_eq = Lambda_I + K_D
+//    ki_eq = (K_P + K_sw/phi)*Lambda_I
+//  Apuntar a los mismos kp_eq/kd_eq del SMC clasico (la novedad es ki_eq,
+//  que elimina los sesgos DC). Lambda_I ~ sqrt(kp_eq)/4 separa el polo
+//  integral de la dinamica PD.
+//
+//  Rangos recomendados (con phi = 0.02 — ¡s en unidades de POSICION!):
+//    LAMBDA_I : 3  – 12   [1/s]
+//    K_P      : 50 – 500  [1/s²]
+//    K_D      : 20 – 70   [1/s]
+//    K_sw     : 1  – 10   [m/s² | rad/s²]
+// ═══════════════════════════════════════════════════════════════════════════
+static const Eigen::Vector4d LAMBDA_I = {0.0, 0.0, 0.0, 0.0};   // COMPLETAR
+static const Eigen::Vector4d K_P      = {0.0, 0.0, 0.0, 0.0};   // COMPLETAR
+static const Eigen::Vector4d K_D      = {0.0, 0.0, 0.0, 0.0};   // COMPLETAR
+static const Eigen::Vector4d K_sw     = {0.0, 0.0, 0.0, 0.0};   // COMPLETAR
 // ═══════════════════════════════════════════════════════════════════════════
 
 // ============================================================
@@ -315,6 +355,18 @@ struct CartRef {
   Eigen::Vector4d y, ydot, yddot;
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  [SECCION 1] Trayectoria cartesiana de referencia — COMPLETAR
+//
+//  Definir la trayectoria como una serie de Fourier (w = 1.0 rad/s, misma
+//  trayectoria que en Gazebo):
+//    y_d(t)    = a0 + sum_n [ An*cos(n*w*t) + Bn*sin(n*w*t) ]
+//    ydot_d(t) = derivada analitica exacta de y_d(t)
+//    yddot_d(t)= derivada analitica exacta de ydot_d(t)
+//
+//  Las variables auxiliares sN = sin(N*t) y cN = cos(N*t) ya estan
+//  declaradas para facilitar la escritura de las expresiones.
+// ─────────────────────────────────────────────────────────────────────────────
 static CartRef desiredTrajectory(double t)
 {
   const double s1 = std::sin(t);
@@ -325,25 +377,31 @@ static CartRef desiredTrajectory(double t)
   const double c3 = std::cos(3.0 * t);
   const double s4 = std::sin(4.0 * t);
   const double c4 = std::cos(4.0 * t);
+  (void)s1; (void)c1; (void)s2; (void)c2;   // suprimir warnings mientras la
+  (void)s3; (void)c3; (void)s4; (void)c4;   // seccion esta incompleta
 
   CartRef ref;
+
+  // COMPLETAR: posicion deseada y_d(t) = [x_d, y_d, z_d, phi_d]
   ref.y <<
-      0.172 + 0.032*s1 + 0.027*c2 + 0.003*s3,
-      0.015 + 0.136*s1 - 0.014*c2 + 0.003*s3 - 0.001*c4,
-      0.128 - 0.008*s1 + 0.006*c2,
-      0.685 + 0.250*s1;
+      0.0,   // x_d   : COMPLETAR
+      0.0,   // y_d   : COMPLETAR
+      0.0,   // z_d   : COMPLETAR
+      0.0;   // phi_d : COMPLETAR
 
+  // COMPLETAR: velocidad deseada ydot_d(t) (derivada analitica de y_d)
   ref.ydot <<
-       0.032*c1 - 0.054*s2 + 0.009*c3,
-       0.136*c1 + 0.028*s2 + 0.009*c3 + 0.004*s4,
-      -0.008*c1 - 0.012*s2,
-       0.250*c1;
+      0.0,   // xdot_d   : COMPLETAR
+      0.0,   // ydot_d   : COMPLETAR
+      0.0,   // zdot_d   : COMPLETAR
+      0.0;   // phidot_d : COMPLETAR
 
+  // COMPLETAR: aceleracion deseada yddot_d(t) (derivada analitica de ydot_d)
   ref.yddot <<
-      -0.032*s1 - 0.108*c2 - 0.027*s3,
-      -0.136*s1 + 0.056*c2 - 0.027*s3 + 0.016*c4,
-       0.008*s1 - 0.024*c2,
-      -0.250*s1;
+      0.0,   // xddot_d   : COMPLETAR
+      0.0,   // yddot_d   : COMPLETAR
+      0.0,   // zddot_d   : COMPLETAR
+      0.0;   // phiddot_d : COMPLETAR
 
   return ref;
 }
@@ -381,22 +439,31 @@ static CartRef transitionTrajectory(double t,
   return ref;
 }
 
-// ── Funciones de conmutacion ─────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+//  [SECCION 3] Funciones de conmutacion — COMPLETAR
+//
+//  Implementar rho(s) para cada tipo:
+//    sign : rho(s) = +1 si s > 0,  -1 si s < 0,  0 si s == 0
+//    sat  : rho(s) = clamp(s / phi, -1, 1)        (phi: capa limite)
+// ─────────────────────────────────────────────────────────────────────────────
 enum class RhoFunc { SIGN, SAT };
 
 static double rho_scalar(double s, RhoFunc func, double phi)
 {
+  (void)s; (void)phi;
+
   switch (func) {
     case RhoFunc::SIGN:
-      return (s > 0.0) ? 1.0 : (s < 0.0 ? -1.0 : 0.0);
+      return 0.0;  // COMPLETAR: sign(s)
     case RhoFunc::SAT:
-      return std::max(-1.0, std::min(1.0, s / phi));
+      return 0.0;  // COMPLETAR: sat(s/phi) = clamp(s/phi, -1, 1)
     default:
       return 0.0;
   }
 }
 
-static Eigen::Vector4d rho_vec(const Eigen::Vector4d & s, RhoFunc func, double phi)
+// Aplica rho_scalar elemento a elemento sobre el vector s (no modificar)
+[[maybe_unused]] static Eigen::Vector4d rho_vec(const Eigen::Vector4d & s, RhoFunc func, double phi)
 {
   Eigen::Vector4d r;
   for (int i = 0; i < NUM_JOINTS; ++i) {
@@ -409,21 +476,21 @@ static Eigen::Vector4d rho_vec(const Eigen::Vector4d & s, RhoFunc func, double p
 // Nodo ROS 2
 // ============================================================
 
-class HWSMCICartNode : public rclcpp::Node
+class HWSMCCartNode : public rclcpp::Node
 {
 public:
-  explicit HWSMCICartNode(const rclcpp::NodeOptions& opts = rclcpp::NodeOptions())
-  : Node("hw_smci_cart_node", opts),
-    hw_active_(false), y0_initialized_(false),
-    xi_(Eigen::Vector4d::Zero())
+  explicit HWSMCCartNode(const rclcpp::NodeOptions& opts = rclcpp::NodeOptions())
+  : Node("hw_smc_cart_node", opts),
+    hw_active_(false), y0_initialized_(false)
   {
     // ── Parámetros ──────────────────────────────────────────────────────────
     this->declare_parameter<std::string>("port_name",  "/dev/ttyUSB0");
+    this->declare_parameter<bool>       ("use_integral", false);
     this->declare_parameter<double>     ("gain_scale",  1.0);
     this->declare_parameter<double>     ("t_imp",       20.0);
     this->declare_parameter<int>        ("test_num",    1);
     this->declare_parameter<std::string>("rho_func",    "sat");
-    this->declare_parameter<double>     ("phi",         0.02);
+    this->declare_parameter<double>     ("phi",         0.3);
 
     using dvec = std::vector<double>;
     this->declare_parameter<dvec>("motor_alpha",            dvec{208.5, 208.5, 208.5, 208.5});
@@ -447,9 +514,10 @@ public:
     this->declare_parameter<int>   ("current_measured_peak",  313);
     this->declare_parameter<double>("tau_max",                1.2);
 
-    port_name_  = this->get_parameter("port_name").as_string();
-    gain_scale_ = this->get_parameter("gain_scale").as_double();
-    t_imp_      = this->get_parameter("t_imp").as_double();
+    port_name_    = this->get_parameter("port_name").as_string();
+    use_integral_ = this->get_parameter("use_integral").as_bool();
+    gain_scale_   = this->get_parameter("gain_scale").as_double();
+    t_imp_        = this->get_parameter("t_imp").as_double();
     const int test_num = this->get_parameter("test_num").as_int();
     phi_        = this->get_parameter("phi").as_double();
     const std::string rho_str = this->get_parameter("rho_func").as_string();
@@ -501,19 +569,30 @@ public:
     RCLCPP_INFO(get_logger(), "puerto=%s  gain=%.2f  t_imp(seguimiento)=%.1fs  test=%d",
       port_name_.c_str(), gain_scale_, t_imp_, test_num);
     RCLCPP_INFO(get_logger(),
-      "ISMC cartesiano hw — rho=%s  phi=%.4f  tau_max=%.2f N·m  T_trans=%.1f s  "
-      "XI_max=[%.3f %.3f %.3f %.3f]  XI_s_gate=[%.2f %.2f %.2f %.2f]",
-      rho_str_.c_str(), phi_, tau_max_, T_TRANS,
-      XI_MAX[0], XI_MAX[1], XI_MAX[2], XI_MAX[3],
-      XI_S_GATE[0], XI_S_GATE[1], XI_S_GATE[2], XI_S_GATE[3]);
-    RCLCPP_INFO(get_logger(),
-      "Lambda=[%.1f %.1f %.1f %.1f]  K_P=[%.0f %.0f %.0f %.0f]  "
-      "K_D=[%.0f %.0f %.0f %.0f]  K_sw=[%.1f %.1f %.1f %.1f]  lambda_DLS=%.3f",
-      LAMBDA_I[0], LAMBDA_I[1], LAMBDA_I[2], LAMBDA_I[3],
-      K_P[0],      K_P[1],      K_P[2],      K_P[3],
-      K_D[0],      K_D[1],      K_D[2],      K_D[3],
-      K_sw[0],     K_sw[1],     K_sw[2],     K_sw[3],
-      LAMBDA_DLS);
+      "%s cartesiano hw — rho=%s  phi=%.4f  tau_max=%.2f N·m  T_trans=%.1f s",
+      use_integral_ ? "ISMC" : "SMC",
+      rho_str_.c_str(), phi_, tau_max_, T_TRANS);
+    if (use_integral_) {
+      RCLCPP_INFO(get_logger(),
+        "Lambda_I=[%.1f %.1f %.1f %.1f]  K_P=[%.0f %.0f %.0f %.0f]  "
+        "K_D=[%.0f %.0f %.0f %.0f]  K_sw=[%.1f %.1f %.1f %.1f]  lambda_DLS=%.3f",
+        LAMBDA_I[0], LAMBDA_I[1], LAMBDA_I[2], LAMBDA_I[3],
+        K_P[0],      K_P[1],      K_P[2],      K_P[3],
+        K_D[0],      K_D[1],      K_D[2],      K_D[3],
+        K_sw[0],     K_sw[1],     K_sw[2],     K_sw[3],
+        LAMBDA_DLS);
+      RCLCPP_INFO(get_logger(),
+        "XI_max=[%.3f %.3f %.3f %.3f]  XI_s_gate=[%.2f %.2f %.2f %.2f]",
+        XI_MAX[0], XI_MAX[1], XI_MAX[2], XI_MAX[3],
+        XI_S_GATE[0], XI_S_GATE[1], XI_S_GATE[2], XI_S_GATE[3]);
+    } else {
+      RCLCPP_INFO(get_logger(),
+        "Lambda_y=[%.1f %.1f %.1f %.1f]  Kv=[%.1f %.1f %.1f %.1f]  Ks=[%.1f %.1f %.1f %.1f]  lambda_DLS=%.3f",
+        LAMBDA_Y[0], LAMBDA_Y[1], LAMBDA_Y[2], LAMBDA_Y[3],
+        K_V[0],      K_V[1],      K_V[2],      K_V[3],
+        K_S[0],      K_S[1],      K_S[2],      K_S[3],
+        LAMBDA_DLS);
+    }
     RCLCPP_INFO(get_logger(),
       "Y_start=[%.3f %.3f %.3f %.3f]  Z_min_floor=%.3f m",
       Y_START[0], Y_START[1], Y_START[2], Y_START[3], Z_MIN_FLOOR);
@@ -543,9 +622,11 @@ public:
     RCLCPP_INFO(get_logger(), "Pinocchio: nv=%d  frame='%s' (id=%lu)",
       model_.nv, EFF_FRAME_NAME, frame_id_);
 
-    // ── CSV ──────────────────────────────────────────────────────────────────
+    // ── CSV (prefijo segun la ley activa; compatible con plots_SMC_cart.m
+    //    controller='smc'|'smci') ────────────────────────────────────────────
     std::filesystem::create_directories(std::string(PACKAGE_DATA_DIR) + "/lab6/real/act2");
-    csv_path_ = std::string(PACKAGE_DATA_DIR) + "/lab6/real/act2/hw_smci_cart_"
+    csv_path_ = std::string(PACKAGE_DATA_DIR) + "/lab6/real/act2/"
+                + (use_integral_ ? "hw_smci_cart_" : "hw_smc_cart_")
                 + rho_str_ + "_" + std::to_string(test_num) + ".csv";
     csv_.open(csv_path_);
     if (csv_.is_open()) {
@@ -581,11 +662,11 @@ public:
     const auto period = std::chrono::microseconds(
       static_cast<int64_t>(std::lround(1e6 / loop_rate_hz_)));
     timer_ = this->create_wall_timer(period, [this]() { tick(); });
-    RCLCPP_INFO(get_logger(), "Control ISMC cartesiano activo a %.0f Hz (Ts=%.1f ms). Ctrl+C para detener.",
+    RCLCPP_INFO(get_logger(), "Control SMC cartesiano activo a %.0f Hz (Ts=%.1f ms). Ctrl+C para detener.",
       loop_rate_hz_, 1e3 * Ts_);
   }
 
-  ~HWSMCICartNode()
+  ~HWSMCCartNode()
   {
     if (timer_) timer_->cancel();
     shutdown_hardware();
@@ -750,9 +831,10 @@ private:
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  //  Ley de control ISMC cartesiana (actualiza el estado integral xi_)
-  //  gain_scale escala K_P, K_D y K_sw linealmente; Lambda (polo integral
-  //  de la superficie) no se escala.
+  //  Ley de control cartesiana (SMC clasico o ISMC segun use_integral)
+  //  gain_scale escala las ganancias de la ley activa; las Lambdas definen
+  //  la superficie y no se escalan. Actualiza el estado integral xi_ (solo
+  //  con use_integral:=true).
   // ─────────────────────────────────────────────────────────────────────────
 
   struct SMCOut {
@@ -762,15 +844,15 @@ private:
     double          cond_J;
   };
 
-  SMCOut compute_ismc_control(const Vec4& q, const Vec4& dq, const CartRef& ref,
-                              bool in_trans)
+  SMCOut compute_control(const Vec4& q, const Vec4& dq, const CartRef& ref,
+                         bool in_trans)
   {
     Eigen::VectorXd q_pin  = Eigen::VectorXd::Zero(model_.nv);
     Eigen::VectorXd dq_pin = Eigen::VectorXd::Zero(model_.nv);
     q_pin.head(NUM_JOINTS)  = q;
     dq_pin.head(NUM_JOINTS) = dq;
 
-    // FK + Jacobiano 6×nv
+    // FK + Jacobiano 6×nv (infraestructura, no modificar)
     Eigen::MatrixXd J6 = Eigen::MatrixXd::Zero(6, model_.nv);
     pinocchio::computeFrameJacobian(model_, data_, q_pin, frame_id_,
                                      pinocchio::LOCAL_WORLD_ALIGNED, J6);
@@ -805,16 +887,16 @@ private:
     const Eigen::Matrix4d M4   = data_.M.topLeftCorner<NUM_JOINTS, NUM_JOINTS>();
     const Eigen::Vector4d nle4 = data_.nle.head<NUM_JOINTS>();
 
-    // Errores cartesianos
+    // Errores cartesianos (infraestructura)
     const Eigen::Vector4d y_actual{p[0], p[1], p[2], phi_ee};
     const Eigen::Vector4d e_y    = y_actual - ref.y;
     const Eigen::Vector4d edot_y = ydot     - ref.ydot;
 
-    // Estado integral: xi_i += e_i*Ts (Euler forward), POR CANAL. Solo
-    // durante el seguimiento, solo cerca de la superficie (|s_i| <=
-    // XI_S_GATE_i, evaluado con el xi previo), congelado si el tick
-    // anterior saturo algun torque, y acotado a |xi_i| <= XI_MAX_i.
-    if (!in_trans && !tau_saturated_prev_) {
+    // Estado integral xi (INFRAESTRUCTURA, no modificar): solo con
+    // use_integral y en fase de seguimiento; compuerta por canal
+    // |s_i| <= XI_S_GATE_i, congelado si el tick anterior saturo algun
+    // torque, y acotado a |xi_i| <= XI_MAX_i.
+    if (use_integral_ && !in_trans && !tau_saturated_prev_) {
       for (int i = 0; i < NUM_JOINTS; ++i) {
         const double s_pre = e_y[i] + LAMBDA_I[i] * xi_[i];
         if (std::abs(s_pre) <= XI_S_GATE[i]) {
@@ -824,33 +906,74 @@ private:
       }
     }
 
-    // Superficie deslizante integral
-    const Eigen::Vector4d s_y    = e_y    + LAMBDA_I.asDiagonal() * xi_;
-    const Eigen::Vector4d sdot_y = edot_y + LAMBDA_I.asDiagonal() * e_y;
-
-    const Eigen::Vector4d k_p  = K_P  * gain_scale_;
-    const Eigen::Vector4d k_d  = K_D  * gain_scale_;
-    const Eigen::Vector4d k_sw = K_sw * gain_scale_;
-
-    // Aceleracion cartesiana virtual (IOL de s con grado relativo 2):
-    //   sddot_cmd = -K_D*sdot - K_P*s - K_sw*rho(s)
-    //   v_s = yddot_d - Lambda*edot - jdqd - K_D*sdot - K_P*s - K_sw*rho(s)
-    const Eigen::Vector4d rho = rho_vec(s_y, rho_func_, phi_);
-    const Eigen::Vector4d v_s = ref.yddot
-                              - LAMBDA_I.asDiagonal() * edot_y
-                              - jdqd
-                              - k_d.asDiagonal()  * sdot_y
-                              - k_p.asDiagonal()  * s_y
-                              - k_sw.asDiagonal() * rho;
-
-    // Pseudo-inversa DLS (factorización reutilizada para qddot y dq_des)
+    // Pseudo-inversa DLS (infraestructura; factorizacion reutilizada)
     const Eigen::Matrix4d A = J4*J4.transpose() + LAMBDA_DLS_SQ*Eigen::Matrix4d::Identity();
     const Eigen::LDLT<Eigen::Matrix4d> A_ldlt = A.ldlt();
-    const Eigen::Vector4d qddot = J4.transpose() * A_ldlt.solve(v_s);
 
-    // Torque con saturación (la friccion real se compensa en torque_to_current)
-    const Eigen::Vector4d tau_unsat = M4*qddot + nle4;
-    const Eigen::Vector4d tau_sat   = tau_unsat.cwiseMin(tau_max_).cwiseMax(-tau_max_);
+    Eigen::Vector4d s_y   = Eigen::Vector4d::Zero();
+    Eigen::Vector4d qddot = Eigen::Vector4d::Zero();
+
+    if (!use_integral_) {
+      // ═════════════════════════════════════════════════════════════════════
+      //  [SECCION 6] Ley SMC clasica — COMPLETAR
+      //
+      //  Disponible: e_y, edot_y, ref.yddot, jdqd, LAMBDA_Y, K_V, K_S,
+      //              gain_scale_, rho_vec(s, rho_func_, phi_), A_ldlt, J4
+      //
+      //  6.1  s_y = edot_y + Lambda_y * e_y            (superficie, ya declarada)
+      //  6.2  rho = rho_vec(s_y, rho_func_, phi_)
+      //  6.3  v_y = yddot_d - Lambda_y*edot_y - k_v*s_y - k_s*rho
+      //       (k_v = K_V*gain_scale_, k_s = K_S*gain_scale_)
+      //  6.4  qddot = J4^T * A_ldlt.solve(v_y - jdqd)  (ya dada abajo)
+      // ═════════════════════════════════════════════════════════════════════
+
+      // COMPLETAR: s_y (asignar, no redeclarar), rho y v_y
+      const Eigen::Vector4d v_y = Eigen::Vector4d::Zero();   // COMPLETAR
+
+      // Aceleracion articular via DLS (no modificar):
+      qddot = J4.transpose() * A_ldlt.solve(v_y - jdqd);
+      // ═════════════════════════════════════════════════════════════════════
+    } else {
+      // ═════════════════════════════════════════════════════════════════════
+      //  [SECCION 7] Ley ISMC — COMPLETAR
+      //
+      //  Disponible: e_y, edot_y, ref.yddot, jdqd, xi_ (ya actualizado por
+      //              la infraestructura), LAMBDA_I, K_P, K_D, K_sw,
+      //              gain_scale_, rho_vec(s, rho_func_, phi_), A_ldlt, J4
+      //
+      //  7.1  s_y  = e_y + Lambda_I * xi_              (superficie integral)
+      //  7.2  sdot_y = edot_y + Lambda_I * e_y
+      //  7.3  rho  = rho_vec(s_y, rho_func_, phi_)     (¡phi en unidades de posicion!)
+      //  7.4  v_s  = yddot_d - Lambda_I*edot_y - jdqd
+      //              - k_d*sdot_y - k_p*s_y - k_sw*rho
+      //       (k_p = K_P*gain_scale_, etc.)
+      //  7.5  qddot = J4^T * A_ldlt.solve(v_s)         (ya dada abajo)
+      // ═════════════════════════════════════════════════════════════════════
+
+      // COMPLETAR: s_y (asignar, no redeclarar), sdot_y, rho y v_s
+      const Eigen::Vector4d v_s = Eigen::Vector4d::Zero();   // COMPLETAR
+
+      // Aceleracion articular via DLS (no modificar):
+      qddot = J4.transpose() * A_ldlt.solve(v_s);
+      // ═════════════════════════════════════════════════════════════════════
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    //  [SECCION 8] Torque — COMPLETAR (comun a ambas leyes)
+    //
+    //  tau_unsat = M4 * qddot + nle4
+    //  (en hardware SIN tau_fric del URDF: la friccion real se compensa en
+    //   torque_to_current con el modelo identificado del motor)
+    // ═══════════════════════════════════════════════════════════════════════
+    const Eigen::Vector4d tau_unsat = Eigen::Vector4d::Zero();  // COMPLETAR
+
+    // Suprimir warnings mientras las secciones estan incompletas
+    // (eliminar al completarlas):
+    (void)M4; (void)nle4; (void)qddot; (void)edot_y;
+    // ═══════════════════════════════════════════════════════════════════════
+
+    // Saturacion + flag de anti-windup (infraestructura, no modificar)
+    const Eigen::Vector4d tau_sat = tau_unsat.cwiseMin(tau_max_).cwiseMax(-tau_max_);
     tau_saturated_prev_ = (tau_unsat.cwiseAbs().maxCoeff() >= tau_max_);
 
     // Condicionamiento del Jacobiano (monitoreo de singularidades)
@@ -974,9 +1097,9 @@ private:
       return;
     }
 
-    // 6. Ley de control ISMC — usa dq_hat_ para reducir chattering;
-    //    actualiza el estado integral xi_ internamente
-    const SMCOut ctrl = compute_ismc_control(q, dq_hat_, ref, in_trans);
+    // 6. Ley de control (SMC clasico o ISMC) — usa dq_hat_ para reducir
+    //    chattering; actualiza el estado integral xi_ internamente
+    const SMCOut ctrl = compute_control(q, dq_hat_, ref, in_trans);
 
     // 6b. Guarda de altura mínima del EFECTOR medido (FK de Pinocchio)
     if (ctrl.y_actual[2] < z_floor) {
@@ -1119,8 +1242,10 @@ private:
   bool hw_active_;
   bool y0_initialized_;
   Eigen::Vector4d y0_;
-  Eigen::Vector4d xi_;                 // estado integral ∫e dt (solo seguimiento)
-  bool            tau_saturated_prev_{false};  // anti-windup condicional
+
+  bool            use_integral_{false};
+  Eigen::Vector4d xi_{Eigen::Vector4d::Zero()};  // estado integral ∫e dt
+  bool            tau_saturated_prev_{false};    // anti-windup condicional
 
   std::chrono::high_resolution_clock::time_point start_time_;
   int log_cnt_{0};
@@ -1158,17 +1283,17 @@ int main(int argc, char* argv[])
     args.push_back(cfg);
     opts.arguments(args);
     opts.use_global_arguments(false);
-    RCLCPP_INFO(rclcpp::get_logger("hw_smci_cart_node"),
+    RCLCPP_INFO(rclcpp::get_logger("hw_smc_cart_node"),
       "motorXM430W350T_params auto-cargado: %s", cfg.c_str());
   } else {
-    RCLCPP_WARN(rclcpp::get_logger("hw_smci_cart_node"),
+    RCLCPP_WARN(rclcpp::get_logger("hw_smc_cart_node"),
       "motorXM430W350T_params no encontrado: %s — usando defaults del código.", cfg.c_str());
   }
 
   try {
-    rclcpp::spin(std::make_shared<HWSMCICartNode>(opts));
+    rclcpp::spin(std::make_shared<HWSMCCartNode>(opts));
   } catch (const std::exception& e) {
-    RCLCPP_FATAL(rclcpp::get_logger("hw_smci_cart_node"), "Excepcion: %s", e.what());
+    RCLCPP_FATAL(rclcpp::get_logger("hw_smc_cart_node"), "Excepcion: %s", e.what());
     rclcpp::shutdown();
     return 1;
   }
