@@ -47,7 +47,7 @@ EXPORT_FIGS = false;
 
 % ── Identificadores de sesión (editar antes de cada ejecución) ───────────────
 act_num            = 2;     % número de actividad
-trial_num          = 4;     % número de prueba — nombra el log y el zmin
+trial_num          = 5;     % número de prueba — nombra el log y el zmin
 use_saved_solution = false; % true → carga N, Ts, x0, yf y zmin desde el .mat
                             % (false: la caja crecio con la envolvente de
                             %  pitch del gripper → re-optimizar)
@@ -90,7 +90,7 @@ nu = 4;
 
 x0 = [pi/2; 0; pi/6; pi/3; 0; 0; 0; 0];      % Estado inicial (q,dq)
 %x0 = [0; deg2rad(50); deg2rad(35); deg2rad(-105); 0; 0; 0; 0];      % Estado inicial (q,dq)
-yf = [0.2; -0.13; 0.2; 0];               % Salida deseada (posición y orientación)
+yf = [0.27; -0.11; 0.2; 0];               % Salida deseada (posición y orientación)
 
 % ── Carga desde .mat si use_saved_solution = true ────────────────────────────
 % Sobreescribe N, Ts, x0, yf (y carga zmin/exitflag/output) desde el archivo.
@@ -194,7 +194,7 @@ x0_guess = x0;
 % Si existe la solucion de la Actividad 1 con el mismo N y Ts, se usa como
 % semilla: mismo x0/yf sin obstaculo, tipicamente reduce las iteraciones de
 % fmincon a la mitad.
-warm_start_act1_trial = 3;   % 0 = desactivar; n>0 = usar zmin_act1_n.mat
+warm_start_act1_trial = 0;   % 0 = desactivar; n>0 = usar zmin_act1_n.mat
 
 z0     = [kron(ones(N,1), x0); kron(ones(N,1), u0g)];
 ws_msg = 'punto constante en x0 con compensacion gravitatoria';

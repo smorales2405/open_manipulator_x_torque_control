@@ -25,7 +25,7 @@ EXPORT_FIGS = false;   % true  = guardar PNG (300 dpi) y EPS vectorial (600 dpi)
 
 % ── Identificadores de sesion (editar antes de cada ejecucion) ────────────
 act_num            = 1;     % numero de actividad
-trial_num          = 3;     % numero de prueba — nombra el log y el zmin
+trial_num          = 4;     % numero de prueba — nombra el log y el zmin
 use_saved_solution = true; % true → carga N, Ts, x0, yf y zmin desde el .mat
 
 pkg_dir    = '/home/utec/open_manx_ws/src/open_manipulator_x_torque_control';
@@ -68,7 +68,7 @@ nx = 8;
 nu = 4;
 
 x0 = [pi/2; 0; pi/6; pi/3; 0; 0; 0; 0];      % Estado inicial (q,dq)
-yf = [0.2; -0.13; 0.2; 0];               % Salida deseada (posición y orientación)
+yf = [0.27; -0.11; 0.2; 0];               % Salida deseada (posición y orientación)
 
 % ── Carga desde .mat si use_saved_solution = true ────────────────────────
 % Sobreescribe N, Ts, x0, yf (y carga zmin/exitflag/output) desde el archivo.
