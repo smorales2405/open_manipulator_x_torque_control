@@ -23,15 +23,15 @@ alpha — y elimina el Fv negativo espurio que produce restar α·tau_grav imper
 Para J1 (eje vertical) la gravedad es nula y la corriente ya es fricción pura.
 
 CONTROL DE CALIDAD (este script decide si hay que repetir el ensayo):
-al final imprime un VEREDICTO por joint — OK / OK con nota / REVISAR /
-RE-EJECUTAR — con el comando de relanzamiento concreto. Criterios:
-  · nº de velocidades con emparejamiento válido (mínimo 3)
-  · residuo RMS del ajuste (≤4 ticks bueno; >8 repetir)
-  · outlier a la velocidad más baja = fricción de arranque (breakaway/Stribeck):
-    real pero fuera del modelo Coulomb cinético → NO obliga a repetir
-  · puntos I_fric negativos → revisar convención de signos
-Caso típico (J2): resid alto por rebote pobre a baja velocidad → repetir con
-vel_band:=0.3 (más reversiones por segmento) y/o vel_seg_duration:=8.0.
+  · puntos con <2 bins de q emparejados se DESCARTAN del ajuste (frágiles)
+  · outlier alto a la v mínima = fricción de arranque (breakaway/Stribeck):
+    se excluye del ajuste (los Fv/Fc oficiales son del régimen CINÉTICO) y
+    NO obliga a repetir
+  · detecta BARRIDO TRUNCADO (duration_s corto para vel_seg_duration elegido)
+  · el consejo de re-ejecución tiene en cuenta la banda y duración de segmento
+    que el log YA usó (estimadas de los datos): no repite recetas ya aplicadas
+Veredicto por joint: OK / OK con nota / REVISAR / RE-EJECUTAR, con el comando
+concreto de relanzamiento. Código de salida 2 = repetir el ensayo.
 
 Entrada : data/diagnostics/sinusoidal/hw_sin_torque_<LOG_ID>.csv
 Salidas :
@@ -41,8 +41,6 @@ Salidas :
     4) YAML    : data/identification/friction_J<j>_log<LOG_ID>.yaml  (fragmento
                  para assemble_motor_params.py)
 
-Código de salida: 0 = OK/REVISAR, 2 = RE-EJECUTAR (repetir el ensayo).
-
 Uso : python3 src/Identification/identify_friction.py <LOG_ID> [--joint N]
       --joint N verifica que el log corresponda a la articulación esperada.
 Protocolo completo: src/Identification/Ident_OpenManX_XM430W350T_procedure.md
@@ -51,6 +49,7 @@ Protocolo completo: src/Identification/Ident_OpenManX_XM430W350T_procedure.md
 import os
 import sys
 import csv
+import math
 import argparse
 import datetime
 import numpy as np
@@ -73,14 +72,21 @@ STEADY_TOL    = 0.30   # |dq_meas - dq_ref| / |dq_ref| máximo para "en régimen
 SETTLE_SKIP_S = 0.5    # [s] descartados tras el fin del settling
 
 # Emparejamiento por posición (cancelación exacta de gravedad)
-N_QBINS  = 8           # número de bins de q sobre el rango recorrido
-MIN_BIN  = 5           # muestras mínimas por bin y por sentido para usar el bin
-MIN_VELS = 3           # velocidades mínimas con dato para ajustar
+N_QBINS     = 8        # número de bins de q sobre el rango recorrido
+MIN_BIN     = 5        # muestras mínimas por bin y por sentido para usar el bin
+MIN_BINS_PT = 2        # bins emparejados mínimos para que un punto entre al ajuste
+MIN_VELS    = 3        # velocidades mínimas (tras descartes) para ajustar
 
 # Umbrales del veredicto (residuo RMS del ajuste, en ticks)
 RESID_OK     = 4.0     # ≤ → OK
-RESID_REVIEW = 8.0     # ≤ → OK con nota / REVISAR ; > → RE-EJECUTAR
+RESID_REVIEW = 8.0     # ≤ → REVISAR ; > → RE-EJECUTAR
 RESID_BREAK  = 3.0     # residuo sin el punto de v mínima ≤ → outlier = breakaway
+
+# Detección de barrido truncado / parámetros ya aplicados (estimados del log)
+TRUNC_FRAC   = 0.6     # dwell de la última magnitud < 0.6·mediana → truncado
+BAND_APPLIED = 0.40    # band_est ≤ → la banda angosta ya se usó
+SEG_APPLIED  = 7.0     # seg_est ≥ → los segmentos largos ya se usaron
+N_VEL_LIST   = 8       # nº de velocidades del vel_list por defecto (duration_s)
 
 NJ = 4
 
@@ -132,15 +138,63 @@ if args.joint is not None and (args.joint - 1) not in vel_joints:
     sys.exit(2)
 
 active = np.where(np.any(np.abs(dq_ref) > 0.01, axis=1))[0]
-t0 = t[active[0]] + SETTLE_SKIP_S if active.size else 0.0
+t_settle_est = t[active[0]] if active.size else 2.0
+t0 = t_settle_est + SETTLE_SKIP_S
 win = t >= t0
+
+# ════════════════════════════════════════════════════════════════════════════
+#  Condiciones del ensayo estimadas del propio log (para el consejo de
+#  re-ejecución): banda de rebote, duración de segmento y truncamiento.
+# ════════════════════════════════════════════════════════════════════════════
+
+def sweep_conditions(i):
+    """Devuelve (band_est, seg_est, truncated, dwell) del joint i."""
+    act = np.abs(dq_ref[:, i]) > 0.01
+    qa = q[act, i]
+    band_est = float(qa.max() - qa.min()) / 2.0 if qa.size else float("nan")
+    mags = sorted(set(np.round(np.abs(dq_ref[act, i]), 3)))
+    dwell = {m: Ts * float(np.sum(np.abs(np.abs(dq_ref[:, i]) - m) < 1e-3))
+             for m in mags}
+    if len(dwell) >= 2:
+        d_sorted = [dwell[m] for m in mags]
+        seg_est = float(np.median(d_sorted[:-1]))   # sin la última (posible corte)
+        truncated = d_sorted[-1] < TRUNC_FRAC * seg_est
+    else:
+        seg_est = float(next(iter(dwell.values()), 0.0))
+        truncated = False
+    return band_est, seg_est, truncated, dwell
+
+def relaunch_advice(j, band_est, seg_est, truncated):
+    """Comando de re-ejecución que NO repite recetas ya aplicadas en el log.
+       Devuelve (comando, escalated): escalated=True si banda y segmentos ya
+       estaban ajustados (el problema no es de configuración del barrido).
+       Si el barrido se truncó, la receta es la MISMA configuración con la
+       duración completa (no escalar nada: el ajuste local no es el problema)."""
+    band_applied = band_est <= BAND_APPLIED
+    seg_applied  = seg_est >= SEG_APPLIED
+    band_t = round(band_est, 1) if band_applied else 0.3
+    if truncated:
+        escalated = False
+        seg_t = round(seg_est, 1)
+    elif band_applied and seg_applied:
+        escalated = True
+        seg_t = math.ceil(seg_est - 0.01) + 2.0  # escalar: aún más tiempo por segmento
+    else:
+        escalated = False
+        seg_t = round(seg_est, 1) if seg_applied else 8.0
+    dur_t = math.ceil(t_settle_est + N_VEL_LIST * seg_t + 2.0)
+    cmd = ("  ros2 launch open_manipulator_x_torque_control friction_sweep.launch.py \\\n"
+           f"    friction_joint:={j} open_port:=true enable_torque:=true \\\n"
+           f"    enable_current_commands:=true log_id:=<NUEVO_LOG_ID> \\\n"
+           f"    vel_band:={band_t} vel_seg_duration:={seg_t} duration_s:={dur_t}.0")
+    return cmd, escalated
 
 # ════════════════════════════════════════════════════════════════════════════
 #  Fricción por reversión de velocidad emparejada por posición
 # ════════════════════════════════════════════════════════════════════════════
 
 def friction_points(i):
-    """Devuelve (v, I_fric, I_grav, n_bins, mags_perdidas):
+    """Devuelve (v, I_fric, I_grav, n_bins, mags_sin_par):
        un punto por magnitud de velocidad + cobertura del emparejamiento."""
     qi   = q[win, i]
     dqr  = dq_ref[win, i]
@@ -185,19 +239,33 @@ results = {}
 seg_rows = []
 for i in vel_joints:
     v, fr, gr, nb, missing = friction_points(i)
-    if len(v) < MIN_VELS:
-        results[i] = dict(ok=False, n=len(v), missing=missing)
+    band_est, seg_est, truncated, dwell = sweep_conditions(i)
+    use = nb >= MIN_BINS_PT
+    r = dict(band_est=band_est, seg_est=seg_est, truncated=truncated,
+             v=v, fr=fr, gr=gr, nb=nb, missing=missing,
+             dropped=[(vv, ff, n) for vv, ff, n in zip(v[~use], fr[~use], nb[~use])])
+    v_fit, fr_fit = v[use], fr[use]
+    if len(v_fit) < MIN_VELS:
+        r.update(ok=False, n=len(v_fit))
+        results[i] = r
         continue
-    Fv, Fc, resid_rms = fit_fv_fc(v, fr)
-    # Ajuste alternativo sin la velocidad más baja: si el residuo se desploma,
-    # el punto de v mínima es fricción de arranque (breakaway), no ruido.
-    if len(v) > MIN_VELS:
-        Fv_alt, Fc_alt, resid_alt = fit_fv_fc(v[1:], fr[1:])
-    else:
-        Fv_alt, Fc_alt, resid_alt = Fv, Fc, resid_rms
-    results[i] = dict(ok=True, Fv=Fv, Fc=Fc, resid=resid_rms,
-                      Fv_alt=Fv_alt, Fc_alt=Fc_alt, resid_alt=resid_alt,
-                      v=v, fr=fr, gr=gr, nb=nb, missing=missing, n=len(v))
+    Fv, Fc, resid_rms = fit_fv_fc(v_fit, fr_fit)
+    # Fricción de arranque (breakaway/Stribeck): si al excluir el punto de v
+    # mínima el residuo se desploma Y ese punto queda POR ENCIMA del ajuste
+    # cinético, el outlier es arranque real → los Fv/Fc oficiales son los del
+    # régimen cinético (sin ese punto), que es el que compensan los nodos.
+    breakaway = False
+    Fv_full, Fc_full, resid_full = Fv, Fc, resid_rms
+    if len(v_fit) > MIN_VELS and resid_rms > RESID_OK:
+        Fv_a, Fc_a, resid_a = fit_fv_fc(v_fit[1:], fr_fit[1:])
+        pred0 = Fv_a * v_fit[0] + Fc_a * np.tanh(v_fit[0] / EPSILON)
+        if resid_a <= RESID_BREAK and fr_fit[0] > pred0:
+            breakaway = True
+            Fv, Fc, resid_rms = Fv_a, Fc_a, resid_a
+    r.update(ok=True, n=len(v_fit), Fv=Fv, Fc=Fc, resid=resid_rms,
+             breakaway=breakaway, Fv_full=Fv_full, Fc_full=Fc_full,
+             resid_full=resid_full, v_fit=v_fit, fr_fit=fr_fit)
+    results[i] = r
     for vv, ff, gg in zip(v, fr, gr):
         seg_rows.append([i + 1, vv, ff, gg])
 
@@ -215,75 +283,111 @@ for i in vel_joints:
     if not r["ok"]:
         print(f"J{i+1:>5} {'—':>12} {'—':>12} {'—':>11} {r['n']:7d}  (insuficiente)")
         continue
-    print(f"J{i+1:>5} {r['Fv']:12.3f} {r['Fc']:12.3f} {r['resid']:11.2f} {r['n']:7d}")
+    tag = "  (cinético, sin breakaway)" if r["breakaway"] else ""
+    print(f"J{i+1:>5} {r['Fv']:12.3f} {r['Fc']:12.3f} {r['resid']:11.2f} {r['n']:7d}{tag}")
 print("-" * 76)
 print(f"  Unidades: Fv [ticks/(rad/s)]  Fc [ticks]   (eps={EPSILON} rad/s)")
 print(f"  Modelo: I_fric = Fv·v + Fc·tanh(v/eps)   (Fv, Fc >= 0)")
 for i in vel_joints:
     r = results[i]
-    if r["ok"]:
-        curve = "  ".join(f"{vv:.2f}:{ff:.1f}" for vv, ff in zip(r["v"], r["fr"]))
+    curve = "  ".join(f"{vv:.2f}:{ff:.1f}" for vv, ff in zip(r["v"], r["fr"]))
+    if curve:
         print(f"  J{i+1} I_fric(v): {curve}")
         print(f"  J{i+1} bins emparejados por velocidad: "
               + "  ".join(f"{vv:.2f}:{n}" for vv, n in zip(r["v"], r["nb"])))
-    if r.get("missing"):
+    for vv, ff, n in r["dropped"]:
+        print(f"  J{i+1} punto v={vv:.2f} DESCARTADO del ajuste ({n} bin emparejado: "
+              f"frágil; I_fric={ff:.1f})")
+    if r["missing"]:
         print(f"  J{i+1} velocidades SIN emparejamiento válido: "
               + ", ".join(f"{m:.2f}" for m in r["missing"]) + " rad/s")
+    print(f"  J{i+1} condiciones del ensayo (estimadas): banda ±{r['band_est']:.2f} rad, "
+          f"{r['seg_est']:.1f} s/velocidad"
+          + ("  → BARRIDO TRUNCADO (duration_s corto)" if r["truncated"] else ""))
 print("=" * 76)
 
 # ── Veredicto por joint ──────────────────────────────────────────────────────
 
-RELAUNCH = ("  ros2 launch open_manipulator_x_torque_control friction_sweep.launch.py \\\n"
-            "    friction_joint:={j} open_port:=true enable_torque:=true \\\n"
-            "    enable_current_commands:=true log_id:=<NUEVO_LOG_ID>{extra}")
-
 need_rerun = False
+verdicts = {}
 print("\n" + "=" * 76)
 for i in vel_joints:
     r = results[i]
     j = i + 1
+    cmd, escalated = relaunch_advice(j, r["band_est"], r["seg_est"], r["truncated"])
+    trunc_msg = None
+    if r["truncated"]:
+        dur = math.ceil(t_settle_est + N_VEL_LIST * max(r["seg_est"], 5.0) + 2.0)
+        trunc_msg = (f"BARRIDO TRUNCADO: el log solo cubre hasta "
+                     f"{r['v'].max() if len(r['v']) else 0:.2f} rad/s — duration_s fue "
+                     f"menor que t_settle + {N_VEL_LIST}·vel_seg_duration. Re-lance con "
+                     f"duration_s:={dur}.0 (o actualice el launch, que ya la calcula solo).")
+
     if not r["ok"]:
         need_rerun = True
-        print(f" VEREDICTO J{j}: RE-EJECUTAR — solo {r['n']} velocidades con "
-              f"emparejamiento (mínimo {MIN_VELS}).")
-        print("   El rebote no cubre ambos sentidos en las mismas posiciones. Repita con")
-        print("   segmentos más largos y banda más angosta:")
-        print(RELAUNCH.format(j=j, extra=" \\\n    vel_seg_duration:=8.0 vel_band:=0.3"))
+        verdicts[i] = "RE-EJECUTAR"
+        print(f" VEREDICTO J{j}: RE-EJECUTAR — solo {r['n']} velocidades útiles tras "
+              f"descartes (mínimo {MIN_VELS}).")
+        print("   El rebote no cubre ambos sentidos en las mismas posiciones. Repita:")
+        print(cmd)
+        if trunc_msg:
+            print(f"   ! {trunc_msg}")
         continue
 
     notes = []
-    if np.any(r["fr"] < 0):
-        notes.append("puntos I_fric NEGATIVOS → revise current_sign/encoder_sign "
-                     "antes de usar estos valores")
+    if trunc_msg:
+        notes.append(trunc_msg)
+    if np.any(r["fr_fit"] < 0):
+        notes.append("puntos I_fric NEGATIVOS en el ajuste → revise "
+                     "current_sign/encoder_sign antes de usar estos valores")
     if r["missing"]:
         vmiss = ", ".join(f"{m:.2f}" for m in r["missing"])
         notes.append(f"sin dato en v = {vmiss} rad/s (rebote insuficiente ahí)")
-    if float(np.mean(r["nb"])) < 2.0:
-        notes.append("menos de 2 bins de q emparejados en promedio → cobertura pobre; "
-                     "considere vel_band:=0.3")
 
-    if r["resid"] <= RESID_OK and not np.any(r["fr"] < 0):
+    if r["breakaway"]:
+        verdicts[i] = "OK_NOTA"
+        print(f" VEREDICTO J{j}: OK con nota — Fv={r['Fv']:.2f}, Fc={r['Fc']:.2f} "
+              f"(resid={r['resid']:.2f} ticks, régimen cinético)")
+        print(f"   El punto de v mínima ({r['v_fit'][0]:.2f} rad/s → {r['fr_fit'][0]:.1f} "
+              f"ticks) es fricción de ARRANQUE (breakaway/Stribeck): real pero fuera del")
+        print(f"   modelo Coulomb cinético → se EXCLUYE del ajuste oficial. Con él: "
+              f"Fv={r['Fv_full']:.2f}, Fc={r['Fc_full']:.2f} (resid={r['resid_full']:.2f})."
+              f" No es necesario repetir.")
+    elif r["resid"] <= RESID_OK and not np.any(r["fr_fit"] < 0):
+        verdicts[i] = "OK"
         print(f" VEREDICTO J{j}: OK — Fv={r['Fv']:.2f}, Fc={r['Fc']:.2f} "
               f"(resid={r['resid']:.2f} ticks)")
-    elif r["resid"] <= RESID_REVIEW and r["resid_alt"] <= RESID_BREAK:
-        print(f" VEREDICTO J{j}: OK con nota — Fv={r['Fv']:.2f}, Fc={r['Fc']:.2f} "
-              f"(resid={r['resid']:.2f} ticks)")
-        print(f"   El residuo lo domina el punto de v mínima ({r['v'][0]:.2f} rad/s → "
-              f"{r['fr'][0]:.1f} ticks): fricción de ARRANQUE (breakaway/Stribeck), real"
-              f" pero fuera del modelo Coulomb cinético. Sin ese punto: Fv={r['Fv_alt']:.2f},"
-              f" Fc={r['Fc_alt']:.2f} (resid={r['resid_alt']:.2f}). No es necesario repetir.")
     elif r["resid"] <= RESID_REVIEW:
+        verdicts[i] = "REVISAR"
         print(f" VEREDICTO J{j}: REVISAR — Fv={r['Fv']:.2f}, Fc={r['Fc']:.2f} pero "
               f"resid={r['resid']:.2f} ticks (> {RESID_OK}).")
-        print("   Valores utilizables como estimación central; para mejorar, repita con")
-        print("   banda angosta (más reversiones a baja velocidad):")
-        print(RELAUNCH.format(j=j, extra=" \\\n    vel_band:=0.3"))
+        if escalated:
+            print("   Banda y duración de segmento YA estaban ajustadas: la dispersión es")
+            print("   del robot (mecánica: cableado rozando, backlash, temperatura). Puede")
+            print("   aceptar estos valores centrales o intentar con más tiempo por segmento:")
+        else:
+            print("   Valores utilizables como estimación central; para mejorar, repita:")
+        print(cmd)
     else:
         need_rerun = True
+        verdicts[i] = "RE-EJECUTAR"
         print(f" VEREDICTO J{j}: RE-EJECUTAR — resid={r['resid']:.2f} ticks "
               f"(> {RESID_REVIEW}): dispersión excesiva.")
-        print("   Curva I_fric(v) ruidosa (típico: rebote pobre a baja velocidad). Repita:")
-        print(RELAUNCH.format(j=j, extra=" \\\n    vel_band:=0.3 vel_seg_duration:=8.0"))
+        if escalated:
+            print("   Banda y duración de segmento YA estaban ajustadas → el problema no es")
+            print("   la configuración del barrido: revise mecánica (cableado, montaje,")
+            print("   backlash), temperatura de motores y signos. Luego repita con:")
+        else:
+            print("   Curva I_fric(v) ruidosa (típico: rebote pobre a baja velocidad). Repita:")
+        print(cmd)
+
+    # Truncamiento: aunque el ajuste local sea bueno, faltan las velocidades
+    # altas → sin plateau confirmado no se separa bien Fv de Fc.
+    if r["truncated"] and verdicts[i] in ("OK", "OK_NOTA"):
+        verdicts[i] = "REVISAR"
+        print("   ↓ Degradado a REVISAR por barrido truncado: faltan las velocidades altas")
+        print("     para confirmar el plateau (separación Fv↔Fc). Re-lance completo:")
+        print(cmd)
     for nmsg in notes:
         print(f"   ! {nmsg}")
 print("=" * 76)
@@ -299,8 +403,15 @@ if plotted:
     fig, axs = plt.subplots(1, len(plotted), figsize=(5.2 * len(plotted), 4.2),
                             squeeze=False)
     for ax, (i, r) in zip(axs[0], plotted.items()):
-        ax.plot(r["v"], r["fr"], "o", color="#0072BD", label="medido (reversión)")
-        xs = np.linspace(0, r["v"].max(), 200)
+        ax.plot(r["v_fit"], r["fr_fit"], "o", color="#0072BD",
+                label="medido (reversión)")
+        if r["dropped"]:
+            ax.plot([d[0] for d in r["dropped"]], [d[1] for d in r["dropped"]],
+                    "x", color="0.5", ms=8, label="descartado (<2 bins)")
+        if r["breakaway"]:
+            ax.plot(r["v_fit"][0], r["fr_fit"][0], "s", mfc="none", mec="#A2142F",
+                    ms=11, label="breakaway (excluido)")
+        xs = np.linspace(0, r["v_fit"].max(), 200)
         ys = r["Fv"] * xs + r["Fc"] * np.tanh(xs / EPSILON)
         ax.plot(xs, ys, "-", color="#D95319", lw=1.8,
                 label=f"ajuste (resid={r['resid']:.1f})")
@@ -333,12 +444,7 @@ if seg_rows:
 
 for i, r in plotted.items():
     j = i + 1
-    if r["resid"] <= RESID_OK and not np.any(r["fr"] < 0):
-        verdict = "OK"
-    elif r["resid"] <= RESID_REVIEW:
-        verdict = "OK_NOTA" if r["resid_alt"] <= RESID_BREAK else "REVISAR"
-    else:
-        verdict = "RE-EJECUTAR"
+    verdict = verdicts[i]
     frag = os.path.join(out_dir, f"friction_J{j}_log{LOG_ID}.yaml")
     with open(frag, "w") as f:
         f.write("# Fragmento de identificación de fricción (identify_friction.py)\n")
@@ -352,6 +458,10 @@ for i, r in plotted.items():
         f.write(f"resid_rms: {r['resid']:.4f}\n")
         f.write(f"n_vel: {r['n']}\n")
         f.write(f"verdict: {verdict}\n")
+        f.write(f"breakaway_excluded: {r['breakaway']}\n")
+        f.write(f"band_est: {r['band_est']:.3f}\n")
+        f.write(f"seg_est: {r['seg_est']:.2f}\n")
+        f.write(f"truncated: {r['truncated']}\n")
         f.write(f"v_points:      [{', '.join(f'{x:.3f}' for x in r['v'])}]\n")
         f.write(f"I_fric_points: [{', '.join(f'{x:.3f}' for x in r['fr'])}]\n")
     print(f"Fragmento YAML   : {frag}  (veredicto: {verdict})")

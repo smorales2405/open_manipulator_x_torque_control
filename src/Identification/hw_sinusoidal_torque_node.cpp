@@ -266,6 +266,24 @@ public:
     if (vel_list_.empty()) vel_list_ = {0.1};
     vel_dir_.fill(+1.0);
 
+    // Barrido de velocidad: verificar que duration_s alcance para recorrer
+    // TODO el vel_list (si no, el barrido se trunca y la identificación de
+    // fricción pierde las velocidades altas).
+    const bool any_vel = std::any_of(joint_mode_.begin(), joint_mode_.end(),
+                                     [](const std::string& m) { return m == "velocity"; });
+    if (any_vel && duration_s_ > 0.0) {
+      const double t_need = t_settle_
+        + static_cast<double>(vel_list_.size()) * vel_seg_duration_;
+      if (duration_s_ < t_need) {
+        RCLCPP_WARN(get_logger(),
+          "duration_s=%.1f s NO cubre el barrido completo (t_settle %.1f + %zu vel x %.1f s "
+          "= %.1f s): el barrido se TRUNCARA. Use duration_s:=%.1f (o duration_s:=auto en "
+          "friction_sweep.launch.py).",
+          duration_s_, t_settle_, vel_list_.size(), vel_seg_duration_, t_need,
+          std::ceil(t_need + 2.0));
+      }
+    }
+
     motor_alpha_    = load_vec4("motor_alpha");
     motor_Fv_       = load_vec4("motor_Fv");
     motor_Fc_       = load_vec4("motor_Fc");

@@ -140,9 +140,16 @@ gráfica en `plots/diagnostics/friction/` y un **VEREDICTO**:
 | Veredicto | Significado | Acción |
 |---|---|---|
 | **OK** | resid ≤ 4 ticks | nada |
-| **OK con nota** | residuo dominado por el punto de v mínima (fricción de **arranque**/Stribeck: real, pero fuera del modelo Coulomb cinético) | nada — no repetir |
-| **REVISAR** | resid 4–8 ticks | valor central utilizable; re-grabar con `vel_band:=0.3` lo afina |
-| **RE-EJECUTAR** (exit 2) | resid > 8 ticks o < 3 velocidades emparejadas | repetir con el comando que imprime el script |
+| **OK con nota** | el punto de v mínima es fricción de **arranque** (breakaway/Stribeck): real pero fuera del modelo Coulomb cinético → se **excluye** del ajuste oficial (los nodos compensan el régimen cinético) | nada — no repetir |
+| **REVISAR** | resid 4–8 ticks, o ajuste bueno pero **barrido truncado** (faltan las velocidades altas para confirmar el plateau) | valor central utilizable; el script imprime el comando exacto para afinar |
+| **RE-EJECUTAR** (exit 2) | resid > 8 ticks o < 3 velocidades útiles | repetir con el comando que imprime el script |
+
+Robustez automática del análisis: los puntos con **menos de 2 bins de q
+emparejados** se descartan del ajuste (frágiles, p.ej. un 0.20 rad/s con un
+solo bin puede salir hasta negativo); el script estima del propio log la
+**banda** y la **duración de segmento** realmente usadas, detecta **barridos
+truncados** (`duration_s` corto) y adapta el consejo de re-ejecución para no
+repetir recetas ya aplicadas.
 
 **3.3 Cuándo y cómo repetir un barrido.** El caso típico es un joint con carga
 de gravedad (J2) y datos dispersos a baja velocidad: pocos rebotes → poco
@@ -156,6 +163,21 @@ ros2 launch open_manipulator_x_torque_control friction_sweep.launch.py \
 
 python3 src/Identification/identify_friction.py 25 --joint 2
 ```
+
+> `duration_s` es `auto` en el launch: se calcula como
+> `t_settle + len(vel_list)·vel_seg_duration + 1 s`, de modo que alargar
+> `vel_seg_duration` nunca trunca el barrido. Solo pásela explícita si quiere
+> recortarlo a propósito. (Con `ros2 run` directo, el nodo avisa al arrancar si
+> `duration_s` no alcanza para todo el `vel_list`.)
+
+La escalera de re-ejecución que aplica el script (y que puede seguir a mano):
+
+1. banda ancha (±0.5) → `vel_band:=0.3` (más reversiones a baja velocidad);
+2. banda ya angosta → `vel_seg_duration:=8.0` (más muestreo por velocidad);
+3. banda y segmentos ya ajustados y sigue disperso → el problema no es el
+   barrido: revisar mecánica (cableado rozando, montaje, backlash), temperatura
+   de motores y signos; puede intentarse `vel_seg_duration:=10.0` o aceptar el
+   valor central (REVISAR).
 
 *Referencia real de este robot:* J2 con `vel_band` 0.5 dio resid 10.6 (punto
 0.10 rad/s → 37 ticks, espurio); re-grabado con `vel_band:=0.3` bajó a 5.84 con
@@ -284,6 +306,8 @@ la advertencia de circularidad (correcto: ya no es bootstrap) y un α consistent
 | Parada `Corriente insegura J*` | colisión, trayectoria fuera de rango, cableado | despejar el robot; verificar `joint_zero_tick` (¿robot ensamblado en la pose cero?) |
 | Warnings de overrun del lazo (>Ts) | latency_timer ≠ 1 ms | requisito 2.3; o bajar `loop_rate_hz` a 100 |
 | J2 con resid alto en fricción | rebote pobre a baja velocidad | re-grabar con `vel_band:=0.3` (± más `vel_seg_duration:=8.0`) |
+| Barrido sin velocidades altas ("BARRIDO TRUNCADO") | `duration_s` explícita menor que `t_settle + n_vel·vel_seg_duration` | usar `duration_s` auto del launch (o pasarla ≥ la suma); el nodo también lo advierte al arrancar |
+| Dispersión persiste con banda 0.3 y segmentos 8 s | causa mecánica, no de configuración | revisar cableado/montaje/backlash, temperatura; `vel_seg_duration:=10.0` o aceptar valor central |
 | Puntos `I_fric` negativos | `current_sign`/`encoder_sign` invertidos | corregir signos en el YAML y repetir el barrido |
 | El joint en velocity no se mueve / se sale de banda | `A_pos` fuera de límites o banda excesiva | revisar `hw_friction_sweep_params.yaml` (A_pos, vel_band vs joint_lower/upper) |
 | CSV no aparece | se busca en el árbol instalado | los datos van al árbol FUENTE: `data/…` del repositorio |
