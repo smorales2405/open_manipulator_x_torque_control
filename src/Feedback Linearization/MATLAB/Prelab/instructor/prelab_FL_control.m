@@ -2,26 +2,35 @@
 % Prelab — Control por Feedback Linearization (Computed Torque) articular
 % OpenMANIPULATOR-X — simulacion MATLAB equivalente al nodo gz_fl_control_node.cpp
 %
-% Replica la estructura del nodo (mismas fases de referencia, ganancias, lazo a
-% 200 Hz y saturacion), sustituyendo Gazebo por una planta integrada con OMDyn
-% (dinamica rigida generada del URDF) mas la friccion articular del URDF:
+% Replica la estructura del nodo (misma trayectoria, ganancias, lazo a 200 Hz
+% y saturacion), sustituyendo Gazebo por una planta integrada con OMDyn
+% (dinamica rigida generada del URDF) mas friccion articular viscosa + Coulomb:
 %
-%   Ley de control (identica al nodo):
+%   Ley de control (identica al nodo, con feedforward de friccion SIEMPRE
+%   activo — equivale a friction_ffwd:=true en gz_fl_control_node):
 %     v       = ddq_des + Kp.*(q_des - q) + Kd.*(dq_des - dq)
 %     tau     = M(q)*v + phib(q,dq)              <- [M,phib] = OMDyn(q,dq)
+%               + b.*dq + fc.*tanh(dq_des/eps)
 %     tau_sat = clamp(tau, -TAU_MAX, TAU_MAX)
 %
 %   Planta simulada (el papel que cumple Gazebo frente al nodo):
 %     M(q)*ddq + phib(q,dq) + b.*dq + fc.*tanh(dq/eps) = tau_sat
 %     integrada con RK4 a Ts/N_SUB, con ZOH del torque durante Ts = 1/200 s.
 %
-%   Fases de referencia (identicas al nodo):
-%     [0, RAMP_TIME_S) — rampa quintica desde q0 hasta la trayectoria
-%     [RAMP_TIME_S, ∞) — sinusoide articular (w = 1 rad/s):
-%                        q1_des =  (pi/4)*sin(t)
-%                        q2_des = -0.5 + 0.5*sin(t)
-%                        q3_des =  0.3 - 0.5*sin(t)
-%                        q4_des =  pi/4
+%   Referencia: sinusoide articular (w = 1 rad/s), identica al nodo:
+%     q1_des =  (pi/4)*sin(t)
+%     q2_des = -0.5 + 0.5*sin(t)
+%     q3_des =  0.3 - 0.5*sin(t)
+%     q4_des =  pi/4
+%
+% SIN RAMPA QUINTICA: en Gazebo/hardware la rampa existe porque el robot
+% arranca en una pose arbitraria y hay que empalmar sin salto de referencia.
+% En simulacion la condicion inicial se elige: el robot parte YA en
+% q_des(0) = [0; -0.5; 0.3; pi/4] y en reposo, y no se cae porque la FL
+% compensa la gravedad desde el primer tick. Como la sinusoide arranca con
+% velocidad no nula (dq_des(0) = [pi/4; 0.5; -0.5; 0] rad/s), hay un
+% transitorio breve al inicio que el controlador absorbe; las metricas
+% excluyen t < T_REG por eso.
 %
 % Visualizacion 3D del robot (cadena del URDF + STLs de meshes/), dos opciones:
 %   ANIM_MODE = 'post' — OPCION 1: simula primero todo el horizonte y luego
@@ -33,37 +42,23 @@
 %               decimado a ~50 fps para no cargar el lazo).
 %   ANIM_MODE = 'off'  — sin animacion (solo figuras de seguimiento).
 %
-% Figuras de seguimiento: mismas que plots_FL_control.m (posiciones, errores,
-% velocidades y torques) + tabla de metricas en consola (sin la rampa).
+% Figuras de seguimiento: estilo plots_FL_control.m (posiciones, errores y
+% torques) + tabla de metricas en consola (sin el transitorio inicial).
 %
 % CARPETA AUTOCONTENIDA (portable): copiar esta carpeta completa a cualquier
-% maquina (Windows/Linux/Mac) y ejecutar el script desde ahi. Contenido:
+% maquina y ejecutar el script desde ahi. Contenido:
 %   prelab_FL_control.m    este script
-%   OMDyn.m                dinamica generada del URDF (gen_OMDyn.m, Lab 5);
-%                          fallback interpretado multiplataforma
-%   OMDyn.mexa64           MEX de OMDyn compilado para Linux (mas rapido);
-%                          en Windows NO aplica: usar OMDyn.m directamente o
-%                          compilar OMDyn.mexw64 con build_omdyn_mex.m
-%                          (requiere MATLAB Coder + compilador C)
-%   open_manx_fkin.m       cinematica directa (solo la usa build_omdyn_mex.m;
-%                          este script trae fkin_local integrada)
-%   build_omdyn_mex.m      compila los MEX de esta carpeta (opcional)
+%   OMDyn.mexa64           MEX de OMDyn precompilado para Linux
+%   OMDyn.mexw64           MEX de OMDyn precompilado para Windows
 %   meshes/*.stl           mallas del robot para la vista 3D
-%   urdf/open_manipulator_x.urdf  referencia de la cadena cinematica y de la
-%                          friccion (los valores estan hardcodeados aqui)
+% (distribucion solo binarios, igual que Lab 5 student/: sin OMDyn.m ni
+%  build_omdyn_mex.m; Mac requeriria compilar OMDyn.mexmaci64 aparte)
 
 clear; clc; close all;
 
 %% ── Configuracion ────────────────────────────────────────────────────────────
 T_SIM       = 20.0;    % [s] duracion de la simulacion (t_sim del nodo)
-ANIM_MODE   = 'post';  % 'post' | 'live' | 'off'  (ver cabecera)
-
-FRICTION_FFWD = true;  % feedforward de la friccion del URDF (friction_ffwd del
-                       % nodo; alli el default es false — aqui true porque la
-                       % planta SIEMPRE simula esa friccion, como Gazebo)
-
-q0  = [0; 0; 0; 0];    % [rad] pose inicial de la planta (en Gazebo: pose con
-dq0 = [0; 0; 0; 0];    %       la que aparece el robot al lanzar torque_sim)
+ANIM_MODE   = 'live';  % 'post' | 'live' | 'off'  (ver cabecera)
 
 EXPORT_FIGS = false;   % true = guardar PNG (300 dpi) en plots/ junto al script
 
@@ -77,14 +72,15 @@ TAU_MAX = 1.2;         % [N·m] igual que tau_max del robot real
 % ═══════════════════════════════════════════════════════════════════════════
 
 Ts          = 1/200;   % [s] periodo del lazo de control (200 Hz, como el nodo)
-RAMP_TIME_S = 3.0;     % [s] duracion de la rampa quintica inicial
+T_REG       = 1.0;     % [s] ventana excluida de las metricas: transitorio
+                       %     inicial (el robot parte en reposo y dq_des(0)~=0)
 FRIC_EPS    = 0.05;    % [rad/s] suavizado del tanh en el feedforward de Coulomb
 
-% ── Friccion articular del URDF (<dynamics> de joint1..4) ────────────────────
-% La planta la simula SIEMPRE (es lo que hace Gazebo); el controlador la
-% compensa solo si FRICTION_FFWD = true. Valores de urdf/open_manipulator_x.urdf.
-FRIC_DAMPING = [0.0367; 0.0;    0.0;    0.005 ];   % b  [N·m·s/rad]
-FRIC_COULOMB = [0.0146; 0.0830; 0.1143; 0.0413];   % fc [N·m]
+% ── Friccion articular de la planta (valores asumidos para el prelab) ─────────
+% La planta la simula SIEMPRE (es lo que hace Gazebo con el <dynamics> del
+% URDF) y el controlador la compensa SIEMPRE via feedforward.
+FRIC_DAMPING = 0.001 * ones(4,1);   % b  [N·m·s/rad] igual en las 4 articulaciones
+FRIC_COULOMB = 0.05  * ones(4,1);   % fc [N·m]       igual en las 4 articulaciones
 EPS_PLANT    = 0.01;   % [rad/s] suavizado del sign() de Coulomb en la planta
 N_SUB        = 5;      % subpasos RK4 por tick (h = Ts/N_SUB = 1 ms)
 
@@ -98,26 +94,17 @@ mesh_dir = fullfile(this_dir, 'meshes');
 addpath(this_dir);   % OMDyn resoluble aunque se ejecute desde otro cwd
 
 assert(~isempty(which('OMDyn')), ...
-    'OMDyn no encontrado junto al script (OMDyn.m u OMDyn.%s).', mexext);
-if ~endsWith(which('OMDyn'), mexext)
-    warning(['Usando OMDyn.m interpretado (mas lento; funciona igual). Para ' ...
-             'acelerar ~40x compilar el MEX de esta plataforma con ' ...
-             'build_omdyn_mex.m (requiere MATLAB Coder).']);
-end
+    'OMDyn.%s no encontrado junto al script para esta plataforma.', mexext);
 assert(isfolder(mesh_dir), 'No se encontro la carpeta meshes/ junto al script.');
 
 fprintf('Modelo OMDyn: %s\n', which('OMDyn'));
 fprintf('Kp=[%.1f %.1f %.1f %.1f]  Kd=[%.1f %.1f %.1f %.1f]\n', KP, KD);
-if FRICTION_FFWD
-    fprintf(['Feedforward de friccion URDF ACTIVO: damping=[%.4f %.4f %.4f %.4f]  ' ...
-             'coulomb=[%.4f %.4f %.4f %.4f]\n'], FRIC_DAMPING, FRIC_COULOMB);
-else
-    fprintf('Feedforward de friccion URDF desactivado (la planta SI la simula).\n');
-end
+fprintf(['Feedforward de friccion SIEMPRE activo: damping=[%.4f %.4f %.4f %.4f]  ' ...
+         'coulomb=[%.4f %.4f %.4f %.4f]\n'], FRIC_DAMPING, FRIC_COULOMB);
 fprintf('Tiempo de simulacion: %.1f s  |  lazo: %.0f Hz  |  animacion: %s\n\n', ...
         T_SIM, 1/Ts, ANIM_MODE);
 
-%% ── Seccion 1: Referencia precomputada (rampa quintica + sinusoide) ──────────
+%% ── Seccion 1: Referencia precomputada (sinusoide articular) ─────────────────
 % El nodo la evalua tick a tick; aqui se precomputa (mismas formulas) para
 % reutilizarla en el lazo, el trazado 3D y las figuras.
 Nsim  = round(T_SIM / Ts);
@@ -125,9 +112,15 @@ t_log = (0:Nsim-1)' * Ts;
 
 QD = zeros(Nsim, 4); DQD = zeros(Nsim, 4); DDQD = zeros(Nsim, 4);
 for k = 1:Nsim
-    [qd, dqd, ddqd] = referencia(t_log(k), RAMP_TIME_S, q0);
+    [qd, dqd, ddqd] = trayectoria_deseada(t_log(k));
     QD(k,:) = qd'; DQD(k,:) = dqd'; DDQD(k,:) = ddqd';
 end
+
+% Condicion inicial de la planta: EN la posicion inicial de la trayectoria y
+% en reposo (sin rampa quintica — ver cabecera). q_des(0) = [0; -0.5; 0.3; pi/4].
+q0  = QD(1,:)';
+dq0 = zeros(4,1);
+fprintf('Pose inicial = q_des(0) = [%.3f %.3f %.3f %.3f] rad (en reposo)\n\n', q0);
 
 % Trayectoria cartesiana deseada del EE (para la vista 3D)
 Y_DES = zeros(Nsim, 4);
@@ -163,11 +156,9 @@ for k = 1:Nsim
     v   = ddqd + KP.*e + KD.*de;
     tau = M*v + phib;
 
-    % Feedforward opcional de la friccion del URDF: viscosa con la velocidad
+    % Feedforward de friccion (siempre activo): viscosa con la velocidad
     % medida; Coulomb con la velocidad DESEADA (senal limpia, criterio del hw)
-    if FRICTION_FFWD
-        tau = tau + FRIC_DAMPING.*dq + FRIC_COULOMB.*tanh(dqd / FRIC_EPS);
-    end
+    tau = tau + FRIC_DAMPING.*dq + FRIC_COULOMB.*tanh(dqd / FRIC_EPS);
 
     % ── Saturacion de torque ──────────────────────────────────────────────
     tau_sat = min(max(tau, -TAU_MAX), TAU_MAX);
@@ -228,14 +219,14 @@ end
 %% ── Seccion 5: Figuras de seguimiento (mismas que plots_FL_control.m) ────────
 e_q = Q - QD;
 
-% Metricas por articulacion, excluyendo la rampa quintica
-m_reg = t_log >= RAMP_TIME_S;
+% Metricas por articulacion, excluyendo el transitorio inicial (T_REG)
+m_reg = t_log >= T_REG;
 if ~any(m_reg)
-    warning('No hay muestras con t >= %.1f s; revisar RAMP_TIME_S.', RAMP_TIME_S);
+    warning('No hay muestras con t >= %.1f s; revisar T_REG.', T_REG);
 end
 fprintf('%s\n', repmat('═', 1, 76));
-fprintf(' Metricas FL articular  [Prelab MATLAB]  (t >= %.1f s, sin rampa)\n', ...
-        RAMP_TIME_S);
+fprintf(' Metricas FL articular  [Prelab MATLAB]  (t >= %.1f s, sin transitorio inicial)\n', ...
+        T_REG);
 fprintf('%s\n', repmat('═', 1, 76));
 fprintf('%-6s  %-12s  %-12s  %-14s  %-14s  %-8s\n', ...
         'Joint', 'e_max[rad]', 'e_RMS[rad]', 'max|tau|[N·m]', 'tau_RMS[N·m]', 'Sat[%]');
@@ -299,30 +290,8 @@ end
 title(tl2, sprintf('[%s] FL Control - Errores de Seguimiento Articular', mode_label), ...
       'FontSize', 14, 'FontWeight', 'bold');
 
-% ── Figura 3 — Velocidades articulares ───────────────────────────────────────
+% ── Figura 3 — Torques de control ────────────────────────────────────────────
 figure(3); clf;
-set(gcf, 'Color', 'w', 'Position', [130 130 1100 700]);
-tl3  = tiledlayout(2, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
-axs3 = gobjects(1, 4);
-h_ref3 = []; h_mea3 = [];
-for i = 1:4
-    axs3(i) = nexttile(tl3);
-    h2 = plot(t_log, DQ(:,i),  '-',  'Color', color_meas, 'LineWidth', lw); hold on;
-    h1 = plot(t_log, DQD(:,i), '--', 'Color', color_ref,  'LineWidth', lw);
-    if i == 1; h_ref3 = h1; h_mea3 = h2; end
-    xlabel('Tiempo [s]', 'FontSize', fs);
-    ylabel(sprintf('$\\dot{q}_%d$ [rad/s]', i), 'Interpreter', 'latex', 'FontSize', fs);
-    title(jointNames{i}, 'FontSize', fs_title);
-    grid on; box on; set(gca, 'FontSize', fs); xlim(xlims);
-end
-lgd3 = legend(axs3(1), [h_ref3, h_mea3], {'Referencia', 'Simulacion'}, ...
-              'Orientation', 'horizontal', 'FontSize', fs, 'Location', 'northoutside');
-lgd3.Layout.Tile = 'north';
-title(tl3, sprintf('[%s] Seguimiento de velocidades articulares', mode_label), ...
-      'FontSize', 14, 'FontWeight', 'bold');
-
-% ── Figura 4 — Torques de control ────────────────────────────────────────────
-figure(4); clf;
 set(gcf, 'Color', 'w', 'Position', [140 140 1100 700]);
 for i = 1:4
     subplot(2,2,i);
@@ -343,8 +312,7 @@ if EXPORT_FIGS
     if ~exist(output_dir, 'dir'), mkdir(output_dir); end
     exportgraphics(figure(1), fullfile(output_dir, 'tracking_plot_q.png'),     'Resolution', 300);
     exportgraphics(figure(2), fullfile(output_dir, 'tracking_plot_error.png'), 'Resolution', 300);
-    exportgraphics(figure(3), fullfile(output_dir, 'tracking_plot_dq.png'),    'Resolution', 300);
-    exportgraphics(figure(4), fullfile(output_dir, 'torques_plot.png'),        'Resolution', 300);
+    exportgraphics(figure(3), fullfile(output_dir, 'torques_plot.png'),        'Resolution', 300);
     if ~isempty(H) && isvalid(H.fig)
         exportgraphics(H.fig, fullfile(output_dir, 'robot3d_final.png'), 'Resolution', 300);
     end
@@ -370,35 +338,7 @@ function [qd, dqd, ddqd] = trayectoria_deseada(t)
               0.0              ];
 end
 
-% ── Rampa quintica inicial (identica a quinticTransition del nodo) ────────────
-% Lleva suavemente desde q0 (reposo) hasta el punto de la trayectoria en t = T,
-% con velocidad y aceleracion continuas en el empalme.
-function [qd, dqd, ddqd] = rampa_quintica(t, T, q0)
-    [qf, vf, af] = trayectoria_deseada(T);
-    v0 = zeros(4,1);  a0 = zeros(4,1);
-    T2 = T*T; T3 = T2*T; T4 = T3*T; T5 = T4*T;
-    c0 = q0;
-    c1 = v0;
-    c2 = 0.5*a0;
-    c3 = (20*(qf-q0) - (8*vf+12*v0)*T - (3*a0-af)*T2)   / (2*T3);
-    c4 = (30*(q0-qf) + (14*vf+16*v0)*T + (3*a0-2*af)*T2) / (2*T4);
-    c5 = (12*(qf-q0) - (6*vf+6*v0)*T - (a0-af)*T2)       / (2*T5);
-    t2 = t*t; t3 = t2*t; t4 = t3*t; t5 = t4*t;
-    qd   = c0 + c1*t + c2*t2 + c3*t3 + c4*t4 + c5*t5;
-    dqd  = c1 + 2*c2*t + 3*c3*t2 + 4*c4*t3 + 5*c5*t4;
-    ddqd = 2*c2 + 6*c3*t + 12*c4*t2 + 20*c5*t3;
-end
-
-% ── Referencia por fases (rampa + sinusoide, como el tick del nodo) ───────────
-function [qd, dqd, ddqd] = referencia(t, ramp_T, q0)
-    if t < ramp_T
-        [qd, dqd, ddqd] = rampa_quintica(t, ramp_T, q0);
-    else
-        [qd, dqd, ddqd] = trayectoria_deseada(t);
-    end
-end
-
-% ── Dinamica de la planta: M*ddq + phib + friccion URDF = tau ─────────────────
+% ── Dinamica de la planta: M*ddq + phib + friccion articular = tau ────────────
 function dx = dinamica_planta(x, tau, b, fc, eps_pl)
     q  = x(1:4);
     dq = x(5:8);
@@ -435,12 +375,12 @@ end
 %         --joint3 y @ [0.024 0 0.128]--> link4
 %         --joint4 y @ [0.124 0 0]--> link5 + palmas del gripper @ [0.0817 ±0.021 0]
 function H = build_robot3d(mesh_dir, q0, y_des_path)
-    H.fig = figure(5); clf(H.fig);
+    H.fig = figure(4); clf(H.fig);
     set(H.fig, 'Color', 'w', 'Name', 'OpenMANIPULATOR-X — Prelab FL', ...
         'Position', [80 80 900 700]);
     H.ax = axes(H.fig); hold(H.ax, 'on');
     grid(H.ax, 'on'); box(H.ax, 'on'); axis(H.ax, 'equal');
-    xlim(H.ax, [-0.25 0.45]); ylim(H.ax, [-0.35 0.35]); zlim(H.ax, [-0.01 0.50]);
+    xlim(H.ax, [-0.15 0.45]); ylim(H.ax, [-0.25 0.25]); zlim(H.ax, [-0.01 0.3]);
     xlabel(H.ax, 'x [m]'); ylabel(H.ax, 'y [m]'); zlabel(H.ax, 'z [m]');
     view(H.ax, 45, 25);
     title(H.ax, 'Feedback Linearization articular — OpenMANIPULATOR-X');

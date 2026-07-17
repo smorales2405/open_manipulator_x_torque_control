@@ -25,10 +25,12 @@ src/Trajectory Optimization TV-LQR/MATLAB/zmin/
 *.mexmaci64
 codegen/
 
-# Excepcion: el Prelab FL es una carpeta portable autocontenida — su MEX
-# Linux SI se versiona para que funcione al clonar (en Windows: OMDyn.m
-# o compilar OMDyn.mexw64 con build_omdyn_mex.m)
+# Excepcion: el Prelab FL es una carpeta portable autocontenida (solo
+# binarios, sin OMDyn.m ni build_omdyn_mex.m) — sus MEX Linux y Windows
+# SI se versionan para que funcione al clonar en cualquiera de las dos
+# plataformas (Mac requeriria compilar OMDyn.mexmaci64 aparte)
 !src/Feedback Linearization/MATLAB/Prelab/instructor/OMDyn.mexa64
+!src/Feedback Linearization/MATLAB/Prelab/instructor/OMDyn.mexw64
 
 # Excepcion: los MEX Linux del Lab 5 (TV-LQR) SI se versionan — los scripts
 # de instructor y las plantillas de estudiante asumen OMDyn.mexa64 y
