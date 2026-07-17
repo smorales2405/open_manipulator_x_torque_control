@@ -15,10 +15,12 @@
 clear; clc; close all;
 
 %% ── Configuracion ────────────────────────────────────────────────────────────
-mode        = 'sim';   % 'sim'  = simulacion Gazebo
+mode        = 'real';   % 'sim'  = simulacion Gazebo
                        % 'real' = implementacion hardware real
 
-test_num    = 4;       % Numero de log
+test_num    = 7;       % Numero de log
+
+act_num     = 1;       % Actividad (1 o 2): subcarpeta act<act_num> en data/ y plots/
 
 EXPORT_FIGS = true;   % true  = guardar PNG (300 dpi) y EPS vectorial (600 dpi)
                        % false = solo visualizar
@@ -26,21 +28,19 @@ EXPORT_FIGS = true;   % true  = guardar PNG (300 dpi) y EPS vectorial (600 dpi)
 % Directorio raiz del paquete ROS 2
 pkg_dir = '/home/utec/open_manx_ws/src/open_manipulator_x_torque_control';
 
-% Directorio de referencias (para y_ref y u_ref del grafico de torques)
-ref_dir = fullfile(pkg_dir, 'src', 'Trajectory Optimization TV-LQR', 'references');
-
 %% ── Rutas dinamicas ──────────────────────────────────────────────────────────
+act_dir = sprintf('act%d', act_num);
 switch mode
     case 'sim'
-        csvFile    = fullfile(pkg_dir, 'data', 'lab5', 'sim', ...
+        csvFile    = fullfile(pkg_dir, 'data', 'lab5', 'sim', act_dir, ...
                               sprintf('data_log_sim_lab5_%d.csv', test_num));
-        output_dir = fullfile(pkg_dir, 'plots', 'lab5', 'sim', ...
+        output_dir = fullfile(pkg_dir, 'plots', 'lab5', 'sim', act_dir, ...
                               sprintf('test%d', test_num));
         mode_label = 'Simulacion';
     case 'real'
-        csvFile    = fullfile(pkg_dir, 'data', 'lab5', 'real', ...
+        csvFile    = fullfile(pkg_dir, 'data', 'lab5', 'real', act_dir, ...
                               sprintf('data_log_real_lab5_%d.csv', test_num));
-        output_dir = fullfile(pkg_dir, 'plots', 'lab5', 'real', ...
+        output_dir = fullfile(pkg_dir, 'plots', 'lab5', 'real', act_dir, ...
                               sprintf('test%d', test_num));
         mode_label = 'Hardware';
     otherwise
@@ -82,12 +82,12 @@ else
     end
 end
 
-% Cargar u_ref desde archivo de referencia (si existe)
-u_ref_file = fullfile(ref_dir, 'u_ref.txt');
-u_ref_loaded = false;
-if isfile(u_ref_file)
-    u_ref_mat = readmatrix(u_ref_file);
-    u_ref_loaded = true;
+% u_ref viene en el CSV (columnas u_ref1..u_ref4, ya muestreado por tick);
+% logs antiguos sin esas columnas simplemente omiten la curva en la Figura 5.
+u_ref_loaded = all(ismember({'u_ref1','u_ref2','u_ref3','u_ref4'}, ...
+                            T.Properties.VariableNames));
+if u_ref_loaded
+    u_ref_log = [T.u_ref1, T.u_ref2, T.u_ref3, T.u_ref4];
 end
 
 %% ── Estilo ───────────────────────────────────────────────────────────────────
@@ -202,10 +202,7 @@ for i = 1:4
     subplot(2,2,i);
     plot(t, tau(:,i), '-', 'Color', c_tau, 'LineWidth', lw); hold on;
     if u_ref_loaded
-        % u_ref tiene N filas; interpolar al tiempo del log
-        t_uref = (0.05:0.05:size(u_ref_mat,1)*0.05)';
-        u_interp = interp1(t_uref, u_ref_mat(:,i), min(t, t_uref(end)), 'previous', 'extrap');
-        plot(t, u_interp, '--', 'Color', c_uref, 'LineWidth', lw);
+        plot(t, u_ref_log(:,i), '--', 'Color', c_uref, 'LineWidth', lw);
         legend({'$\tau_{aplicado}$', '$u_{ref}$'}, ...
                'Interpreter', 'latex', 'Location', 'best', 'FontSize', fs-1);
     else
@@ -229,7 +226,7 @@ fprintf('Saturacion [%%]:            [%.2f %.2f %.2f %.2f]\n', sat_pct);
 if ~isempty(y_cart)
     figure(6); clf;
     set(gcf, 'Color', 'w', 'Position', [180 80 900 700]);
-    hold on; grid on; box on;
+    hold on; grid on; box on; ylim([-0.15,0.15]);
 
     plot3(y_cart(:,1),     y_cart(:,2),     y_cart(:,3), ...
           '-',  'Color', c_meas, 'LineWidth', 2.0);

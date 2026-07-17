@@ -34,6 +34,7 @@
  *   port_name              [string]    "/dev/ttyUSB0"
  *   torque_scale           [double]    1.0   (escala de seguridad, rango 0..1)
  *   test_num               [int]       1     (identificador del CSV)
+ *   act_num                [int]       1     (actividad 1 o 2: lee references/act<act_num>/)
  *   reference_dir          [string]    "src/Trajectory Optimization TV-LQR/references"
  *   ab_alpha               [double]    0.2   (filtro α-β: ganancia de posicion)
  *   ab_beta                [double]    0.02  (filtro α-β: ganancia de velocidad)
@@ -45,14 +46,16 @@
  * Al completar la trayectoria el nodo apaga los motores y termina solo.
  *
  * USO TIPICO:
- *   ros2 run open_manipulator_x_torque_control hw_tvlqr_node --ros-args -p test_num:=1
+ *   ros2 run open_manipulator_x_torque_control hw_tvlqr_node --ros-args \
+ *     -p test_num:=1 -p act_num:=1
  *
  * Publisher: /hw/joint_states (sensor_msgs/JointState) — monitoreo
  *
  * ADVERTENCIA: No ejecutar junto a hardware.launch.py ni ningun proceso
  * que acceda al puerto USB (ros2_control_node, dynamixel_hardware_interface).
  *
- * CSV generado: data/lab5/real/data_log_real_lab5_<test_num>.csv
+ * CSV generado: data/lab5/real/act<act_num>/data_log_real_lab5_<test_num>.csv
+ * (incluye u_ref del instante k — el post-procesado no necesita references/)
  */
 
 #include <array>
@@ -209,6 +212,7 @@ public:
     this->declare_parameter<std::string>("port_name",     "/dev/ttyUSB0");
     this->declare_parameter<double>     ("torque_scale",   1.0);
     this->declare_parameter<int>        ("test_num",        1);
+    this->declare_parameter<int>        ("act_num",         1);
     this->declare_parameter<std::string>("reference_dir",
       "src/Trajectory Optimization TV-LQR/references");
 
@@ -226,8 +230,14 @@ public:
     port_name_        = this->get_parameter("port_name").as_string();
     torque_scale_     = std::min(std::max(this->get_parameter("torque_scale").as_double(), 0.0), 1.0);
     const int test_num = this->get_parameter("test_num").as_int();
+    const int act_num  = this->get_parameter("act_num").as_int();
+    if (act_num != 1 && act_num != 2) {
+      RCLCPP_FATAL(get_logger(), "act_num invalido: %d (debe ser 1 o 2)", act_num);
+      throw std::runtime_error("act_num invalido: " + std::to_string(act_num));
+    }
     const std::string ref_name = this->get_parameter("reference_dir").as_string();
-    ref_dir_ = std::string(PACKAGE_SHARE_DIR) + "/" + ref_name;
+    ref_dir_ = std::string(PACKAGE_SHARE_DIR) + "/" + ref_name
+             + "/act" + std::to_string(act_num);
 
     auto load_vec4 = [this](const std::string & name) {
       auto v = get_parameter(name).as_double_array();
@@ -255,7 +265,8 @@ public:
     RCLCPP_INFO(get_logger(),
       "Filtro α-β: α=%.3f  β=%.3f  |  lazo: %.0f Hz (Ts=%.1f ms)",
       ab_alpha_, ab_beta_, loop_rate_hz_, 1e3 * Ts_loop_);
-    RCLCPP_INFO(get_logger(), "reference_dir: %s", ref_dir_.c_str());
+    RCLCPP_INFO(get_logger(), "Actividad %d — reference_dir: %s",
+                act_num, ref_dir_.c_str());
 
     // ── Seccion 1: Carga de referencias ─────────────────────────────────────
     auto fatal_load = [&](const std::string & path) {
@@ -322,14 +333,16 @@ public:
       "Referencias cargadas: N=%d  Ts=%.3f s  (duracion: %.2f s)", N_, Ts_, t_end_);
 
     // ── CSV ──────────────────────────────────────────────────────────────────
-    std::filesystem::create_directories(std::string(PACKAGE_DATA_DIR) + "/lab5/real");
-    csv_path_ = std::string(PACKAGE_DATA_DIR) + "/lab5/real/data_log_real_lab5_"
-                + std::to_string(test_num) + ".csv";
+    const std::string data_dir = std::string(PACKAGE_DATA_DIR) + "/lab5/real/act"
+                                 + std::to_string(act_num);
+    std::filesystem::create_directories(data_dir);
+    csv_path_ = data_dir + "/data_log_real_lab5_" + std::to_string(test_num) + ".csv";
     csv_.open(csv_path_);
     if (csv_.is_open()) {
       csv_ << "t,q1,q2,q3,q4,dq1,dq2,dq3,dq4,dq1_filt,dq2_filt,dq3_filt,dq4_filt,"
               "q1_ref,q2_ref,q3_ref,q4_ref,dq1_ref,dq2_ref,dq3_ref,dq4_ref,"
               "tau1,tau2,tau3,tau4,"
+              "u_ref1,u_ref2,u_ref3,u_ref4,"
               "curr_cmd1,curr_cmd2,curr_cmd3,curr_cmd4,"
               "curr_meas1,curr_meas2,curr_meas3,curr_meas4\n";
       RCLCPP_INFO(get_logger(), "CSV: %s", csv_path_.c_str());
@@ -635,6 +648,7 @@ private:
            << q_ref_[k](0)  << "," << q_ref_[k](1)  << "," << q_ref_[k](2)  << "," << q_ref_[k](3)  << ","
            << dq_ref_[k](0) << "," << dq_ref_[k](1) << "," << dq_ref_[k](2) << "," << dq_ref_[k](3) << ","
            << tau_sat(0) << "," << tau_sat(1) << "," << tau_sat(2) << "," << tau_sat(3) << ","
+           << u_ref_[k](0) << "," << u_ref_[k](1) << "," << u_ref_[k](2) << "," << u_ref_[k](3) << ","
            << cur_cmd[0] << "," << cur_cmd[1] << "," << cur_cmd[2] << "," << cur_cmd[3] << ","
            << cur_meas[0] << "," << cur_meas[1] << "," << cur_meas[2] << "," << cur_meas[3]
            << "\n";

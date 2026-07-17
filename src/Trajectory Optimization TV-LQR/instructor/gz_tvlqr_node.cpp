@@ -13,7 +13,7 @@
 //  gravitatoria) — mismo comportamiento que hw_tvlqr_node. La ganancia K_k
 //  corrige la desviacion inicial respecto a x_ref,0.
 //
-//  Referencias precargadas desde archivos de texto en reference_dir/:
+//  Referencias precargadas desde archivos de texto en reference_dir/act<act_num>/:
 //    time_ref.txt   N x 1    — instantes de muestreo [s]
 //    q_ref.txt      N x 4    — posiciones articulares de referencia [rad]
 //    dq_ref.txt     N x 4    — velocidades articulares de referencia [rad/s]
@@ -22,6 +22,7 @@
 //
 //  Parametros ROS 2 (--ros-args -p nombre:=valor):
 //    test_num      [int]    1       — identificador del CSV generado
+//    act_num       [int]    1       — actividad (1 o 2): lee references/act<act_num>/
 //    reference_dir [string] "src/Trajectory Optimization TV-LQR/references"
 //
 //  Duracion: automatica, igual al ultimo instante de time_ref.txt
@@ -31,7 +32,8 @@
 //  Suscriptor : /joint_states                   (sensor_msgs/JointState)
 //  Publicador : /arm_effort_controller/commands  (std_msgs/Float64MultiArray)
 //
-//  CSV generado: data/lab5/sim/data_log_sim_lab5_<test_num>.csv
+//  CSV generado: data/lab5/sim/act<act_num>/data_log_sim_lab5_<test_num>.csv
+//  (incluye u_ref del instante k — el post-procesado no necesita references/)
 // ============================================================================
 
 #include <chrono>
@@ -130,14 +132,22 @@ public:
   {
     // ── Parametros ──────────────────────────────────────────────────────────
     this->declare_parameter<int>        ("test_num",      1);
+    this->declare_parameter<int>        ("act_num",       1);
     this->declare_parameter<std::string>("reference_dir",
       "src/Trajectory Optimization TV-LQR/references");
 
     const int test_num    = this->get_parameter("test_num").as_int();
+    const int act_num     = this->get_parameter("act_num").as_int();
+    if (act_num != 1 && act_num != 2) {
+      RCLCPP_FATAL(get_logger(), "act_num invalido: %d (debe ser 1 o 2)", act_num);
+      throw std::runtime_error("act_num invalido: " + std::to_string(act_num));
+    }
     const std::string ref_name = this->get_parameter("reference_dir").as_string();
-    ref_dir_ = std::string(PACKAGE_SHARE_DIR) + "/" + ref_name;
+    ref_dir_ = std::string(PACKAGE_SHARE_DIR) + "/" + ref_name
+             + "/act" + std::to_string(act_num);
 
-    RCLCPP_INFO(get_logger(), "reference_dir: %s", ref_dir_.c_str());
+    RCLCPP_INFO(get_logger(), "Actividad %d — reference_dir: %s",
+                act_num, ref_dir_.c_str());
 
     // ── Seccion 1: Carga de referencias ─────────────────────────────────────
     auto fatal_load = [&](const std::string & path) {
@@ -208,7 +218,7 @@ public:
       FRIC_DAMPING[0], FRIC_DAMPING[1], FRIC_DAMPING[2], FRIC_DAMPING[3],
       FRIC_COULOMB[0], FRIC_COULOMB[1], FRIC_COULOMB[2], FRIC_COULOMB[3]);
 
-    open_csv(test_num);
+    open_csv(test_num, act_num);
 
     torque_pub_ = this->create_publisher<std_msgs::msg::Float64MultiArray>(
       "/arm_effort_controller/commands", 10);
@@ -233,11 +243,12 @@ public:
 
 private:
   // ── CSV ───────────────────────────────────────────────────────────────────
-  void open_csv(int test_num)
+  void open_csv(int test_num, int act_num)
   {
-    std::filesystem::create_directories(std::string(PACKAGE_DATA_DIR) + "/lab5/sim");
-    csv_path_ = std::string(PACKAGE_DATA_DIR) + "/lab5/sim/data_log_sim_lab5_"
-                + std::to_string(test_num) + ".csv";
+    const std::string data_dir = std::string(PACKAGE_DATA_DIR) + "/lab5/sim/act"
+                                 + std::to_string(act_num);
+    std::filesystem::create_directories(data_dir);
+    csv_path_ = data_dir + "/data_log_sim_lab5_" + std::to_string(test_num) + ".csv";
     csv_.open(csv_path_);
     if (!csv_.is_open()) {
       RCLCPP_ERROR(get_logger(), "No se pudo crear: %s", csv_path_.c_str());
@@ -249,6 +260,7 @@ private:
          << "q1_ref,q2_ref,q3_ref,q4_ref,"
          << "dq1_ref,dq2_ref,dq3_ref,dq4_ref,"
          << "tau1,tau2,tau3,tau4,"
+         << "u_ref1,u_ref2,u_ref3,u_ref4,"
          << "x,y,z,phi,"
          << "x_ref,y_ref,z_ref,phi_ref\n";
     RCLCPP_INFO(get_logger(), "CSV: %s", csv_path_.c_str());
@@ -332,6 +344,7 @@ private:
            << q_ref_[k][0]    << "," << q_ref_[k][1]  << "," << q_ref_[k][2]  << "," << q_ref_[k][3]  << ","
            << dq_ref_[k][0]   << "," << dq_ref_[k][1] << "," << dq_ref_[k][2] << "," << dq_ref_[k][3] << ","
            << tau_sat[0]       << "," << tau_sat[1] << "," << tau_sat[2] << "," << tau_sat[3] << ","
+           << u_ref_[k][0]     << "," << u_ref_[k][1] << "," << u_ref_[k][2] << "," << u_ref_[k][3] << ","
            << y_actual[0]      << "," << y_actual[1] << "," << y_actual[2] << "," << y_actual[3] << ","
            << y_ref_k[0]       << "," << y_ref_k[1]  << "," << y_ref_k[2]  << "," << y_ref_k[3]
            << "\n";

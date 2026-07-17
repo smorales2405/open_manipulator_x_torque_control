@@ -9,7 +9,9 @@
 %   Uref   (nu x N)      — entradas optimas
 %   K_TV   (nu x nx x N) — ganancias TV-LQR
 %
-% ARCHIVOS GENERADOS en references/:
+% Configurar act_num (1 o 2) segun la actividad cuyas referencias se exportan.
+%
+% ARCHIVOS GENERADOS en references/act<act_num>/:
 %   time_ref.txt     N x 1    instantes de muestreo [s]
 %   q_ref.txt        N x 4    posiciones articulares de referencia [rad]
 %   dq_ref.txt       N x 4    velocidades articulares de referencia [rad/s]
@@ -18,7 +20,13 @@
 
 clc;
 
-ref_dir = '/home/utec/open_manx_ws/src/open_manipulator_x_torque_control/src/Trajectory Optimization TV-LQR/references';
+act_num = 1;   % Numero de actividad: 1 o 2 (carpeta de salida references/act<act_num>/)
+
+assert(isscalar(act_num) && ismember(act_num, [1 2]), ...
+    'act_num debe ser 1 o 2 (actual: %g).', act_num);
+
+ref_root = '/home/utec/open_manx_ws/src/open_manipulator_x_torque_control/src/Trajectory Optimization TV-LQR/references';
+ref_dir  = fullfile(ref_root, sprintf('act%d', act_num));
 
 %% ========================================================================
 %  1. Validar variables del workspace
@@ -35,7 +43,8 @@ if ~isempty(missing)
            'Ejecutar lab5_act2_sol.m (o lab5_act1_sol.m) primero.'], ...
           strjoin(missing, ', '));
 end
-fprintf('Workspace OK: N=%d  Ts=%.4f s  (tiempo total: %.2f s)\n', N, Ts, N*Ts);
+fprintf('Workspace OK: N=%d  Ts=%.4f s  (tiempo total: %.2f s)  — Actividad %d\n', ...
+        N, Ts, N*Ts, act_num);
 
 %% ========================================================================
 %  2. Verificar dependencias
@@ -113,11 +122,12 @@ end
 fprintf('\n======================================================\n');
 fprintf('Lab5_Export_Refs — Resumen de exportacion\n');
 fprintf('======================================================\n');
+fprintf('  Actividad             : %d\n',   act_num);
 fprintf('  N                     : %d\n',   N);
 fprintf('  Ts                    : %.4f s\n', Ts);
 fprintf('  Tiempo total          : %.2f s\n', N*Ts);
 fprintf('  max|Uref| [N.m]       : [%.4f %.4f %.4f %.4f]\n', max(abs(Uref),[],2)');
-fprintf('  Carpeta de salida     : %s\n', fullfile(pwd, ref_dir));
+fprintf('  Carpeta de salida     : %s\n', ref_dir);
 fprintf('\n  Archivos exportados:\n');
 for f = files_out
     info = dir(fullfile(ref_dir, f{1}));
