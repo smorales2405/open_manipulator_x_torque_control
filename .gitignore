@@ -24,5 +24,14 @@ codegen/
 # o compilar OMDyn.mexw64 con build_omdyn_mex.m)
 !src/Feedback Linearization/MATLAB/Prelab/instructor/OMDyn.mexa64
 
+# Excepcion: los MEX Linux del Lab 5 (TV-LQR) SI se versionan — los scripts
+# de instructor y las plantillas de estudiante asumen OMDyn.mexa64 y
+# open_manx_fkin.mexa64 precompilados en su misma carpeta (solo Linux;
+# en Windows recompilar con MATLAB Coder). codegen/ sigue ignorado.
+!src/Trajectory Optimization TV-LQR/MATLAB/instructor/OMDyn.mexa64
+!src/Trajectory Optimization TV-LQR/MATLAB/instructor/open_manx_fkin.mexa64
+!src/Trajectory Optimization TV-LQR/MATLAB/student/OMDyn.mexa64
+!src/Trajectory Optimization TV-LQR/MATLAB/student/open_manx_fkin.mexa64
+
 # Backup transitorio que crea gen_OMDyn.m en cada regeneracion
 OMDyn_prev.m
