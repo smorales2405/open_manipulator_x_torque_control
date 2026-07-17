@@ -2,9 +2,15 @@ claude\ historial/
 
 # Datos y graficas experimentales: no versionar (solo .gitkeep en data/ y plots/)
 data/**/*.csv
+data/**/*.yaml
 plots/**/*.png
 plots/**/*.eps
 plots/**/*.pdf
+
+# Salidas generadas por el pipeline de identificacion (src/Identification):
+# el modelo final revisado se copia a mano a motorXM430W350T_params.yaml
+config/motorXM430W350T_params_identified.yaml
+config/motorXM430W350T_params_posmode.yaml
 
 # Bytecode de Python (launch files)
 __pycache__/

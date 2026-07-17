@@ -15,13 +15,23 @@ donde:
     I_meas  = corriente medida del registro PRESENT_CURRENT [ticks, 2.69 mA/tick],
               llevada a convención articular: y = current_sign·encoder_sign·curr_meas.
 
+ADVERTENCIA — NO usar el alpha de este script para control:
+    en modo posición el PID interno sesga la corriente y en régimen
+    cuasi-estático la fricción del reductor (353.5:1, no-retroconducción)
+    sostiene parte de la gravedad → alpha sale SUBESTIMADA (kt_ef > 1.78
+    N·m/A, físicamente imposible; históricamente: alpha=153 → kt=2.43 ✗).
+    El alpha válido se identifica con identify_alpha.py (modo corriente
+    dinámico) y los Fv/Fc oficiales con identify_friction.py (reversión).
+    Protocolo: src/Identification/Ident_OpenManX_XM430W350T_procedure.md
+    Este script queda como REFERENCIA del ajuste RNEA en modo posición.
+
 Entrada : data/diagnostics/sinusoidal/hw_sin_torque_<LOG_ID>.csv
           (generado por hw_sinusoidal_torque_node en modo "position")
 Salidas :
     1) Consola : alpha, Fv, Fc, I_offset y R² por articulación.
     2) YAML    : config/motorXM430W350T_params_posmode.yaml  (referencia modo posición;
-                 NO es el modelo final — ese se ensambla a mano combinando alpha de modo
-                 corriente + Fv/Fc de identify_friction.py en motorXM430W350T_params.yaml)
+                 NO es el modelo final — ese se ensambla con assemble_motor_params.py
+                 combinando identify_alpha.py + identify_friction.py)
     3) CSV     : data/identification/identify_fit_<LOG_ID>.csv
                  (t, tau_rb, I_meas, I_pred por articulación)
 
@@ -285,6 +295,17 @@ print(f"  epsilon = {eps:.3f} rad/s   R² medio = {np.mean(R2):.4f}   "
 print(f"  Nota: 'α débil' = |corr(τ,I)|<0.3 → torque poco excitado; su α se apoya "
       f"en la compartida.")
 print("=" * 84)
+print("""
+!! ADVERTENCIA: alpha de MODO POSICIÓN — NO usarla para control.
+   El PID interno y el sostén cuasi-estático de gravedad por fricción del
+   reductor la subestiman (kt_ef resultante suele superar el ideal 1.78 N·m/A,
+   físicamente imposible). El alpha válido sale de identify_alpha.py (modo
+   corriente dinámico); Fv/Fc oficiales, de identify_friction.py.
+   Protocolo: src/Identification/Ident_OpenManX_XM430W350T_procedure.md
+""")
+kt_check = 1.0 / (np.mean(alpha) * CURRENT_UNIT_A) if np.mean(alpha) > 0 else float("nan")
+if kt_check > 1.7826:
+    print(f"   (Confirmado en estos datos: kt_ef = {kt_check:.2f} N·m/A > 1.78 ideal.)\n")
 
 # ════════════════════════════════════════════════════════════════════════════
 #  Salida 1: YAML  config/motorXM430W350T_params_posmode.yaml  (referencia)

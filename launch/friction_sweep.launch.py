@@ -5,6 +5,8 @@ identificar la fricción articular (analizar con src/Identification/identify_fri
 
 El joint indicado por 'friction_joint' (1..4) se mueve en mode="velocity"; el resto
 se mantiene fijo en position. Resuelve la ruta del config automáticamente.
+Protocolo completo de identificación (incluye cuándo repetir un barrido):
+src/Identification/Ident_OpenManX_XM430W350T_procedure.md
 
 Ejemplos:
   # Dry-run (sin hardware) — verifica parámetros
