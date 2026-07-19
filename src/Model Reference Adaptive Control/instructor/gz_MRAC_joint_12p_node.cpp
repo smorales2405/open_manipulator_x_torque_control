@@ -22,30 +22,54 @@
 //    FV_NOM = [0.0367, 0.0000, 0.0000, 0.0050]   [N·m·s/rad]
 //    FC_NOM = [0.0146, 0.0830, 0.1143, 0.0413]   [N·m]
 //
-//  Modelo de friccion del controlador: viscoso en dq_r (convencion Slotine-Li
-//  del paquete) y Coulomb suavizado EN LAZO ABIERTO sobre la velocidad
-//  DESEADA dq_d (eps = 0.15 rad/s):
-//    tau_fric_j = Fv_j*dq_r_j + Fc_j*tanh(dq_d_j/eps)
-//  Coulomb sobre dq_d y NO sobre dq_r: dq_r = dq_d - Lambda*e depende del
-//  error, y una Fc_hat sobre/subestimada realimentaba la oscilacion (test 2:
-//  Fc1_hat estimo 0.095 vs 0.015 real -> friccion negativa neta = inyeccion
-//  de energia -> zumbido autoalimentado). Con buen tracking dq ~ dq_d y ambas
-//  aproximan igual a Fc*sgn(dq).
+//  Modelo de friccion del controlador (identico al feedforward del
+//  gz_SMC_joint_node.cpp del Lab 6, validado en sim con eRMS 12-20 mrad):
+//    tau_fric_j = Fv_j*dq_j + Fc_j*tanh(dq_d_j/eps),   eps = 0.05 rad/s
+//  Viscosa sobre la velocidad MEDIDA dq (cancelacion exacta del damping de la
+//  planta; dq - dq_r = s, la diferencia con la convencion dq_r es de orden s)
+//  y Coulomb suavizado EN LAZO ABIERTO sobre la velocidad DESEADA dq_d:
+//  dq_r = dq_d - Lambda*e depende del error, y una Fc_hat sobre/subestimada
+//  realimentaba la oscilacion (test 2: Fc1_hat estimo 0.095 vs 0.015 real ->
+//  friccion negativa neta = inyeccion de energia -> zumbido autoalimentado).
+//  Con buen tracking dq ~ dq_d y ambas aproximan igual a Fc*sgn(dq).
 //  La planta Gazebo (DART) implementa la friccion seca por restriccion sobre
 //  dq: el modelo del controlador NO coincide exactamente con la planta,
 //  igual que ocurrira en el robot real (Stribeck, stiction) -> se espera
 //  adaptacion con error acotado, no convergencia parametrica exacta.
 //
-//  Regresor completo:  Y = [ Y_alpha | diag(dq_r) | diag(tanh(dq_d/eps)) ]  (4x12)
+//  Regresor completo:  Y = [ Y_alpha | diag(dq) | diag(tanh(dq_d/eps)) ]  (4x12)
 //  (Y_alpha via pinocchio::computeJointTorqueRegressor contraido con los
 //   parametros dinamicos nominales de cada cuerpo, igual que en el nodo 8p.)
 //
-//  Ley de control adaptativo (forma de desviacion respecto al prior):
+//  Ley de control adaptativo (forma de desviacion respecto al prior, con la
+//  realimentacion PREMULTIPLICADA por M(q) como en gz_SMC_joint_node.cpp):
 //    tau_nom = tau_rigido_SlotineLi(q,dq,dqr,ddqr)
-//              + Fv0 .* dq_r + Fc0 .* tanh(dq_r/eps)
-//    tau     = tau_nom + Y*(a_hat - a_prior) - K_D*s
+//              + Fv0 .* dq + Fc0 .* tanh(dq_d/eps)
+//    tau     = tau_nom + Y*(a_hat - a_prior)
+//              - M(q) * ( K_V .* s + K_S .* sat(s/phi) )
 //    tau_sat = clamp(tau, -TAU_MAX, TAU_MAX)
-//  En a_hat = a_prior -> tau = tau_nom - K_D*s (mejor modelo fijo + PD).
+//  En a_hat = a_prior -> tau = tau_nom - M*(...) (mejor modelo fijo + SMC).
+//
+//  POR QUE M(q)*(...) y no el -K_D*s crudo original: las inercias reflejadas
+//  difieren ~10-100x entre ejes (M22 ~ 0.010, M44 ~ 0.001 kg·m2) y varian con
+//  q, asi que NO EXISTE un K_D constante en N·m·s/rad valido para todos: en el
+//  test 4 (reloj de simulacion ya corregido) K_D4 = 0.10 equivalia a una
+//  ganancia efectiva K_D4/M44 ~ 90 1/s >> (0.2~0.3)/Ts -> ciclo limite de
+//  22 Hz en q4, y q2/q3 saturaban 61-66% con TV(tau) ~ 1600. Con M(q) por
+//  delante, K_V/K_S/Lambda son ACELERACIONES [1/s, rad/s2]: la ganancia
+//  efectiva es identica en los 4 ejes y el criterio discreto se cumple por
+//  diseno. Se heredan la estructura y las ganancias exactas del SMC (rho=sat,
+//  phi=0.15) que en el Lab 6 Act 1 dieron eRMS 12-20 mrad, 0% de saturacion
+//  y TV(tau) < 32. La capa limite K_S*sat(s/phi) ademas domina el residuo de
+//  friccion de DART que el tanh no representa (en q4 equivale a ~10-20
+//  rad/s2), descargando a la adaptacion: sin ella, Fc4_hat se clavaba en
+//  A_MAX (test 3 y 4) intentando modelar ese residuo.
+//
+//  Lazo de control: 200 Hz en tiempo SIMULADO (Ts = 5 ms), alineado con el
+//  nodo SMC. /joint_states llega a ~100 Hz sim: los ticks intermedios reusan
+//  la ultima medicion (ZOH), pero refrescan referencia y feedforward — el
+//  SMC del Lab 6 opero asi (60% de sus filas con medicion repetida) sin
+//  degradacion visible.
 //
 //  Ley de adaptacion (proyeccion + sigma-modification):
 //    a_hat_dot = -Gamma .* ( Y^T*s + sigma*(a_hat - a_prior) )   (si adaptive)
@@ -170,6 +194,7 @@
 #include <pinocchio/multibody/model.hpp>
 #include <pinocchio/multibody/data.hpp>
 #include <pinocchio/parsers/urdf.hpp>
+#include <pinocchio/algorithm/crba.hpp>
 #include <pinocchio/algorithm/rnea.hpp>
 #include <pinocchio/algorithm/regressor.hpp>
 
@@ -186,17 +211,18 @@ static constexpr double PI      = M_PI;
 static constexpr int    NARM    = 4;       // articulaciones controladas
 static constexpr int    NP      = 12;      // parametros: [alpha1..4, Fv1..4, Fc1..4]
 static constexpr double TAU_MAX = 1.2;     // [N·m] limite de torque por articulacion
-static constexpr double DT      = 0.01;    // [s] periodo de control (100 Hz)
+static constexpr double DT      = 0.005;   // [s] periodo de control (200 Hz, como el nodo SMC)
 static constexpr double T_HOME  = 5.0;     // [s] duracion del homing quintico inicial
 static constexpr double T_RAMP  = 2.0;     // [s] envolvente 0->1 del multiseno
 static constexpr double SETTLE_TOL  = 0.08;  // [rad] max|e| para dar por asentado
 static constexpr double SETTLE_TMAX = 5.0;   // [s] timeout de la fase de asentamiento
 
-// [rad/s] suavizado tanh de Coulomb. La identificacion usa 0.05
-// (motor_epsilon_friction), pero para CONTROL esa capa limite es agresiva:
-// dq_d cruza cero en cada inversion del multiseno y un tanh empinado conmuta
-// el feedforward como onda cuadrada (fuente de chatter). 0.15 lo suaviza.
-static constexpr double EPS_FRICTION = 0.15;
+// [rad/s] suavizado tanh de Coulomb del feedforward de friccion. Igual que
+// FRIC_EPS del nodo SMC: como se alimenta con la velocidad DESEADA dq_d
+// (senal limpia, sin ruido de medicion), una capa estrecha es segura y
+// compensa el Coulomb casi como sgn(dq_d). Es ademas el mismo eps de la
+// identificacion (motor_epsilon_friction = 0.05).
+static constexpr double EPS_FRICTION = 0.05;
 
 using Vec4  = Eigen::Vector4d;
 using Vec12 = Eigen::Matrix<double, NP, 1>;
@@ -209,21 +235,23 @@ static const Vec4 FV_NOM = (Vec4() << 0.0367, 0.0000, 0.0000, 0.0050).finished()
 static const Vec4 FC_NOM = (Vec4() << 0.0146, 0.0830, 0.1143, 0.0413).finished();
 
 // ═══════════════════════════════════════════════════════════════════════════
-//  GANANCIAS MRAC 12p — ajustar aqui
+//  GANANCIAS MRAC 12p — realimentacion M(q)-escalada (estructura del nodo SMC)
 //  Indice articular: [joint1, joint2, joint3, joint4]
 //  Indice parametro: [alpha1..4, Fv1..4, Fc1..4]
 // ═══════════════════════════════════════════════════════════════════════════
-// Dimensionamiento de LAMBDA_Q / K_D:
-//  - Estabilidad discreta del termino derivativo a 100 Hz: K_D < 2*M_ii(q)/DT.
-//    M_ii minimas MEDIDAS (Pinocchio/CRBA a lo largo del multiseno seguro):
-//    [0.0012, 0.0102, 0.0082, 0.0011] kg·m² -> limites [0.23, 2.0, 1.6, 0.22].
-//    Valores elegidos ~50% del limite. (Los K_D=25 originales excedian el
-//    limite hasta 100x -> rele/bang-bang; los K_D1=0.5/K_D2=0.8 del intento
-//    anterior seguian al borde -> zumbido ~20 Hz en q1/q2.)
-//  - Region lineal (sin saturar): |e_q| < TAU_MAX/(K_D*LAMBDA):
-//    q1 ~2.0 rad | q2 ~0.24 | q3 ~0.30 | q4 ~1.7 rad.
-static const Vec4 LAMBDA_Q = {5.0,  5.0,  5.0,  7.0};    // superficie de seguimiento [1/s]
-static const Vec4 K_D      = {0.12, 1.0,  0.8,  0.10};   // amortiguamiento sobre s [N·m·s/rad]
+// LAMBDA_Q / K_V / K_S / PHI_BL: HEREDADOS SIN CAMBIO de gz_SMC_joint_node.cpp
+// (rho=sat), validados en el Lab 6 Act 1 (eRMS 12-20 mrad, 0% sat, TV < 32).
+// Al ir premultiplicadas por M(q), son aceleraciones: mismo efecto en los 4
+// ejes, sin depender de la inercia reflejada de cada uno.
+//  - Criterio discreto (Ts = 5 ms): ganancia efectiva dentro de la capa
+//    K_V + K_S/PHI_BL <= (0.2~0.3)/Ts. Aqui: 28/38/38/50 [1/s], bordes OK.
+//  - K_S solo domina la incertidumbre acotada (residuo de Coulomb DART,
+//    errores de escala): K_S grande degenera sat() en sign() (chattering).
+//  - joint4: residuo de friccion / M44 ~ 10-20 rad/s2 -> K_S4 y Lambda4 altos.
+static const Vec4 LAMBDA_Q = {10.0, 10.0, 10.0, 15.0};   // superficie de seguimiento [1/s]
+static const Vec4 K_V      = { 8.0,  8.0,  8.0, 10.0};   // alcance exponencial sobre s [1/s]
+static const Vec4 K_S      = { 3.0,  4.5,  4.5,  6.0};   // conmutacion sat(s/phi) [rad/s2]
+static constexpr double PHI_BL = 0.15;                   // capa limite de sat() [rad/s]
 
 // Tasas de adaptacion por bloque: pequena en alpha (masas bien conocidas,
 // pesadas con balanza), mayor en friccion (lo peor identificado). Si Fc_hat
@@ -403,9 +431,11 @@ public:
       "MRAC articular 12p — modo=%s  friction_prior=%s  tau_max=%.2f N·m",
       mode_str_.c_str(), friction_prior_ ? "identificado" : "cero", TAU_MAX);
     RCLCPP_INFO(this->get_logger(),
-      "Lambda=[%.1f %.1f %.1f %.1f]  Kd=[%.1f %.1f %.1f %.1f]",
+      "Lambda=[%.1f %.1f %.1f %.1f]  Kv=[%.1f %.1f %.1f %.1f]  "
+      "Ks=[%.1f %.1f %.1f %.1f]  phi=%.2f  (realimentacion M(q)-escalada, gan. del SMC)",
       LAMBDA_Q[0], LAMBDA_Q[1], LAMBDA_Q[2], LAMBDA_Q[3],
-      K_D[0],      K_D[1],      K_D[2],      K_D[3]);
+      K_V[0],      K_V[1],      K_V[2],      K_V[3],
+      K_S[0],      K_S[1],      K_S[2],      K_S[3],  PHI_BL);
     RCLCPP_INFO(this->get_logger(),
       "Gamma: alpha=[%.2f %.2f %.2f %.2f]  Fv=[%.2f %.2f %.2f %.2f]  Fc=[%.2f %.2f %.2f %.2f]",
       GAMMA[0], GAMMA[1], GAMMA[2],  GAMMA[3],
@@ -516,7 +546,7 @@ private:
     }
   }
 
-  // ── Tick de control a 100 Hz ──────────────────────────────────────────────
+  // ── Tick de control a 200 Hz (tiempo simulado) ────────────────────────────
   void tick()
   {
     if (!last_js_) { return; }
@@ -581,11 +611,17 @@ private:
     dqr_pin.head<NARM>()  = dqr;
     ddqr_pin.head<NARM>() = ddqr;
 
+    // ── Matriz de inercia nominal M(q) (CRBA) para la realimentacion ────────
+    pinocchio::crba(model_, data_, q_pin);
+    data_.M.triangularView<Eigen::StrictlyLower>() =
+      data_.M.triangularView<Eigen::StrictlyUpper>().transpose();
+    const Eigen::Matrix4d M = data_.M.topLeftCorner<NARM, NARM>();
+
     // ── Termino rigido nominal (RNEA) + friccion nominal del prior ──────────
     const Eigen::VectorXd tau_nom_rigid_full =
       slotineLiTorque(model_, data_, q_pin, dq_pin, dqr_pin, ddqr_pin);
     const Vec4 tau_nom = tau_nom_rigid_full.head<NARM>()
-                       + a_prior_.segment<NARM>(NARM).cwiseProduct(dqr)
+                       + a_prior_.segment<NARM>(NARM).cwiseProduct(dq)
                        + a_prior_.tail<NARM>().cwiseProduct(tanh_dqd);
 
     // ── Regresor Slotine-Li completo y columnas de escala de inercia ───────
@@ -597,12 +633,18 @@ private:
       Y.col(i) = (Y_SL.middleCols(col0, 10) * pi_nom_[i]).head<NARM>();  // Y_alpha
     }
     for (int i = 0; i < NARM; ++i) {
-      Y(i, NARM + i)     = dqr[i];                                       // Y_Fv = diag(dq_r)
+      Y(i, NARM + i)     = dq[i];                                        // Y_Fv = diag(dq) medida, como el SMC
       Y(i, 2 * NARM + i) = tanh_dqd[i];                                  // Y_Fc = diag(tanh(dq_d/eps))
     }
 
-    // ── Ley de control adaptativo (forma de desviacion respecto al prior) ───
-    const Vec4 tau     = tau_nom + Y * (a_hat_ - a_prior_) - K_D.asDiagonal() * s_q;
+    // ── Ley de control adaptativo (desviacion del prior + realimentacion ────
+    //    M(q)-escalada con capa limite, estructura del nodo SMC)
+    Vec4 sat_s;
+    for (int i = 0; i < NARM; ++i) {
+      sat_s[i] = std::max(-1.0, std::min(1.0, s_q[i] / PHI_BL));
+    }
+    const Vec4 tau = tau_nom + Y * (a_hat_ - a_prior_)
+                   - M * (K_V.cwiseProduct(s_q) + K_S.cwiseProduct(sat_s));
     const Vec4 tau_sat = tau.cwiseMin(TAU_MAX).cwiseMax(-TAU_MAX);
 
     // ── Publicar torques ───────────────────────────────────────────────────
