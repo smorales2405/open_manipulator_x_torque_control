@@ -29,6 +29,11 @@
   <xacro:arg name="load_mass"     default="0.1"   />   <!-- masa          [kg] -->
   <xacro:arg name="load_x_offset" default="0.0"   />   <!-- offset en X   [m] -->
 
+  <!-- Apertura inicial del gripper [m/joint]: el launch la calcula como
+       load_radius - 0.021 para que los dedos queden tangentes al diametro
+       de la carga (separacion entre origenes de dedos = 0.042 + 2*valor). -->
+  <xacro:arg name="gripper_init"  default="0.0"   />
+
   <!-- Recursos graficos: colores Rviz y materiales Gazebo del paquete original -->
   <xacro:include filename="$(find open_manipulator_x_description)/gazebo/materials.xacro" />
 
@@ -60,7 +65,8 @@
     q1_init="$(arg q1_init)"
     q2_init="$(arg q2_init)"
     q3_init="$(arg q3_init)"
-    q4_init="$(arg q4_init)" />
+    q4_init="$(arg q4_init)"
+    gripper_init="$(arg gripper_init)" />
 
   <!-- Plugin gz_ros2_control para Gazebo Fortress apunta al YAML de controladores -->
   <gazebo>
@@ -166,11 +172,14 @@
   </joint>
 
   <!-- ── Carga cilindrica en el efector final ──────────────────────────────────
-       Cilindro solido cuyo eje coincide con el eje Y de end_effector_link.
-       Las caras circulares apuntan en +Y / -Y (rpy pi/2 0 0 alinea eje Z→Y).
-       Inercia de cilindro solido con eje a lo largo de Y:
-         Ixx = Izz = m*(3r^2 + h^2)/12
-         Iyy = m*r^2/2
+       Cilindro solido cuyo eje coincide con el eje Z de end_effector_link
+       (rpy 0 0 0: el eje del primitivo <cylinder> ya es Z). Las caras planas
+       apuntan arriba/abajo y el gripper lo sostiene alrededor de su DIAMETRO
+       (dedos tangentes a la superficie lateral, separacion 2r fijada por
+       gripper_init en el launch), como el robot real.
+       Inercia de cilindro solido con eje a lo largo de Z:
+         Ixx = Iyy = m*(3r^2 + h^2)/12
+         Izz = m*r^2/2
        Solo se instancia si spawn_load:=true; en caso contrario no existe en
        el arbol cinematico y no afecta la simulacion. -->
   <xacro:if value="$(arg spawn_load)">
@@ -181,7 +190,7 @@
 
     <link name="$(arg prefix)load_link">
       <visual>
-        <origin xyz="0 0 0" rpy="${pi/2} 0 0"/>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
         <geometry>
           <cylinder radius="${_load_r}" length="${_load_h}"/>
         </geometry>
@@ -190,7 +199,7 @@
         </material>
       </visual>
       <collision>
-        <origin xyz="0 0 0" rpy="${pi/2} 0 0"/>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
         <geometry>
           <cylinder radius="${_load_r}" length="${_load_h}"/>
         </geometry>
@@ -200,8 +209,8 @@
         <mass value="${_load_m}"/>
         <inertia
           ixx="${_load_m * (3*_load_r*_load_r + _load_h*_load_h) / 12}"
-          iyy="${_load_m * _load_r * _load_r / 2}"
-          izz="${_load_m * (3*_load_r*_load_r + _load_h*_load_h) / 12}"
+          iyy="${_load_m * (3*_load_r*_load_r + _load_h*_load_h) / 12}"
+          izz="${_load_m * _load_r * _load_r / 2}"
           ixy="0" ixz="0" iyz="0"/>
       </inertial>
     </link>

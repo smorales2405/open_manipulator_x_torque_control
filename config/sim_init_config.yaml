@@ -15,10 +15,10 @@
 use_fixed_init: true
 #q_init: [0.0, 0.0, 0.0, 0.0]             # x0 = [0, 0, 0, 0]
 #q_init: [1.5708, 0.0, 0.5236, 1.0472]    # x0 = [pi/2, 0, pi/6, pi/3]
-#q_init: [0.0, -0.55, 0.10, 0.50]          # MRAC 12p: centros del multiseno seguro (z_EE>=83mm)
+q_init: [0.0, -0.55, 0.10, 0.50]          # MRAC 12p: centros del multiseno seguro (z_EE>=83mm)
 #q_init: [0.0, -0.30, 0.30, 0.80]         # Lab7 Act2 MRAC 8p: centros del multiseno original
 #q_init: [0.0, 0.91, 0.54, -1.68]         # Lab5 TV-LQR: pose inicial de la trayectoria optimizada
-q_init: [0.0, -0.45, 0.35, 0.785]         # Lab6 Act1 SMC articular: q_d(0)
+#q_init: [0.0, -0.45, 0.35, 0.785]         # Lab6 Act1 SMC articular: q_d(0)
 # Lab6 Act2 SMC cartesiano: usar use_fixed_init: false (equilibrio bajo gravedad)
 
 # ─── Obstáculo MDF ───────────────────────────────────────────────────────────
@@ -73,13 +73,24 @@ friction_scale: 1.0
 # spawn_load  : true  → cilindro dorado fijo en end_effector_link (visual + colision + masa)
 #               false → sin carga, no afecta la simulacion (comportamiento por defecto)
 #
-# load_radius   : radio del cilindro [m]   — eje del cilindro a lo largo del eje Y del efector
+# load_radius   : radio del cilindro [m]
 # load_height   : altura del cilindro [m]
 # load_mass     : masa del cilindro [kg]
 # load_x_offset : desplazamiento del centro del cilindro en el eje X del efector [m]
+#
+# El cilindro va con su EJE a lo largo del eje Z del efector (caras planas
+# arriba/abajo): el gripper lo sostiene alrededor de su DIAMETRO, como el
+# robot real. El launch ajusta los dedos automaticamente a esa medida
+# (gripper_init = load_radius - 0.021; con r=0.019 → -0.002, dedos cerrados
+# a 38 mm; limites fisicos del joint [-0.010, 0.019] → radio agarrable
+# entre 0.011 y 0.040 m).
+#
+# Verdad de theta_load para el nodo MRAC 12p (EE a 0.126 m de joint4):
+#   dm = load_mass ;  dmcx = load_mass * (0.126 + load_x_offset)
+#   Con 0.125 kg y offset 0.0 → theta_load = [0.125, 0.0158, 0, 0]
 
-spawn_load:    false
-load_radius:   0.03     # [m]
-load_height:   0.04    # [m]
-load_mass:     0.100    # [kg]
-load_x_offset: 0.015      # [m]
+spawn_load:    true
+load_radius:   0.019     # [m]
+load_height:   0.013    # [m]
+load_mass:     0.125    # [kg]
+load_x_offset: 0.0      # [m]

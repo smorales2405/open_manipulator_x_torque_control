@@ -66,8 +66,16 @@ def _load_init_config():
     load_height        = cfg.get('load_height',   0.02)
     load_mass          = cfg.get('load_mass',     0.1)
     load_x_offset      = cfg.get('load_x_offset', 0.0)
+    # Apertura inicial del gripper: dedos tangentes al diametro del cilindro
+    # (separacion entre origenes de dedos = 0.042 + 2*gripper_init = 2*radio).
+    # Limites fisicos del joint prismatico: [-0.010, 0.019].
+    if spawn_load == 'true':
+        gripper_init = min(max(load_radius - 0.021, -0.010), 0.019)
+    else:
+        gripper_init = 0.0
     return use_fixed, q_init, spawn_obs, obs_pose, mass_inertia_scale, damping_scale, \
-           friction_scale, spawn_load, load_radius, load_height, load_mass, load_x_offset
+           friction_scale, spawn_load, load_radius, load_height, load_mass, load_x_offset, \
+           gripper_init
 
 
 def generate_launch_description():
@@ -77,7 +85,8 @@ def generate_launch_description():
 
     # Leer configuracion de posicion inicial, obstáculo y escalas de dinamica desde YAML
     use_fixed_init, q_init, spawn_obs, obs_pose, mass_inertia_scale, damping_scale, \
-        friction_scale, spawn_load, load_radius, load_height, load_mass, load_x_offset = _load_init_config()
+        friction_scale, spawn_load, load_radius, load_height, load_mass, load_x_offset, \
+        gripper_init = _load_init_config()
 
     world = PathJoinSubstitution([
         FindPackageShare('open_manipulator_x_torque_control'),
@@ -117,6 +126,7 @@ def generate_launch_description():
             ' load_height:=',        str(load_height),
             ' load_mass:=',          str(load_mass),
             ' load_x_offset:=',      str(load_x_offset),
+            ' gripper_init:=',       str(gripper_init),
         ]),
         value_type=str,
     )

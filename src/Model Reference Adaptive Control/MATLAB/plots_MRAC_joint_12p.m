@@ -45,10 +45,12 @@ DAMPING_SCALE_TRUE  = 1.0;  % damping_scale      -> Fv1 verdadero = escala*FV_NO
 FRICTION_SCALE_TRUE = 1.0;  % friction_scale     -> Fc verdadero = escala*FC_NOM
 
 % Carga VERDADERA en el efector (theta_load = exceso inercial del link5):
-%   sin carga (spawn_load: false)          -> [0, 0, 0, 0]
-%   cilindro 100 g de sim_init_config.yaml -> [0.100, 0.0141, 0, 0]
-%   (dm [kg], d(m·c) [kg·m] en el frame de joint4; EE a 126 mm + offset 15 mm)
-LOAD_TRUE = [0.100, 0.0141, 0, 0];
+%   sin carga (spawn_load: false)            -> [0, 0, 0, 0]
+%   cilindro 125 g Ø38x13 (sostenido por su  -> [0.125, 0.0158, 0, 0]
+%   diametro, offset 0, sim_init_config.yaml)
+%   (dm [kg], d(m·c) [kg·m] en el frame de joint4; EE a 126 mm de joint4:
+%    dmcx = load_mass * (0.126 + load_x_offset))
+LOAD_TRUE = [0.125, 0.0158, 0, 0];
 
 % Friccion nominal identificada (URDF/Xacro escala 1.0, mismos valores del nodo)
 FV_NOM = [0.0367, 0.0000, 0.0000, 0.0050];   % [N·m·s/rad]

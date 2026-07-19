@@ -29,9 +29,10 @@
 //               alpha4 Y theta_load seria colinealidad (alpha4 vive dentro
 //               del span de estas columnas). El bloque I de la carga (~2 mN·m
 //               a las aceleraciones del multiseno) se desprecia.
-//               Verdad para el cilindro de sim_init_config.yaml (100 g,
-//               offset x = 15 mm, EE a 126 mm de joint4, frames alineados):
-//               theta_load = [0.100, 0.0141, 0, 0].
+//               Verdad para el cilindro de sim_init_config.yaml (125 g,
+//               Ø38 x 13 mm sostenido por su diametro, offset x = 0,
+//               EE a 126 mm de joint4, frames alineados):
+//               theta_load = [0.125, 0.125*0.126, 0, 0] = [0.125, 0.0158, 0, 0].
 //    Fv1        friccion viscosa de joint1 [N·m·s/rad], nominal FV_NOM(1).
 //               Fv de J2..J4 NO se adapta: su valor identificado es 0 en toda
 //               la familia OMX, sus columnas no llevan senal (en t5-t12
@@ -155,12 +156,12 @@
 //    C4 sin identificar  : 1.0/1.0/1.0, adaptive:=true friction_prior:=false.
 //                          ¿La adaptacion en linea reemplaza la identificacion
 //                          offline? Comparar contra el fijo de C1.
-//    C5 carga en efector : 1.0/1.0/1.0 + spawn_load: true (cilindro 100 g).
-//                          Esperado: dm -> 0.100 kg, dmcx -> 0.0141 kg·m y
+//    C5 carga en efector : 1.0/1.0/1.0 + spawn_load: true (cilindro 125 g).
+//                          Esperado: dm -> 0.125 kg, dmcx -> 0.0158 kg·m y
 //                          tracking nivel C1 (con alpha4 era imposible:
-//                          capacidad 0.035-0.13 N·m vs 0.12-0.24 N·m que pide
-//                          la carga). SIN carga, theta_load debe quedarse en
-//                          ~0: es el nuevo test anti-deriva (C1'). Sesgos
+//                          capacidad 0.035-0.13 N·m vs los ~0.15-0.30 N·m que
+//                          pide la carga). SIN carga, theta_load debe quedarse
+//                          en ~0: es el nuevo test anti-deriva (C1'). Sesgos
 //                          esperados sin carga: d(m·cy) vaga (columna casi sin
 //                          excitacion, fuera del plano sagital) y el residuo
 //                          de stiction de DART en q4 puede filtrarse como
@@ -304,18 +305,23 @@ static constexpr double PHI_BL = 0.15;                   // capa limite de sat()
 // Tasas de adaptacion por bloque: pequena en alpha (masas bien conocidas,
 // pesadas con balanza), mayor en friccion (lo peor identificado). Si Fc_hat
 // converge lento en C2/C4, subir el bloque Fc hasta ~5.0.
-// theta_load: las Gamma se escalan por la sensibilidad de cada columna para
-// tiempos de convergencia parejos (~0.5-1 s con carga de 100 g): la columna
-// dm genera ~2.5 N·m/kg de gravedad y las d(m·c) ~9.8 N·m/(kg·m) — de ahi
-// Gamma_dm = 0.3 y Gamma_dmc = 0.01 (Gamma*Y^2 comparable al bloque Fc).
+// theta_load: ENFRIADO tras el test 14 — con Gamma_dm = 0.3 la columna de
+// gravedad (~2.5 N·m/kg) daba convergencia en 0.2 s, demasiado caliente para
+// la cresta mal condicionada que forman las columnas m y m·cx (casi
+// colineales sobre esta trayectoria: ambas son gravedad con la misma firma):
+// dm y dmcx oscilaban en contrafase entre sus topes (periodo 10-15 s) y q3
+// empeoraba. Con 0.05/0.002 la convergencia pasa a ~2-3 s bien amortiguada.
 static const Vec12 GAMMA =
-  (Vec12() << 0.3, 0.3, 0.3,   0.3, 0.01, 0.01, 0.01,   2.0,   2.0, 2.0, 2.0, 2.0).finished();
+  (Vec12() << 0.3, 0.3, 0.3,   0.05, 0.002, 0.002, 0.002,   2.0,   2.0, 2.0, 2.0, 2.0).finished();
 
-// Fuga sigma-modification hacia el prior [1/s]: acota la deriva parametrica
-// por dinamica no modelada (friccion de pulso de DART). Subirla si algun
-// parametro sigue derivando al tope; bajarla si el sesgo hacia el prior es
-// excesivo en los escenarios C2/C4.
-static constexpr double SIGMA_LEAK = 0.1;
+// Fuga sigma-modification hacia el prior [1/s], POR BLOQUE: acota la deriva
+// parametrica por dinamica no modelada (friccion de pulso de DART). En el
+// bloque de carga la fuga es debil (0.02): su prior es CERO, y con carga real
+// una fuga fuerte pelea contra el valor verdadero (parte de la caza del test
+// 14); las cotas fisicas estrechas ya contienen la deriva. Subir un bloque si
+// deriva al tope; bajarlo si el sesgo hacia el prior es excesivo (C2/C4).
+static const Vec12 SIGMA_LEAK =
+  (Vec12() << 0.1, 0.1, 0.1,   0.02, 0.02, 0.02, 0.02,   0.1,   0.1, 0.1, 0.1, 0.1).finished();
 
 // Proyeccion a la region fisica admisible (anti-deriva parametrica).
 // alpha estrecho: no dejar que alpha absorba errores de friccion.
@@ -751,7 +757,7 @@ private:
     const bool tau_clipped = (tau.array().abs() > TAU_MAX).any();
     if (adaptive_ && phase_ == Phase::RUN && !tau_clipped) {
       const Vec12 a_dot = -GAMMA.cwiseProduct(
-        Y.transpose() * s_q + SIGMA_LEAK * (a_hat_ - a_prior_));
+        Y.transpose() * s_q + SIGMA_LEAK.cwiseProduct(a_hat_ - a_prior_));
       a_hat_ += DT * a_dot;
       a_hat_ = a_hat_.cwiseMax(A_MIN).cwiseMin(A_MAX);
     }
