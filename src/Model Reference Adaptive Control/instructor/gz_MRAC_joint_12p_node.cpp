@@ -4,17 +4,42 @@
 //  OpenMANIPULATOR-X (Gazebo) — campana sim-to-real (previa a hardware)
 //
 //  Variante del gz_MRAC_joint_node.cpp (Lab 7 Act 2, 8 parametros) orientada
-//  a emular el despliegue en el robot real: ademas de la escala de inercia
-//  por eslabon y la friccion viscosa, adapta la FRICCION DE COULOMB por
+//  a emular el despliegue en el robot real: adapta la escala de inercia de
+//  los eslabones proximales, la CARGA en el efector (exceso inercial del
+//  ultimo cuerpo), la friccion viscosa de J1 y la FRICCION DE COULOMB por
 //  junta, que en el robot real domina la friccion de J2..J4 (identificacion
 //  config/motorXM430W350T_params.yaml: un solo robot, una temperatura).
 //
 //  Parametros adaptados (12):
-//    a_hat = [ alpha1..alpha4 , Fv1..Fv4 , Fc1..Fc4 ]^T
-//    alpha_k : escala de inercia del cuerpo movido por jointk (linkk+1)
-//              masa + CoM + tensor completo, nominal = 1.0
-//    Fv_j    : friccion viscosa de jointj [N·m·s/rad], nominal = FV_NOM
-//    Fc_j    : friccion de Coulomb de jointj [N·m],    nominal = FC_NOM
+//    a_hat = [ alpha1..alpha3 , dm, dmcx, dmcy, dmcz , Fv1 , Fc1..Fc4 ]^T
+//
+//    alpha_k    (k=1..3): escala de inercia del cuerpo movido por jointk
+//               (linkk+1) — masa + CoM + tensor completo, nominal = 1.0.
+//    theta_load = [dm, dmcx, dmcy, dmcz]: EXCESO inercial del ultimo cuerpo
+//               (link5 + lo que sujete el gripper) respecto al URDF — dm [kg]
+//               y d(m·c) [kg·m] en el frame de joint4. Nominal = 0 (sin
+//               carga). Una carga RIGIDA en el efector es exactamente
+//               equivalente a un delta en los parametros inerciales del
+//               link5, asi que vive en el span del regresor (columnas
+//               [m, m·cx, m·cy, m·cz] del bloque de link5). SUSTITUYE a
+//               alpha4: la escala uniforme 1-D no representa una carga (test
+//               11: cilindro de 100 g = +45% de masa del link5 pero +90% de
+//               primer momento -> alpha4 clavada en su tope 1.25 el 83% del
+//               tiempo y descuelgue sostenido de 0.22 rad en q4); mantener
+//               alpha4 Y theta_load seria colinealidad (alpha4 vive dentro
+//               del span de estas columnas). El bloque I de la carga (~2 mN·m
+//               a las aceleraciones del multiseno) se desprecia.
+//               Verdad para el cilindro de sim_init_config.yaml (100 g,
+//               offset x = 15 mm, EE a 126 mm de joint4, frames alineados):
+//               theta_load = [0.100, 0.0141, 0, 0].
+//    Fv1        friccion viscosa de joint1 [N·m·s/rad], nominal FV_NOM(1).
+//               Fv de J2..J4 NO se adapta: su valor identificado es 0 en toda
+//               la familia OMX, sus columnas no llevan senal (en t5-t12
+//               vivieron clavados en 0) y un Fv_hat > 0 espurio con dq medida
+//               es realimentacion POSITIVA de velocidad (riesgo sin beneficio).
+//               El feedforward nominal FIJO de J4 (0.005*dq4) se conserva en
+//               tau_nom, solo deja de adaptarse.
+//    Fc_j       friccion de Coulomb de jointj [N·m], nominal = FC_NOM.
 //
 //  Nominales identificados (motorXM430W350T_params.yaml -> dominio de torque:
 //  Fv = motor_Fv/motor_alpha, Fc = motor_Fc/motor_alpha; son los mismos
@@ -37,9 +62,12 @@
 //  igual que ocurrira en el robot real (Stribeck, stiction) -> se espera
 //  adaptacion con error acotado, no convergencia parametrica exacta.
 //
-//  Regresor completo:  Y = [ Y_alpha | diag(dq) | diag(tanh(dq_d/eps)) ]  (4x12)
+//  Regresor completo (4x12):
+//    Y = [ Y_alpha1..3 | Y_load(4 col) | dq1 (fila 1) | diag(tanh(dq_d/eps)) ]
 //  (Y_alpha via pinocchio::computeJointTorqueRegressor contraido con los
-//   parametros dinamicos nominales de cada cuerpo, igual que en el nodo 8p.)
+//   parametros dinamicos nominales de cada cuerpo; Y_load = columnas
+//   [m, m·cx, m·cy, m·cz] del bloque de link5 del mismo regresor, SIN
+//   contraer — el orden es el de pinocchio::Inertia::toDynamicParameters().)
 //
 //  Ley de control adaptativo (forma de desviacion respecto al prior, con la
 //  realimentacion PREMULTIPLICADA por M(q) como en gz_SMC_joint_node.cpp):
@@ -107,11 +135,12 @@
 //  con RTF<1 la corrida tarda proporcionalmente mas en reloj de pared.
 //
 //  a_prior (= a_hat(0) = referencia de la forma de desviacion):
-//    friction_prior:=true  (defecto) -> [1..1, FV_NOM, FC_NOM]
+//    friction_prior:=true  (defecto) -> [1,1,1, 0,0,0,0, FV_NOM(1), FC_NOM]
 //        mejor modelo fijo identificado; baseline justo para adaptive:=false.
-//    friction_prior:=false           -> [1..1, 0..0, 0..0]
+//    friction_prior:=false           -> [1,1,1, 0,0,0,0, 0, 0,0,0,0]
 //        "robot nunca identificado": la adaptacion debe descubrir la
 //        friccion desde cero (escenario C4).
+//    theta_load parte SIEMPRE de cero: "sin carga" es el estado nominal.
 //
 //  Campana de comparaciones sugerida (escalas mass/damping/friction en
 //  config/sim_init_config.yaml — a diferencia del Act2, friction_scale va en
@@ -126,6 +155,16 @@
 //    C4 sin identificar  : 1.0/1.0/1.0, adaptive:=true friction_prior:=false.
 //                          ¿La adaptacion en linea reemplaza la identificacion
 //                          offline? Comparar contra el fijo de C1.
+//    C5 carga en efector : 1.0/1.0/1.0 + spawn_load: true (cilindro 100 g).
+//                          Esperado: dm -> 0.100 kg, dmcx -> 0.0141 kg·m y
+//                          tracking nivel C1 (con alpha4 era imposible:
+//                          capacidad 0.035-0.13 N·m vs 0.12-0.24 N·m que pide
+//                          la carga). SIN carga, theta_load debe quedarse en
+//                          ~0: es el nuevo test anti-deriva (C1'). Sesgos
+//                          esperados sin carga: d(m·cy) vaga (columna casi sin
+//                          excitacion, fuera del plano sagital) y el residuo
+//                          de stiction de DART en q4 puede filtrarse como
+//                          d(m·c) ~ 0.001-0.002 kg·m — acotado por sigma-mod.
 //
 //  Trayectoria articular de referencia — MULTISENO con envolvente de arranque
 //  (excitacion persistente con inversiones frecuentes de velocidad,
@@ -158,7 +197,8 @@
 //    <modo> = "adaptive" | "fixed" [+ "_noprior" si friction_prior:=false]
 //  Columnas: t, q1..q4, dq1..dq4, q1_des..q4_des, dq1_des..dq4_des,
 //            s1..s4, tau1..tau4, sat1..sat4,
-//            a1_hat..a4_hat, fv1_hat..fv4_hat, fc1_hat..fc4_hat
+//            a1_hat..a3_hat, dm_hat, dmcx_hat, dmcy_hat, dmcz_hat,
+//            fv1_hat, fc1_hat..fc4_hat
 //
 //  Ejemplos de uso:
 //
@@ -209,7 +249,13 @@ using namespace std::chrono_literals;
 
 static constexpr double PI      = M_PI;
 static constexpr int    NARM    = 4;       // articulaciones controladas
-static constexpr int    NP      = 12;      // parametros: [alpha1..4, Fv1..4, Fc1..4]
+static constexpr int    NP      = 12;      // parametros: [alpha1..3, theta_load(4), Fv1, Fc1..4]
+
+// Indices de bloque dentro de a_hat:
+static constexpr int IDX_ALPHA = 0;   // [0..2]  alpha1..alpha3
+static constexpr int IDX_LOAD  = 3;   // [3..6]  dm, dmcx, dmcy, dmcz (exceso del link5)
+static constexpr int IDX_FV1   = 7;   // [7]     Fv1
+static constexpr int IDX_FC    = 8;   // [8..11] Fc1..Fc4
 static constexpr double TAU_MAX = 1.2;     // [N·m] limite de torque por articulacion
 static constexpr double DT      = 0.005;   // [s] periodo de control (200 Hz, como el nodo SMC)
 static constexpr double T_HOME  = 5.0;     // [s] duracion del homing quintico inicial
@@ -230,14 +276,16 @@ using Vec10 = Eigen::Matrix<double, 10, 1>;
 using MatY  = Eigen::Matrix<double, NARM, NP>;
 
 // Friccion nominal identificada por junta (URDF/Xacro escala 1.0, derivada de
-// config/motorXM430W350T_params.yaml en dominio de torque)
+// config/motorXM430W350T_params.yaml en dominio de torque). FV_NOM completa se
+// usa como feedforward FIJO en tau_nom; como parametro ADAPTADO solo entra
+// Fv1 (J2..J4 tienen Fv identificado = 0 en toda la familia OMX).
 static const Vec4 FV_NOM = (Vec4() << 0.0367, 0.0000, 0.0000, 0.0050).finished();
 static const Vec4 FC_NOM = (Vec4() << 0.0146, 0.0830, 0.1143, 0.0413).finished();
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  GANANCIAS MRAC 12p — realimentacion M(q)-escalada (estructura del nodo SMC)
 //  Indice articular: [joint1, joint2, joint3, joint4]
-//  Indice parametro: [alpha1..4, Fv1..4, Fc1..4]
+//  Indice parametro: [alpha1..3, dm, dmcx, dmcy, dmcz, Fv1, Fc1..4]
 // ═══════════════════════════════════════════════════════════════════════════
 // LAMBDA_Q / K_V / K_S / PHI_BL: HEREDADOS SIN CAMBIO de gz_SMC_joint_node.cpp
 // (rho=sat), validados en el Lab 6 Act 1 (eRMS 12-20 mrad, 0% sat, TV < 32).
@@ -256,8 +304,12 @@ static constexpr double PHI_BL = 0.15;                   // capa limite de sat()
 // Tasas de adaptacion por bloque: pequena en alpha (masas bien conocidas,
 // pesadas con balanza), mayor en friccion (lo peor identificado). Si Fc_hat
 // converge lento en C2/C4, subir el bloque Fc hasta ~5.0.
+// theta_load: las Gamma se escalan por la sensibilidad de cada columna para
+// tiempos de convergencia parejos (~0.5-1 s con carga de 100 g): la columna
+// dm genera ~2.5 N·m/kg de gravedad y las d(m·c) ~9.8 N·m/(kg·m) — de ahi
+// Gamma_dm = 0.3 y Gamma_dmc = 0.01 (Gamma*Y^2 comparable al bloque Fc).
 static const Vec12 GAMMA =
-  (Vec12() << 0.3, 0.3, 0.3, 0.3,   2.0, 2.0, 2.0, 2.0,   2.0, 2.0, 2.0, 2.0).finished();
+  (Vec12() << 0.3, 0.3, 0.3,   0.3, 0.01, 0.01, 0.01,   2.0,   2.0, 2.0, 2.0, 2.0).finished();
 
 // Fuga sigma-modification hacia el prior [1/s]: acota la deriva parametrica
 // por dinamica no modelada (friccion de pulso de DART). Subirla si algun
@@ -267,10 +319,13 @@ static constexpr double SIGMA_LEAK = 0.1;
 
 // Proyeccion a la region fisica admisible (anti-deriva parametrica).
 // alpha estrecho: no dejar que alpha absorba errores de friccion.
+// theta_load: hasta 200 g de carga a ~17.5 cm (dm 0.20 kg, dmcx 0.035 kg·m);
+// margen negativo pequeno para que el error de modelo no se acumule en el
+// borde. dmcy casi sin excitacion -> cota simetrica estrecha.
 static const Vec12 A_MIN =
-  (Vec12() << 0.80, 0.80, 0.80, 0.80,   0.0, 0.0, 0.0, 0.0,   0.0, 0.0, 0.0, 0.0).finished();
+  (Vec12() << 0.80, 0.80, 0.80,   -0.02, -0.005, -0.010, -0.005,   0.0,   0.0, 0.0, 0.0, 0.0).finished();
 static const Vec12 A_MAX =
-  (Vec12() << 1.25, 1.25, 1.25, 1.25,   0.15, 0.15, 0.15, 0.15,   0.30, 0.30, 0.30, 0.30).finished();
+  (Vec12() << 1.25, 1.25, 1.25,    0.20,  0.035,  0.010,  0.020,   0.15,  0.30, 0.30, 0.30, 0.30).finished();
 // ═══════════════════════════════════════════════════════════════════════════
 
 // ── Trayectoria de referencia articular (multiseno seguro + envolvente) ──────
@@ -408,10 +463,14 @@ public:
     mode_str_ = adaptive_ ? "adaptive" : "fixed";
     if (!friction_prior_) { mode_str_ += "_noprior"; }
 
-    // Prior de parametros (= a_hat(0) y referencia de la forma de desviacion)
-    a_prior_.head<NARM>().setOnes();
-    a_prior_.segment<NARM>(NARM) = friction_prior_ ? FV_NOM : Vec4::Zero().eval();
-    a_prior_.tail<NARM>()        = friction_prior_ ? FC_NOM : Vec4::Zero().eval();
+    // Prior de parametros (= a_hat(0) y referencia de la forma de desviacion).
+    // fv_prior_ es el feedforward viscoso FIJO de las 4 juntas; como parametro
+    // adaptado solo entra Fv1. theta_load parte de cero (sin carga).
+    fv_prior_ = friction_prior_ ? FV_NOM : Vec4::Zero().eval();
+    a_prior_.setZero();
+    a_prior_.segment<3>(IDX_ALPHA).setOnes();
+    a_prior_[IDX_FV1]              = fv_prior_[0];
+    a_prior_.segment<NARM>(IDX_FC) = friction_prior_ ? FC_NOM : Vec4::Zero().eval();
     a_hat_ = a_prior_;
 
     // ── Modelo Pinocchio (brazo nominal, escala 1.0) ────────────────────────────
@@ -437,14 +496,14 @@ public:
       K_V[0],      K_V[1],      K_V[2],      K_V[3],
       K_S[0],      K_S[1],      K_S[2],      K_S[3],  PHI_BL);
     RCLCPP_INFO(this->get_logger(),
-      "Gamma: alpha=[%.2f %.2f %.2f %.2f]  Fv=[%.2f %.2f %.2f %.2f]  Fc=[%.2f %.2f %.2f %.2f]",
-      GAMMA[0], GAMMA[1], GAMMA[2],  GAMMA[3],
-      GAMMA[4], GAMMA[5], GAMMA[6],  GAMMA[7],
+      "Gamma: alpha=[%.2f %.2f %.2f]  load=[%.2f %.3f %.3f %.3f]  Fv1=%.2f  Fc=[%.2f %.2f %.2f %.2f]",
+      GAMMA[0], GAMMA[1], GAMMA[2],
+      GAMMA[3], GAMMA[4], GAMMA[5],  GAMMA[6],  GAMMA[7],
       GAMMA[8], GAMMA[9], GAMMA[10], GAMMA[11]);
     RCLCPP_INFO(this->get_logger(),
-      "a_hat(0): alpha=[%.2f %.2f %.2f %.2f]  Fv=[%.4f %.4f %.4f %.4f]  Fc=[%.4f %.4f %.4f %.4f]",
-      a_prior_[0], a_prior_[1], a_prior_[2],  a_prior_[3],
-      a_prior_[4], a_prior_[5], a_prior_[6],  a_prior_[7],
+      "a_hat(0): alpha=[%.2f %.2f %.2f]  load=[%.3f %.4f %.4f %.4f]  Fv1=%.4f  Fc=[%.4f %.4f %.4f %.4f]",
+      a_prior_[0], a_prior_[1], a_prior_[2],
+      a_prior_[3], a_prior_[4], a_prior_[5],  a_prior_[6],  a_prior_[7],
       a_prior_[8], a_prior_[9], a_prior_[10], a_prior_[11]);
     if (t_sim_ > 0.0) {
       RCLCPP_INFO(this->get_logger(),
@@ -485,10 +544,11 @@ private:
   // ── Indices de junta y parametros dinamicos nominales (para Y_alpha) ───────
   //   pi_nom_[i] = parametros dinamicos nominales (10) del cuerpo movido por
   //   jointi (linki+1), en el orden interno de Pinocchio (ver
-  //   pinocchio::Inertia::toDynamicParameters()). Y_alpha.col(i) contrae el
-  //   bloque de 10 columnas de jointi en el regresor Slotine-Li con pi_nom_[i]:
-  //   captura el escalado UNIFORME de masa + CoM + tensor de inercia completo
-  //   del cuerpo (no una masa puntual).
+  //   pinocchio::Inertia::toDynamicParameters()). Y_alpha.col(i), i=0..2,
+  //   contrae el bloque de 10 columnas de jointi en el regresor Slotine-Li
+  //   con pi_nom_[i]: escalado UNIFORME de masa + CoM + tensor completo.
+  //   jid_[3] se usa para ubicar el bloque de link5 del que se toman las 4
+  //   columnas de theta_load sin contraer.
   void precompute_regressor_bases()
   {
     for (int i = 0; i < NARM; ++i) {
@@ -519,9 +579,9 @@ private:
          << "s1,s2,s3,s4,"
          << "tau1,tau2,tau3,tau4,"
          << "sat1,sat2,sat3,sat4,"
-         << "a1_hat,a2_hat,a3_hat,a4_hat,"
-         << "fv1_hat,fv2_hat,fv3_hat,fv4_hat,"
-         << "fc1_hat,fc2_hat,fc3_hat,fc4_hat\n";
+         << "a1_hat,a2_hat,a3_hat,"
+         << "dm_hat,dmcx_hat,dmcy_hat,dmcz_hat,"
+         << "fv1_hat,fc1_hat,fc2_hat,fc3_hat,fc4_hat\n";
     RCLCPP_INFO(this->get_logger(), "CSV: %s", csv_path_.c_str());
   }
 
@@ -621,20 +681,23 @@ private:
     const Eigen::VectorXd tau_nom_rigid_full =
       slotineLiTorque(model_, data_, q_pin, dq_pin, dqr_pin, ddqr_pin);
     const Vec4 tau_nom = tau_nom_rigid_full.head<NARM>()
-                       + a_prior_.segment<NARM>(NARM).cwiseProduct(dq)
-                       + a_prior_.tail<NARM>().cwiseProduct(tanh_dqd);
+                       + fv_prior_.cwiseProduct(dq)
+                       + a_prior_.segment<NARM>(IDX_FC).cwiseProduct(tanh_dqd);
 
     // ── Regresor Slotine-Li completo y columnas de escala de inercia ───────
     const Eigen::MatrixXd Y_SL = slotineLiRegressor(model_, data_, q_pin, dq_pin, dqr_pin, ddqr_pin);
 
     MatY Y = MatY::Zero();
-    for (int i = 0; i < NARM; ++i) {
+    for (int i = 0; i < 3; ++i) {                                        // Y_alpha1..3
       const int col0 = 10 * (static_cast<int>(jid_[i]) - 1);
-      Y.col(i) = (Y_SL.middleCols(col0, 10) * pi_nom_[i]).head<NARM>();  // Y_alpha
+      Y.col(IDX_ALPHA + i) = (Y_SL.middleCols(col0, 10) * pi_nom_[i]).head<NARM>();
     }
+    // Y_load: columnas [m, m·cx, m·cy, m·cz] del bloque de link5, sin contraer
+    const int col0_load = 10 * (static_cast<int>(jid_[3]) - 1);
+    Y.block<NARM, 4>(0, IDX_LOAD) = Y_SL.block(0, col0_load, NARM, 4);
+    Y(0, IDX_FV1) = dq[0];                                               // Y_Fv1 = dq1 medida, como el SMC
     for (int i = 0; i < NARM; ++i) {
-      Y(i, NARM + i)     = dq[i];                                        // Y_Fv = diag(dq) medida, como el SMC
-      Y(i, 2 * NARM + i) = tanh_dqd[i];                                  // Y_Fc = diag(tanh(dq_d/eps))
+      Y(i, IDX_FC + i) = tanh_dqd[i];                                    // Y_Fc = diag(tanh(dq_d/eps))
     }
 
     // ── Ley de control adaptativo (desviacion del prior + realimentacion ────
@@ -653,12 +716,12 @@ private:
     torque_pub_->publish(cmd);
 
     RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-      "[%s] t=%.2fs  |s|=%.4f  |e|=%.4f rad  alpha=[%.3f %.3f %.3f %.3f]  "
-      "Fv=[%.4f %.4f %.4f %.4f]  Fc=[%.4f %.4f %.4f %.4f]",
+      "[%s] t=%.2fs  |s|=%.4f  |e|=%.4f rad  alpha=[%.3f %.3f %.3f]  "
+      "load=[%.3fkg %.4f %.4f %.4f]  Fv1=%.4f  Fc=[%.4f %.4f %.4f %.4f]",
       phase_ == Phase::RUN ? "RUN" : (phase_ == Phase::SETTLE ? "SETTLE" : "HOME"),
       t_, s_q.norm(), e_q.norm(),
-      a_hat_[0], a_hat_[1], a_hat_[2],  a_hat_[3],
-      a_hat_[4], a_hat_[5], a_hat_[6],  a_hat_[7],
+      a_hat_[0], a_hat_[1], a_hat_[2],
+      a_hat_[3], a_hat_[4], a_hat_[5],  a_hat_[6],  a_hat_[7],
       a_hat_[8], a_hat_[9], a_hat_[10], a_hat_[11]);
 
     // ── Registro CSV (a_hat usado en este tick; solo en fase RUN) ──────────
@@ -729,7 +792,8 @@ private:
   double      t_run_     = 0.0;    // tiempo del experimento (fase RUN)
   std::string mode_str_;
   Vec12       a_prior_;   // a_hat(0) y referencia de la forma de desviacion
-  Vec12       a_hat_;     // estimacion actual [alpha1..4, Fv1..4, Fc1..4]
+  Vec12       a_hat_;     // estimacion actual [alpha1..3, theta_load, Fv1, Fc1..4]
+  Vec4        fv_prior_;  // feedforward viscoso FIJO por junta (solo Fv1 se adapta)
 
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr torque_pub_;
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr  joint_sub_;
