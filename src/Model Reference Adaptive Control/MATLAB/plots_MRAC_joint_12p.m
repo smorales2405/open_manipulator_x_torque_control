@@ -22,15 +22,20 @@
 clear; clc; close all;
 
 %% ── Configuracion ────────────────────────────────────────────────────────────
-mode        = 'sim';        % 'sim' = simulacion Gazebo (gz_mrac_joint_12p_node)
+mode        = 'real';        % 'sim'  = simulacion Gazebo (gz_mrac_joint_12p_node)
+                            % 'real' = hardware (hw_mrac_joint_12p_node) —
+                            %   OJO: en hw los fv1/fc*_hat son RESIDUALES en
+                            %   torque sobre el modelo de corriente del motor
+                            %   (prior 0); las ylines de FV_NOM/FC_NOM no
+                            %   aplican como "verdad" en ese modo.
 
-ctrl_mode   = 'fixed';   % Caso simulado (debe coincidir con los parametros del nodo):
+ctrl_mode   = 'adaptive';   % Caso simulado (debe coincidir con los parametros del nodo):
                             %   'adaptive'         adaptive:=true  friction_prior:=true
                             %   'fixed'            adaptive:=false friction_prior:=true
                             %   'adaptive_noprior' adaptive:=true  friction_prior:=false (C4)
                             %   'fixed_noprior'    adaptive:=false friction_prior:=false
 
-test_num    = 15;            % Identificador del ensayo (test_num usado al lanzar el nodo)
+test_num    = 14;            % Identificador del ensayo (test_num usado al lanzar el nodo)
 
 EXPORT_FIGS = true;        % true  = guardar PNG (300 dpi) y EPS vectorial (600 dpi)
                             % false = solo visualizar
@@ -50,7 +55,7 @@ FRICTION_SCALE_TRUE = 1.0;  % friction_scale     -> Fc verdadero = escala*FC_NOM
 %   diametro, offset 0, sim_init_config.yaml)
 %   (dm [kg], d(m·c) [kg·m] en el frame de joint4; EE a 126 mm de joint4:
 %    dmcx = load_mass * (0.126 + load_x_offset))
-LOAD_TRUE = [0.125, 0.0158, 0, 0];
+LOAD_TRUE = [0, 0, 0, 0];
 
 % Friccion nominal identificada (URDF/Xacro escala 1.0, mismos valores del nodo)
 FV_NOM = [0.0367, 0.0000, 0.0000, 0.0050];   % [N·m·s/rad]
@@ -67,8 +72,14 @@ switch mode
         output_dir = fullfile(pkg_dir, 'plots', 'lab7', 'sim', 'mrac12p', ...
                               sprintf('test%d_%s', test_num, ctrl_mode));
         mode_label = 'Simulacion';
+    case 'real'
+        csv_file   = fullfile(pkg_dir, 'data', 'lab7', 'real', 'mrac12p', ...
+                              sprintf('hw_mrac_joint_12p_%s_%d.csv', ctrl_mode, test_num));
+        output_dir = fullfile(pkg_dir, 'plots', 'lab7', 'real', 'mrac12p', ...
+                              sprintf('test%d_%s', test_num, ctrl_mode));
+        mode_label = 'Hardware';
     otherwise
-        error('mode debe ser ''sim''.');
+        error('mode debe ser ''sim'' o ''real''.');
 end
 
 %% ── Carga de datos ───────────────────────────────────────────────────────────
