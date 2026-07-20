@@ -214,7 +214,7 @@ igual; no hace falta recompilar).
 ```bash
 # primera vez en un robot nuevo: ganancias a la mitad por seguridad
 ros2 run open_manipulator_x_torque_control hw_fl_control_node \
-  --ros-args -p gain_scale:=0.5 -p t_imp:=30.0 -p log_id:=30
+  --ros-args -p gain_scale:=0.5 -p t_run:=30.0 -p log_id:=30
 ```
 
 Con bootstrap el tracking será mediocre (stick-slip visible, sin compensación de
@@ -246,7 +246,7 @@ Resultado esperado en un XM430-W350 sano: α ≈ 210–240 ticks/N·m
 `data/identification/alpha_fit_log30.yaml`.
 
 **Cuándo repetir:** veredicto RE-EJECUTAR (kt imposible, sin excitación, log
-corto) o saturación > 10 %. Ajustes típicos: subir `t_imp` a 40–60 s (más
+corto) o saturación > 10 %. Ajustes típicos: subir `t_run` a 40–60 s (más
 datos), `gain_scale:=0.7` si hubo mucha saturación con 1.0, verificar que la
 trayectoria realmente se ejecutó (¿parada de emergencia a mitad?).
 
@@ -279,7 +279,7 @@ Repita el ensayo FL, ahora con el modelo completo y ganancias nominales:
 
 ```bash
 ros2 run open_manipulator_x_torque_control hw_fl_control_node \
-  --ros-args -p gain_scale:=1.0 -p t_imp:=20.0 -p log_id:=31
+  --ros-args -p gain_scale:=1.0 -p t_run:=20.0 -p log_id:=31
 ```
 
 y grafique con `src/Feedback Linearization/MATLAB/plots_FL_control.m`

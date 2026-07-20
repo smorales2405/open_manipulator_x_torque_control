@@ -196,7 +196,7 @@ mask = t >= (t0 + args.skip)
 if int(mask.sum()) < 200:
     print(f"\nERROR: solo {int(mask.sum())} muestras tras descartar {args.skip:.1f} s — "
           "log demasiado corto.")
-    print("→ Acción: repita el ensayo con mayor duración (t_imp ≥ 20 s).")
+    print("→ Acción: repita el ensayo con mayor duración (t_run ≥ 20 s).")
     sys.exit(2)
 print(f"  Ventana de análisis: t ≥ {t0 + args.skip:.2f} s → {int(mask.sum())} muestras")
 
@@ -335,7 +335,7 @@ if not strong:
     fails.append(
         "Ningún joint con excitación suficiente (std(τ) ≥ %.2f N·m y |corr| ≥ %.2f).\n"
         "   → Acción: use una trayectoria dinámica (hw_fl_control_node, Paso 2 del\n"
-        "     protocolo) con t_imp ≥ 20 s; verifique que el robot realmente se movió."
+        "     protocolo) con t_run ≥ 20 s; verifique que el robot realmente se movió."
         % (TAU_STD_MIN, CORR_MIN))
 else:
     if alpha_shared < ALPHA_MIN:
