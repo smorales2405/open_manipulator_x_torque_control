@@ -33,6 +33,28 @@
       name="meshes_file_direction"
       value="package://open_manipulator_x_torque_control/meshes"/>
 
+    <!-- Friccion articular: leida desde config/motorXM430W350T_params.yaml
+         (identificacion torque->corriente del robot real via
+         src/Identification/Ident_OpenManX_XM430W350T_procedure.md), en
+         dominio de torque: Fv = motor_Fv/motor_alpha [N·m·s/rad],
+         Fc = motor_Fc/motor_alpha [N·m]. Evita duplicar a mano estos 8
+         numeros (ver tambien urdf/open_manipulator_x.urdf — snapshot
+         estatico que usan los nodos C++/Pinocchio directamente y debe
+         actualizarse por separado tras cada re-identificacion — y
+         gz_MRAC_joint_12p_node.cpp). -->
+    <xacro:property name="_motor_cfg_path"
+      value="$(find open_manipulator_x_torque_control)/config/motorXM430W350T_params.yaml"/>
+    <xacro:property name="_motor_cfg"
+      value="${xacro.load_yaml(_motor_cfg_path)['/**']['ros__parameters']}"/>
+    <xacro:property name="_fv1" value="${_motor_cfg['motor_Fv'][0] / _motor_cfg['motor_alpha'][0]}"/>
+    <xacro:property name="_fv2" value="${_motor_cfg['motor_Fv'][1] / _motor_cfg['motor_alpha'][1]}"/>
+    <xacro:property name="_fv3" value="${_motor_cfg['motor_Fv'][2] / _motor_cfg['motor_alpha'][2]}"/>
+    <xacro:property name="_fv4" value="${_motor_cfg['motor_Fv'][3] / _motor_cfg['motor_alpha'][3]}"/>
+    <xacro:property name="_fc1" value="${_motor_cfg['motor_Fc'][0] / _motor_cfg['motor_alpha'][0]}"/>
+    <xacro:property name="_fc2" value="${_motor_cfg['motor_Fc'][1] / _motor_cfg['motor_alpha'][1]}"/>
+    <xacro:property name="_fc3" value="${_motor_cfg['motor_Fc'][2] / _motor_cfg['motor_alpha'][2]}"/>
+    <xacro:property name="_fc4" value="${_motor_cfg['motor_Fc'][3] / _motor_cfg['motor_alpha'][3]}"/>
+
     <link name="${prefix}link1">
       <visual>
         <origin xyz="0 0 0" rpy="0 0 0"/>
@@ -65,7 +87,7 @@
       <origin xyz="0.012 0.0 0.017" rpy="0 0 0"/>
       <axis xyz="0 0 1"/>
       <limit velocity="4.8" effort="1.5" lower="${-3*pi/4}" upper="${3*pi/4}" />
-      <dynamics damping="${0.0367 * damping_scale}" friction="${0.0146 * friction_scale}"/>
+      <dynamics damping="${_fv1 * damping_scale}" friction="${_fc1 * friction_scale}"/>
     </joint>
 
     <link name="${prefix}link2">
@@ -100,7 +122,7 @@
       <origin xyz="0.0 0.0 0.0595" rpy="0 0 0"/>
       <axis xyz="0 1 0"/>
       <limit velocity="4.8" effort="1.5" lower="${-11*pi/18}" upper="${5*pi/9}" />
-      <dynamics damping="${0.0000 * damping_scale}" friction="${0.0830 * friction_scale}"/>
+      <dynamics damping="${_fv2 * damping_scale}" friction="${_fc2 * friction_scale}"/>
     </joint>
 
     <link name="${prefix}link3">
@@ -135,7 +157,7 @@
       <origin xyz="0.024 0 0.128" rpy="0 0 0"/>
       <axis xyz="0 1 0"/>
       <limit velocity="4.8" effort="1.5" lower="${-11*pi/18}" upper="${pi/2}" />
-      <dynamics damping="${0.0000 * damping_scale}" friction="${0.1143 * friction_scale}"/>
+      <dynamics damping="${_fv3 * damping_scale}" friction="${_fc3 * friction_scale}"/>
     </joint>
 
     <link name="${prefix}link4">
@@ -170,7 +192,7 @@
       <origin xyz="0.124 0.0 0.0" rpy="0 0 0"/>
       <axis xyz="0 1 0"/>
       <limit velocity="4.8" effort="1.5" lower="-1.8" upper="2.1" />
-      <dynamics damping="${0.0050 * damping_scale}" friction="${0.0413 * friction_scale}"/>
+      <dynamics damping="${_fv4 * damping_scale}" friction="${_fc4 * friction_scale}"/>
     </joint>
 
     <link name="${prefix}link5">

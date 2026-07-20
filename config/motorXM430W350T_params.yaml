@@ -3,27 +3,19 @@
 
     # ════════════════════════════════════════════════════════════════════════
     #  Modelo torque→corriente Dynamixel XM430-W350-T (OpenMANIPULATOR-X)
-    #  ENSAMBLADO FINAL — 2026-06-24
+    #  ENSAMBLADO por assemble_motor_params.py — 2026-07-19
     #
     #  Modelo (por articulación):
     #    I[i] = alpha[i]·tau[i] + Fv[i]·dq[i] + Fc[i]·tanh(dq[i]/eps) + I_offset[i]
     #
     #  Cada parámetro proviene del método MÁS ADECUADO para identificarlo:
+    #   · alpha, I_offset → modo CORRIENTE dinámico (identify_alpha.py, log 30).
+    #                       kt_efectivo ≈ 1.80 N·m/A (ideal datasheet 1.78).
+    #   · Fv, Fc          → barrido de VELOCIDAD CONSTANTE + reversión
+    #                       emparejada por posición (identify_friction.py,
+    #                       logs J1..J4: log 21, log 22, log 23, log 24).
     #
-    #   · alpha, I_offset  → modo CORRIENTE con torque conocido (hw_fl_data_17,
-    #                        OLS). alpha = 1/(kt·Iu); kt_efectivo ≈ 1.65 N·m/A.
-    #                        Más fiable que el modo posición (el PID sesga la corriente).
-    #
-    #   · Fv, Fc           → barrido de VELOCIDAD CONSTANTE + reversión emparejada
-    #                        por posición (identify_friction.py, logs 21/25/23/24).
-    #                        La gravedad se cancela EXACTO por reversión (sin alpha),
-    #                        evitando la colinealidad Fv↔Fc del caso sinusoidal y el
-    #                        Fv negativo espurio. Fricción dominada por Coulomb:
-    #                        J1 viscoso (Fv=8.2); J2/J3/J4 Coulomb (Fc=18.7/25.6/9.3).
-    #
-    #  NOTA: este archivo se ENSAMBLA a mano combinando dos identificaciones.
-    #        identify_motor_model.py escribe motorXM430W350T_params_posmode.yaml
-    #        (referencia de modo posición); NO regenera este archivo.
+    #  Protocolo: src/Identification/Ident_OpenManX_XM430W350T_procedure.md
     #
     #  Unidades:
     #    motor_alpha            [ticks/N·m]
@@ -33,10 +25,10 @@
     #    motor_epsilon_friction [rad/s]
     # ════════════════════════════════════════════════════════════════════════
     #                              J1        J2        J3        J4
-    motor_alpha:             [224.800,  225.700,  223.890,  224.800]   # modo corriente
-    motor_Fv:                [  8.239,    0.000,    0.000,    1.124]   # barrido velocidad
-    motor_Fc:                [  3.290,   18.725,   25.600,    9.280]   # barrido velocidad
-    motor_I_offset:          [ -0.422,  -17.206,  -21.957,   -9.602]   # modo corriente
+    motor_alpha:             [ 207.022,  206.571,  207.473,  207.022]   # modo corriente
+    motor_Fv:                [   4.161,    1.832,    0.000,    0.663]   # barrido velocidad
+    motor_Fc:                [   7.663,   17.533,   27.462,    9.368]   # barrido velocidad
+    motor_I_offset:          [   0.042,    0.058,    0.136,    0.434]   # modo corriente
     # Suavizado del tanh de Coulomb. Los nodos hw (hw_fl, hw_io, hw_tvlqr)
     # alimentan el tanh con la velocidad DESEADA (sin ruido): eps pequeno es
     # seguro y acorta la zona muerta en las inversiones de direccion
@@ -56,10 +48,10 @@
     # current_measured_peak  : umbral de parada de emergencia [ticks]
     # NOTA: tau_max NO se define aquí; cada nodo lo fija internamente (1.2 N·m).
     joint_zero_tick:          [2048, 2048, 2048, 2048]
-    encoder_sign:             [1.0,  1.0,  1.0,  1.0]
-    current_sign:             [1.0,  1.0,  1.0,  1.0]
-    joint_lower:              [-2.356194, -1.919862, -1.919862, -1.8]
-    joint_upper:              [ 2.356194,  1.745329,  1.570796,  2.1]
+    encoder_sign:             [ 1.0,  1.0,  1.0,  1.0]
+    current_sign:             [ 1.0,  1.0,  1.0,  1.0]
+    joint_lower:              [-2.356194, -1.919862, -1.919862, -1.800000]
+    joint_upper:              [ 2.356194,  1.745329,  1.570796,  2.100000]
     current_limit_register:   350
     current_cmd_limit:        [257, 257, 257, 257]
     current_measured_peak:    313

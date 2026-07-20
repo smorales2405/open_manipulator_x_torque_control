@@ -44,9 +44,12 @@
 //
 //  Nominales identificados (motorXM430W350T_params.yaml -> dominio de torque:
 //  Fv = motor_Fv/motor_alpha, Fc = motor_Fc/motor_alpha; son los mismos
-//  valores de damping/friction del Xacro a escala 1.0):
-//    FV_NOM = [0.0367, 0.0000, 0.0000, 0.0050]   [N·m·s/rad]
-//    FC_NOM = [0.0146, 0.0830, 0.1143, 0.0413]   [N·m]
+//  valores de damping/friction del Xacro a escala 1.0). Actualizados tras el
+//  ensayo bootstrap de identificacion (2026-07-19: motor_alpha corregido
+//  ~8%, motor_I_offset de ~-20 ticks a ~0 — resolvio la circularidad
+//  pendiente y elimino la deriva de alpha3 observada en hw con el yaml viejo):
+//    FV_NOM = [0.0201, 0.0089, 0.0000, 0.0032]   [N·m·s/rad]
+//    FC_NOM = [0.0370, 0.0849, 0.1324, 0.0453]   [N·m]
 //
 //  Modelo de friccion del controlador (identico al feedforward del
 //  gz_SMC_joint_node.cpp del Lab 6, validado en sim con eRMS 12-20 mrad):
@@ -279,9 +282,11 @@ using MatY  = Eigen::Matrix<double, NARM, NP>;
 // Friccion nominal identificada por junta (URDF/Xacro escala 1.0, derivada de
 // config/motorXM430W350T_params.yaml en dominio de torque). FV_NOM completa se
 // usa como feedforward FIJO en tau_nom; como parametro ADAPTADO solo entra
-// Fv1 (J2..J4 tienen Fv identificado = 0 en toda la familia OMX).
-static const Vec4 FV_NOM = (Vec4() << 0.0367, 0.0000, 0.0000, 0.0050).finished();
-static const Vec4 FC_NOM = (Vec4() << 0.0146, 0.0830, 0.1143, 0.0413).finished();
+// Fv1. J2..J4 no se adaptan (aunque J2/J4 ya no identifican exactamente 0
+// con el yaml re-identificado, siguen siendo chicos frente a la incertidumbre
+// de Fc; adaptarlos con dq medida seguiria siendo riesgo sin beneficio claro).
+static const Vec4 FV_NOM = (Vec4() << 0.0201, 0.0089, 0.0000, 0.0032).finished();
+static const Vec4 FC_NOM = (Vec4() << 0.0370, 0.0849, 0.1324, 0.0453).finished();
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  GANANCIAS MRAC 12p — realimentacion M(q)-escalada (estructura del nodo SMC)
