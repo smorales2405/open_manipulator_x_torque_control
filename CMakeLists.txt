@@ -367,19 +367,6 @@ target_compile_definitions(gz_SMCI_cart_node PRIVATE
   "PACKAGE_URDF_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/urdf\""
   COAL_DISABLE_HPP_FCL_WARNINGS)
 
-# ── gz_mrac_joint_node (Control Adaptativo MRAC / Slotine-Li, articular) ─────
-add_executable(gz_mrac_joint_node "${MRAC_INSTR}/gz_MRAC_joint_node.cpp")
-ament_target_dependencies(gz_mrac_joint_node rclcpp std_msgs sensor_msgs)
-target_link_libraries(gz_mrac_joint_node
-  pinocchio::pinocchio_default
-  pinocchio::pinocchio_parsers
-  Eigen3::Eigen)
-target_compile_features(gz_mrac_joint_node PUBLIC cxx_std_17)
-target_compile_definitions(gz_mrac_joint_node PRIVATE
-  "PACKAGE_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\""
-  "PACKAGE_URDF_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/urdf\""
-  COAL_DISABLE_HPP_FCL_WARNINGS)
-
 # ── gz_mrac_joint_12p_node (MRAC 12 parametros: alpha+Fv+Fc, sim-to-real) ────
 add_executable(gz_mrac_joint_12p_node "${MRAC_INSTR}/gz_MRAC_joint_12p_node.cpp")
 ament_target_dependencies(gz_mrac_joint_12p_node rclcpp std_msgs sensor_msgs)
@@ -409,17 +396,33 @@ target_compile_definitions(hw_mrac_joint_12p_node PRIVATE
   "PACKAGE_CONFIG_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/config\""
   COAL_DISABLE_HPP_FCL_WARNINGS)
 
-# ── gz_mrac_joint_node_base (estudiantes) ─────────────────────────────────────
-add_executable(gz_mrac_joint_node_base "${MRAC_STUD}/gz_MRAC_joint_node_base.cpp")
-ament_target_dependencies(gz_mrac_joint_node_base rclcpp std_msgs sensor_msgs)
-target_link_libraries(gz_mrac_joint_node_base
+# ── gz_mrac_joint_12p_node_base (estudiantes, MRAC 12p sim) ──────────────────
+add_executable(gz_mrac_joint_12p_node_base "${MRAC_STUD}/gz_MRAC_joint_12p_node_base.cpp")
+ament_target_dependencies(gz_mrac_joint_12p_node_base rclcpp std_msgs sensor_msgs)
+target_link_libraries(gz_mrac_joint_12p_node_base
   pinocchio::pinocchio_default
   pinocchio::pinocchio_parsers
   Eigen3::Eigen)
-target_compile_features(gz_mrac_joint_node_base PUBLIC cxx_std_17)
-target_compile_definitions(gz_mrac_joint_node_base PRIVATE
+target_compile_features(gz_mrac_joint_12p_node_base PUBLIC cxx_std_17)
+target_compile_definitions(gz_mrac_joint_12p_node_base PRIVATE
   "PACKAGE_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\""
   "PACKAGE_URDF_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/urdf\""
+  COAL_DISABLE_HPP_FCL_WARNINGS)
+
+# ── hw_mrac_joint_12p_node_base (estudiantes, MRAC 12p hw) ───────────────────
+add_executable(hw_mrac_joint_12p_node_base "${MRAC_STUD}/hw_MRAC_joint_12p_node_base.cpp")
+ament_target_dependencies(hw_mrac_joint_12p_node_base rclcpp sensor_msgs)
+target_include_directories(hw_mrac_joint_12p_node_base PRIVATE ${dynamixel_sdk_INCLUDE_DIRS})
+target_link_libraries(hw_mrac_joint_12p_node_base
+  ${dynamixel_sdk_LIBRARIES}
+  pinocchio::pinocchio_default
+  pinocchio::pinocchio_parsers
+  Eigen3::Eigen)
+target_compile_features(hw_mrac_joint_12p_node_base PUBLIC cxx_std_17)
+target_compile_definitions(hw_mrac_joint_12p_node_base PRIVATE
+  "PACKAGE_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\""
+  "PACKAGE_URDF_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/urdf\""
+  "PACKAGE_CONFIG_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/config\""
   COAL_DISABLE_HPP_FCL_WARNINGS)
 
 # ── hw_torque_probe_node (diagnostico de polaridad torque->corriente) ────────
@@ -466,10 +469,10 @@ install(TARGETS
     hw_smc_joint_node hw_smc_cart_node hw_smci_cart_node
     gz_smc_joint_node_base gz_smc_cart_node_base
     hw_smc_joint_node_base hw_smc_cart_node_base
-    gz_mrac_joint_node
     gz_mrac_joint_12p_node
     hw_mrac_joint_12p_node
-    gz_mrac_joint_node_base
+    gz_mrac_joint_12p_node_base
+    hw_mrac_joint_12p_node_base
   DESTINATION lib/${PROJECT_NAME})
 
 install(DIRECTORY xacro config launch scripts data urdf meshes worlds
