@@ -28,7 +28,7 @@
 //
 //  Parametros ROS:
 //    test_num      — identificador del CSV generado (gz_io_data_<test_num>.csv)
-//    t_sim         — duracion de la simulacion en segundos (0 = ilimitado)
+//    t_run         — duracion de la simulacion en segundos (0 = ilimitado)
 //    friction_ffwd — bool (default false): feedforward de la friccion del URDF
 //                    (damping·dq + friction·tanh(dq_des/eps), con dq_des =
 //                    J4⁺·ydot_des), replicando la compensacion del nodo hw.
@@ -40,7 +40,7 @@
 //
 //  Ejemplo de ejecucion (con la simulacion Gazebo ya lanzada):
 //    ros2 launch open_manipulator_x_torque_control torque_sim.launch.py
-//    ros2 run open_manipulator_x_torque_control gz_io_control_node --ros-args -p test_num:=1 -p t_sim:=20.0 -p friction_ffwd:=true
+//    ros2 run open_manipulator_x_torque_control gz_io_control_node --ros-args -p test_num:=1 -p t_run:=20.0 -p friction_ffwd:=true
 // ============================================================================
 
 #include <chrono>
@@ -190,8 +190,8 @@ public:
     this->declare_parameter<int>("test_num", 1);
     const int test_num = this->get_parameter("test_num").as_int();
 
-    this->declare_parameter<double>("t_sim", 0.0);
-    t_sim_ = this->get_parameter("t_sim").as_double();
+    this->declare_parameter<double>("t_run", 0.0);
+    t_run_ = this->get_parameter("t_run").as_double();
 
     this->declare_parameter<bool>("friction_ffwd", false);
     friction_ffwd_ = this->get_parameter("friction_ffwd").as_bool();
@@ -232,8 +232,8 @@ public:
     RCLCPP_INFO(this->get_logger(),
       "Kp=[%.1f]  Kd=[%.1f]  tau_max=%.2f N·m  lambda=%.3f  T_trans=%.1f s",
       KP[0], KD[0], TAU_MAX, LAMBDA, T_TRANS);
-    if (t_sim_ > 0.0) {
-      RCLCPP_INFO(this->get_logger(), "Tiempo de simulacion: %.1f s", t_sim_);
+    if (t_run_ > 0.0) {
+      RCLCPP_INFO(this->get_logger(), "Tiempo de simulacion: %.1f s", t_run_);
     }
 
     open_csv(test_num);
@@ -461,9 +461,9 @@ private:
     t_ += 0.005;   // Ts del lazo de 200 Hz
 
     // ── 13. Parar al cumplirse el tiempo de simulacion ────────────────────
-    if (t_sim_ > 0.0 && t_ >= t_sim_) {
+    if (t_run_ > 0.0 && t_ >= t_run_) {
       RCLCPP_INFO(this->get_logger(),
-        "Simulacion completada (%.1f s). Deteniendo control.", t_sim_);
+        "Simulacion completada (%.1f s). Deteniendo control.", t_run_);
       std_msgs::msg::Float64MultiArray zero;
       zero.data.assign(NARM, 0.0);
       torque_pub_->publish(zero);
@@ -481,7 +481,7 @@ private:
   pinocchio::FrameIndex frame_id_;
 
   double t_;
-  double t_sim_;
+  double t_run_;
 
   bool friction_ffwd_{false};
   Eigen::Vector4d fric_damping_{Eigen::Vector4d::Zero()};

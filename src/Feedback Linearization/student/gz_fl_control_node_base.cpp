@@ -21,11 +21,11 @@
 //    - Publicador /arm_effort_controller/commands  →  tau
 //    - Escritura de CSV:  fl_data_<test_num>.csv
 //    - Timer de control a 100 Hz
-//    - Parametros ROS:  test_num, t_sim
+//    - Parametros ROS:  test_num, t_run
 //
-//  Ejecucion:
-//    ros2 run open_manipulator_x_torque_control fl_control_node
-//         --ros-args -p test_num:=1 -p t_sim:=15.0
+//  Ejemplo de ejecucion (con la simulacion Gazebo ya lanzada):
+//    ros2 launch open_manipulator_x_torque_control torque_sim.launch.py
+//    ros2 run open_manipulator_x_torque_control gz_fl_control_node_base --ros-args -p test_num:=1 -p t_run:=15.0
 // ============================================================================
 
 #include <chrono>
@@ -135,8 +135,8 @@ public:
     this->declare_parameter<int>("test_num", 1);
     const int test_num = this->get_parameter("test_num").as_int();
 
-    this->declare_parameter<double>("t_sim", 0.0);
-    t_sim_ = this->get_parameter("t_sim").as_double();
+    this->declare_parameter<double>("t_run", 0.0);
+    t_run_ = this->get_parameter("t_run").as_double();
 
     // ── Carga del modelo Pinocchio ─────────────────────────────────────────
     const std::string urdf = std::string(PACKAGE_URDF_DIR) + "/open_manipulator_x.urdf";
@@ -162,8 +162,8 @@ public:
       "Kp=[%.1f %.1f %.1f %.1f]  Kd=[%.1f %.1f %.1f %.1f]  tau_max=%.2f N·m",
       KP[0], KP[1], KP[2], KP[3],
       KD[0], KD[1], KD[2], KD[3], TAU_MAX);
-    if (t_sim_ > 0.0) {
-      RCLCPP_INFO(this->get_logger(), "Tiempo de simulacion: %.1f s", t_sim_);
+    if (t_run_ > 0.0) {
+      RCLCPP_INFO(this->get_logger(), "Tiempo de simulacion: %.1f s", t_run_);
     } else {
       RCLCPP_INFO(this->get_logger(), "Tiempo de simulacion: ilimitado");
     }
@@ -321,9 +321,9 @@ private:
     t_ += 0.01;
 
     // ── 7. Detener al cumplirse el tiempo de simulacion ───────────────────
-    if (t_sim_ > 0.0 && t_ >= t_sim_) {
+    if (t_run_ > 0.0 && t_ >= t_run_) {
       RCLCPP_INFO(this->get_logger(),
-        "Simulacion completada (%.1f s). Deteniendo control.", t_sim_);
+        "Simulacion completada (%.1f s). Deteniendo control.", t_run_);
       std_msgs::msg::Float64MultiArray zero;
       zero.data.assign(NARM, 0.0);
       torque_pub_->publish(zero);
@@ -339,7 +339,7 @@ private:
   pinocchio::Model  model_;
   pinocchio::Data   data_;
   double t_;
-  double t_sim_;
+  double t_run_;
 
   Eigen::Vector4d fric_damping_{Eigen::Vector4d::Zero()};
   Eigen::Vector4d fric_coulomb_{Eigen::Vector4d::Zero()};

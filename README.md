@@ -386,17 +386,17 @@ Launch Gazebo first (Terminal 1), then in **Terminal 2**:
 ```bash
 # Simulation
 ros2 run open_manipulator_x_torque_control gz_fl_control_node \
-    --ros-args -p test_num:=1 -p t_sim:=20.0
+    --ros-args -p test_num:=1 -p t_run:=20.0
 
 # Real hardware
 ros2 run open_manipulator_x_torque_control hw_fl_control_node \
-    --ros-args -p log_id:=1 -p t_imp:=20.0
+    --ros-args -p log_id:=1 -p t_run:=20.0
 ```
 
 | Parameter | Description |
 |---|---|
 | `test_num` / `log_id` | Numeric ID appended to the output CSV filename |
-| `t_sim` / `t_imp` | Experiment duration in seconds |
+| `t_run` | Experiment duration in seconds |
 
 Data saved to: `data/lab4/sim/act1/gz_fl_data_<N>.csv` and `data/lab4/real/act1/hw_fl_data_<N>.csv`
 
@@ -413,11 +413,11 @@ EXPORT_FIGS = false; % true to save figures to plots/
 ```bash
 # Simulation
 ros2 run open_manipulator_x_torque_control gz_io_control_node \
-    --ros-args -p test_num:=1 -p t_sim:=20.0
+    --ros-args -p test_num:=1 -p t_run:=20.0
 
 # Real hardware
 ros2 run open_manipulator_x_torque_control hw_io_control_node \
-    --ros-args -p log_id:=1 -p t_imp:=20.0
+    --ros-args -p log_id:=1 -p t_run:=20.0
 ```
 
 Data saved to: `data/lab4/sim/act2/` and `data/lab4/real/act2/`

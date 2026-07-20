@@ -30,10 +30,23 @@
  *   Durante la transición solo se exige no descender por debajo de la pose
  *   inicial (el brazo puede arrancar plegado, con z < Z_MIN_FLOOR).
  *
+ * Fases temporales de la referencia (ver constantes T_TRANS/RETURN_TIME_S/
+ * HOLD_TIME_S):
+ *   [0, T_TRANS)                            transicion inicial: y_inicial → Y_START
+ *   [T_TRANS, t_run)                        trayectoria cartesiana periodica
+ *   [t_run, t_run+RETURN_TIME_S)            retorno cartesiano al reposo en y_inicial
+ *   [t_run+RETURN_TIME_S, ...+HOLD_TIME_S)  pausa en reposo (asienta antes de cortar)
+ *   >= t_run+RETURN_TIME_S+HOLD_TIME_S      corte de corriente y fin del nodo
+ * El retorno evita que el brazo caiga por gravedad al recibir torque cero de
+ * golpe en medio de la trayectoria (t_run<=0 desactiva el retorno: corre
+ * indefinidamente). El CSV solo registra la transición inicial y la
+ * trayectoria periodica; el retorno y la pausa final no se guardan (no
+ * requiere recorte en MATLAB).
+ *
  * Parámetros ROS 2 (--ros-args -p nombre:=valor):
  *   port_name              [string]          "/dev/ttyUSB0"
  *   gain_scale             [double]          1.0
- *   t_imp                  [double]          20.0  (tiempo de implementacion)
+ *   t_run                  [double]          20.0  (tiempo de implementacion)
  *   log_id                 [int]             1     (CSV: hw_io_data_<log_id>.csv)
  *   ab_alpha               [double]          0.2   (filtro α-β: ganancia de posición)
  *   ab_beta                [double]          0.02  (filtro α-β: ganancia de velocidad)
@@ -41,10 +54,6 @@
  *                                                   Fc usa la velocidad articular DESEADA
  *                                                   qdot_des = J4⁺·ydot_des, no la medida)
  *   loop_rate_hz           [double]          200.0 (frecuencia del lazo [Hz], acotada [50,400])
- *
- * Ejemplo de ejecución:
- *   ros2 run open_manipulator_x_torque_control hw_io_control_node \
- *     --ros-args -p gain_scale:=1.0 -p log_id:=1 -p t_imp:=20.0
  *
  * Parámetros del modelo identificado (cargar desde config/motorXM430W350T_params.yaml):
  *   motor_alpha            [double[4]]   ticks/N·m       — ganancia de torque por joint
@@ -57,6 +66,10 @@
  *
  * ADVERTENCIA: No ejecutar junto a hardware.launch.py ni ningún proceso
  * que acceda a /dev/ttyUSB0 (ros2_control_node, dynamixel_hardware_interface).
+ *
+ * Ejemplo de ejecución:
+ *   ros2 run open_manipulator_x_torque_control hw_io_control_node \
+ *     --ros-args -p gain_scale:=1.0 -p log_id:=1 -p t_run:=20.0
  */
 
 #include <array>
@@ -153,7 +166,9 @@ static constexpr double LAMBDA_SQ = LAMBDA * LAMBDA;
 
 // Punto de inicio de la trayectoria cartesiana [x, y, z, phi] en t'=0
 static const Eigen::Vector4d Y_START{0.2, 0.05, 0.15, 0.22};
-static constexpr double T_TRANS = 3.0;
+static constexpr double T_TRANS       = 3.0;
+static constexpr double RETURN_TIME_S = 3.0;   // duracion del retorno cartesiano a y_inicial
+static constexpr double HOLD_TIME_S   = 0.5;   // pausa en reposo antes de cortar corriente
 
 // Altura mínima del efector sobre la placa metálica de la base [m].
 // Se verifica en cada tick para la referencia y para el efector medido.
@@ -253,7 +268,7 @@ public:
     // ── Parámetros ──────────────────────────────────────────────────────────
     this->declare_parameter<std::string>("port_name",  "/dev/ttyUSB0");
     this->declare_parameter<double>     ("gain_scale",  1.0);
-    this->declare_parameter<double>     ("t_imp",       20.0);
+    this->declare_parameter<double>     ("t_run",       20.0);
     this->declare_parameter<int>        ("log_id",      1);
 
     using dvec = std::vector<double>;
@@ -280,7 +295,7 @@ public:
 
     port_name_  = this->get_parameter("port_name").as_string();
     gain_scale_ = this->get_parameter("gain_scale").as_double();
-    t_imp_      = this->get_parameter("t_imp").as_double();
+    t_run_      = this->get_parameter("t_run").as_double();
     const int log_id = this->get_parameter("log_id").as_int();
 
     auto load_vec4 = [this](const std::string& name) {
@@ -316,7 +331,7 @@ public:
     tau_max_ = get_parameter("tau_max").as_double();
 
     RCLCPP_INFO(get_logger(), "puerto=%s  gain=%.2f  dur=%.1fs  id=%d",
-      port_name_.c_str(), gain_scale_, t_imp_, log_id);
+      port_name_.c_str(), gain_scale_, t_run_, log_id);
     RCLCPP_INFO(get_logger(),
       "Kp_y=[%.1f %.1f %.1f %.1f]  Kd_y=[%.1f %.1f %.1f %.1f]  lambda=%.3f  tau_max=%.2f",
       KP_Y[0], KP_Y[1], KP_Y[2], KP_Y[3],
@@ -658,8 +673,9 @@ private:
     const auto tp  = std::chrono::high_resolution_clock::now();
     const double t = std::chrono::duration<double>(tp - start_time_).count();
 
-    if (t_imp_ > 0.0 && t >= t_imp_) {
-      RCLCPP_INFO(get_logger(), "Duración completada (%.1f s).", t_imp_);
+    const double t_shutdown = t_run_ + RETURN_TIME_S + HOLD_TIME_S;
+    if (t_run_ > 0.0 && t >= t_shutdown) {
+      RCLCPP_INFO(get_logger(), "Retorno a y_inicial completado. Deteniendo (t=%.1f s).", t);
       timer_->cancel();
       shutdown_hardware();
       if (csv_.is_open()) { csv_.flush(); csv_.close(); }
@@ -719,15 +735,32 @@ private:
       }
     }
 
-    // 5. Referencia cartesiana
-    const CartRef ref = (t < T_TRANS)
-      ? cartesianTransition(t, y0_, Y_START, T_TRANS)
-      : cartesianTrajectory(t - T_TRANS);
+    // 5. Referencia cartesiana (transicion inicial + trayectoria + retorno final)
+    CartRef ref;
+    if (t < T_TRANS) {
+      ref = cartesianTransition(t, y0_, Y_START, T_TRANS);
+    } else if (t_run_ <= 0.0 || t < t_run_) {
+      ref = cartesianTrajectory(t - T_TRANS);
+    } else if (t < t_run_ + RETURN_TIME_S) {
+      if (!return_logged_) {
+        RCLCPP_INFO(get_logger(), "Iniciando retorno cartesiano a y_inicial (t=%.1fs, dur=%.1fs)",
+          t, RETURN_TIME_S);
+        return_logged_ = true;
+      }
+      const Eigen::Vector4d y_at_timp = cartesianTrajectory(t_run_ - T_TRANS).y;
+      ref = cartesianTransition(t - t_run_, y_at_timp, y0_, RETURN_TIME_S);
+    } else {
+      ref.y = y0_;
+      ref.ydot.setZero();
+      ref.yddot.setZero();
+    }
 
     // 5b. Guarda de altura mínima de la REFERENCIA (placa base metálica).
-    //     Durante la transición el brazo puede arrancar bajo (z0 < Z_MIN_FLOOR):
+    //     Cerca de la pose inicial (transición de entrada, retorno final o
+    //     pausa en reposo) el brazo puede estar bajo (y0_[2] < Z_MIN_FLOOR):
     //     solo se exige no descender más de 3 cm bajo la pose inicial.
-    const double z_floor = (t < T_TRANS)
+    const bool near_home = (t < T_TRANS) || (t_run_ > 0.0 && t >= t_run_);
+    const double z_floor = near_home
       ? std::min(Z_MIN_FLOOR, y0_[2] - 0.03)
       : Z_MIN_FLOOR;
     if (ref.y[2] < z_floor) {
@@ -780,10 +813,10 @@ private:
       js_pub_->publish(js);
     }
 
-    // 11. CSV
-    if (csv_.is_open()) {
-      const char* phase = (t < T_TRANS) ? "TRANS" : "TRAJ";
-      (void)phase;
+    // 11. CSV (excluye el retorno final a y_inicial y la pausa en reposo,
+    //     asi el CSV solo cubre transicion inicial + trayectoria periodica)
+    const bool in_return_or_hold = (t_run_ > 0.0 && t >= t_run_);
+    if (csv_.is_open() && !in_return_or_hold) {
       csv_ << std::fixed << std::setprecision(6)
            << t
            << ',' << q(0) << ',' << q(1) << ',' << q(2) << ',' << q(3)
@@ -809,7 +842,9 @@ private:
     // 12. Log periódico (~1 s)
     if (++log_cnt_ % static_cast<int>(std::lround(loop_rate_hz_)) == 0) {
       if (csv_.is_open()) csv_.flush();
-      const char* phase = (t < T_TRANS) ? "TRANS" : "TRAJ ";
+      const char* phase = (t < T_TRANS) ? "TRANS" :
+                          (t_run_ <= 0.0 || t < t_run_) ? "TRAJ " :
+                          (t < t_run_ + RETURN_TIME_S)  ? "RET  " : "HOME ";
       RCLCPP_INFO(get_logger(),
         "[%s] t=%.2fs  y=[%.3f %.3f %.3f %.3f]  |ey|=%.4f  detJ=%.4f",
         phase, t,
@@ -839,7 +874,7 @@ private:
   pinocchio::FrameIndex frame_id_;
 
   std::string port_name_;
-  double gain_scale_, t_imp_;
+  double gain_scale_, t_run_;
   Vec4   motor_alpha_, motor_Fv_, motor_Fc_, motor_I_offset_;
   double motor_epsilon_;
 
@@ -865,6 +900,7 @@ private:
 
   bool hw_active_;
   bool y0_initialized_;
+  bool return_logged_{false};
   Eigen::Vector4d y0_;
 
   std::chrono::high_resolution_clock::time_point start_time_;

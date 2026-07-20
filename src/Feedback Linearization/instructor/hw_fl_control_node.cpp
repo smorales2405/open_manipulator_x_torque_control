@@ -6,10 +6,22 @@
  * Ley de control:
  *   tau = M(q)*v + h(q,dq),  v = ddq_des - Kd*(dq-dq_des) - Kp*(q-q_des)
  *
+ * Fases temporales de la referencia (ver constantes RAMP_TIME_S/RETURN_TIME_S/
+ * HOLD_TIME_S):
+ *   [0, RAMP_TIME_S)                        rampa quintica: reposo → trayectoria
+ *   [RAMP_TIME_S, t_run)                    trayectoria articular periodica
+ *   [t_run, t_run+RETURN_TIME_S)            retorno quintico al reposo en q_inicial
+ *   [t_run+RETURN_TIME_S, ...+HOLD_TIME_S)  pausa en reposo (asienta antes de cortar)
+ *   >= t_run+RETURN_TIME_S+HOLD_TIME_S      corte de corriente y fin del nodo
+ * El retorno evita que el brazo caiga por gravedad al recibir torque cero
+ * de golpe en medio de la trayectoria (t_run<=0 desactiva el retorno: corre
+ * indefinidamente). El CSV solo registra la rampa y la trayectoria periodica;
+ * el retorno y la pausa final no se guardan (no requiere recorte en MATLAB).
+ *
  * Parámetros ROS 2 (--ros-args -p nombre:=valor):
  *   port_name              [string]          "/dev/ttyUSB0"
  *   gain_scale             [double]          1.0   (escala lineal de Kp; Kd escala con sqrt)
- *   t_imp                  [double]          20.0   (tiempo de implementacion)
+ *   t_run                  [double]          20.0   (tiempo de implementacion)
  *   log_id                 [int]             1      (nombre del CSV: hw_fl_data_<log_id>.csv)
 *   ab_alpha               [double]          0.2   (filtro α-β: ganancia de posición)
  *   ab_beta                [double]          0.02  (filtro α-β: ganancia de velocidad)
@@ -29,6 +41,10 @@
  *
  * ADVERTENCIA: No ejecutar junto a hardware.launch.py ni ningún proceso
  * que acceda a /dev/ttyUSB0 (ros2_control_node, dynamixel_hardware_interface).
+ *
+ * Ejemplo de ejecución:
+ *   ros2 run open_manipulator_x_torque_control hw_fl_control_node \
+ *     --ros-args -p gain_scale:=1.0 -p log_id:=1 -p t_run:=20.0
  */
 
 #include <array>
@@ -108,7 +124,9 @@ static constexpr double TORQUE_PER_CURRENT_TICK = TORQUE_CONSTANT_NM_A * CURRENT
 // CURRENT_LIMIT_REGISTER, CURRENT_CMD_LIMIT, CURRENT_MEASURED_PEAK, TAU_MAX
 // → cargados desde config/motorXM430W350T_params.yaml como parámetros ROS 2.
 
-static constexpr double RAMP_TIME_S = 3.0;
+static constexpr double RAMP_TIME_S   = 3.0;
+static constexpr double RETURN_TIME_S = 3.0;   // duracion del retorno quintico a q_inicial
+static constexpr double HOLD_TIME_S   = 0.5;   // pausa en reposo antes de cortar corriente
 
 using Vec4 = Eigen::Matrix<double, NUM_JOINTS, 1>;
 
@@ -166,14 +184,14 @@ static Reference desiredTrajectory(double t)
   return r;
 }
 
-static Reference quinticTransition(double t, double T, const Vec4& q0)
+// Polinomio quintico general: interpola (q,dq,ddq) desde el estado de borde
+// (q0,v0,a0) en t=0 hasta (qf,vf,af) en t=T. quinticTransition (rampa inicial)
+// y quinticReturn (retorno final) son casos particulares de este blend.
+static Reference quinticBlend(double t, double T,
+                              const Vec4& q0, const Vec4& v0, const Vec4& a0,
+                              const Vec4& qf, const Vec4& vf, const Vec4& af)
 {
-  const Reference target = desiredTrajectory(T);
-  if (T <= 0.0) return target;
-
-  const Vec4 v0 = Vec4::Zero();
-  const Vec4 a0 = Vec4::Zero();
-  const Vec4 qf = target.q, vf = target.dq, af = target.ddq;
+  if (T <= 0.0) { Reference r; r.q = qf; r.dq = vf; r.ddq = af; return r; }
 
   const double T2=T*T, T3=T2*T, T4=T3*T, T5=T4*T;
   const Vec4 c0 = q0;
@@ -191,6 +209,22 @@ static Reference quinticTransition(double t, double T, const Vec4& q0)
   return r;
 }
 
+// Rampa inicial: parte en reposo (v0=a0=0) en q0 y llega a la trayectoria
+// periodica (q,dq,ddq)(T) — continuidad de posicion, velocidad y aceleracion.
+static Reference quinticTransition(double t, double T, const Vec4& q0)
+{
+  const Reference target = desiredTrajectory(T);
+  return quinticBlend(t, T, q0, Vec4::Zero(), Vec4::Zero(), target.q, target.dq, target.ddq);
+}
+
+// Retorno final: parte del estado de la trayectoria periodica en el instante
+// en que termina t_run (start = desiredTrajectory(t_run)) y llega en reposo
+// (vf=af=0) a qf (q_inicial) — evita el frenazo/caida por corte de torque.
+static Reference quinticReturn(double t, double T, const Reference& start, const Vec4& qf)
+{
+  return quinticBlend(t, T, start.q, start.dq, start.ddq, qf, Vec4::Zero(), Vec4::Zero());
+}
+
 // ============================================================
 // Nodo ROS 2
 // ============================================================
@@ -205,7 +239,7 @@ public:
     // ── Parámetros ──────────────────────────────────────────────────────────
     this->declare_parameter<std::string>("port_name",     "/dev/ttyUSB0");
     this->declare_parameter<double>     ("gain_scale",     1.0);
-    this->declare_parameter<double>     ("t_imp",          20.0);
+    this->declare_parameter<double>     ("t_run",          20.0);
     this->declare_parameter<int>        ("log_id",         1);
 
     using dvec = std::vector<double>;
@@ -232,7 +266,7 @@ public:
 
     port_name_      = this->get_parameter("port_name").as_string();
     gain_scale_     = this->get_parameter("gain_scale").as_double();
-    t_imp_          = this->get_parameter("t_imp").as_double();
+    t_run_          = this->get_parameter("t_run").as_double();
     const int log_id = this->get_parameter("log_id").as_int();
 
     auto load_vec4 = [this](const std::string& name) {
@@ -268,7 +302,7 @@ public:
     tau_max_ = get_parameter("tau_max").as_double();
 
     RCLCPP_INFO(get_logger(), "puerto=%s  gain=%.2f  dur=%.1fs  id=%d",
-      port_name_.c_str(), gain_scale_, t_imp_, log_id);
+      port_name_.c_str(), gain_scale_, t_run_, log_id);
     RCLCPP_INFO(get_logger(),
       "motor α=[%.1f %.1f %.1f %.1f]  Fv=[%.2f %.2f %.2f %.2f]  ε=%.3f",
       motor_alpha_(0), motor_alpha_(1), motor_alpha_(2), motor_alpha_(3),
@@ -551,8 +585,9 @@ private:
     const auto tp  = std::chrono::high_resolution_clock::now();
     const double t = std::chrono::duration<double>(tp - start_time_).count();
 
-    if (t_imp_ > 0.0 && t >= t_imp_) {
-      RCLCPP_INFO(get_logger(), "Duración completada (%.1f s).", t_imp_);
+    const double t_shutdown = t_run_ + RETURN_TIME_S + HOLD_TIME_S;
+    if (t_run_ > 0.0 && t >= t_shutdown) {
+      RCLCPP_INFO(get_logger(), "Retorno a q_inicial completado. Deteniendo (t=%.1f s).", t);
       timer_->cancel();
       shutdown_hardware();
       if (csv_.is_open()) { csv_.flush(); csv_.close(); }
@@ -596,10 +631,24 @@ private:
         q(0), q(1), q(2), q(3));
     }
 
-    // 3. Referencia (rampa quintica + trayectoria sinusoidal)
-    const Reference ref = (t < RAMP_TIME_S)
-      ? quinticTransition(t, RAMP_TIME_S, q_initial_)
-      : desiredTrajectory(t);
+    // 3. Referencia (rampa quintica + trayectoria sinusoidal + retorno final)
+    Reference ref;
+    if (t < RAMP_TIME_S) {
+      ref = quinticTransition(t, RAMP_TIME_S, q_initial_);
+    } else if (t_run_ <= 0.0 || t < t_run_) {
+      ref = desiredTrajectory(t);
+    } else if (t < t_run_ + RETURN_TIME_S) {
+      if (!return_logged_) {
+        RCLCPP_INFO(get_logger(), "Iniciando retorno quintico a q_inicial (t=%.1fs, dur=%.1fs)",
+          t, RETURN_TIME_S);
+        return_logged_ = true;
+      }
+      ref = quinticReturn(t - t_run_, RETURN_TIME_S, desiredTrajectory(t_run_), q_initial_);
+    } else {
+      ref.q = q_initial_;
+      ref.dq.setZero();
+      ref.ddq.setZero();
+    }
 
     // 4. Verificar límites de la referencia
     for (int i = 0; i < NUM_JOINTS; ++i) {
@@ -645,8 +694,10 @@ private:
       js_pub_->publish(js);
     }
 
-    // 9. CSV
-    if (csv_.is_open()) {
+    // 9. CSV (excluye el retorno final a q_inicial y la pausa en reposo,
+    //    asi el CSV solo cubre la rampa inicial + trayectoria periodica)
+    const bool in_return_or_hold = (t_run_ > 0.0 && t >= t_run_);
+    if (csv_.is_open() && !in_return_or_hold) {
       csv_ << std::fixed << std::setprecision(6) << t
            << ',' << q(0)       << ',' << q(1)       << ',' << q(2)       << ',' << q(3)
            << ',' << dq(0)           << ',' << dq(1)           << ',' << dq(2)           << ',' << dq(3)
@@ -689,7 +740,7 @@ private:
   pinocchio::Data  data_;
 
   std::string port_name_;
-  double gain_scale_, t_imp_;
+  double gain_scale_, t_run_;
   Vec4   motor_alpha_, motor_Fv_, motor_Fc_, motor_I_offset_;
   double motor_epsilon_;
   double fc_scale_;
@@ -715,6 +766,7 @@ private:
 
   bool hw_active_;
   bool q_initial_captured_;
+  bool return_logged_{false};
   Vec4 q_initial_;
   std::chrono::high_resolution_clock::time_point start_time_;
   int log_cnt_{0};

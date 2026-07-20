@@ -295,8 +295,7 @@ figure(3); clf;
 set(gcf, 'Color', 'w', 'Position', [140 140 1100 700]);
 for i = 1:4
     subplot(2,2,i);
-    plot(t_log, TAU(:,i), '-', 'Color', color_tau, 'LineWidth', lw); hold on;
-    yline(0, ':', 'LineWidth', 0.8);
+    plot(t_log, TAU(:,i), '-', 'Color', color_tau, 'LineWidth', lw);
     xlabel('Tiempo [s]', 'FontSize', fs);
     ylabel(sprintf('$\\tau_%d\\;[\\mathrm{N\\cdot m}]$', i), ...
            'Interpreter', 'latex', 'FontSize', fs);

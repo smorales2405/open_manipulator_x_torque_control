@@ -7,18 +7,23 @@
 %   Figura 3 — Seguimiento de velocidades articulares dq1..dq4
 %   Figura 4 — Torques de control tau1..tau4
 %
-%   Metricas reportadas en consola (por articulacion, sin la rampa quintica):
+%   Metricas reportadas en consola (por articulacion, sin la rampa quintica
+%   inicial):
 %     e_q,max [rad]  |  e_q,RMS [rad]  |  max|tau| [N·m]  |  tau_RMS [N·m]  |  Sat [%]
 %
-% Configurar las dos variables de la seccion "Configuracion" y ejecutar.
+%   El nodo hw_fl/gz_fl ya excluye del CSV el retorno quintico final a
+%   q_inicial y la pausa en reposo (solo registra rampa + trayectoria), por
+%   lo que no se requiere recortar nada al final aqui.
+%
+% Configurar las variables de la seccion "Configuracion" y ejecutar.
 
 clear; clc; close all;
 
 %% ── Configuracion ────────────────────────────────────────────────────────────
-mode        = 'sim';   % 'sim'  = simulacion Gazebo
+mode        = 'real';   % 'sim'  = simulacion Gazebo
                        % 'real' = implementacion hardware real
 
-test_num    = 1;       % Numero de log
+test_num    = 7;       % Numero de log
 
 EXPORT_FIGS = false;    % true  = guardar PNG (300 dpi) y EPS vectorial (600 dpi)
                        % false = solo visualizar
