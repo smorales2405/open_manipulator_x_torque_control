@@ -100,8 +100,8 @@ fprintf('%s\n', repmat('-', 1, 80));
 for i = 1:4
     e_i   = e_y(m_reg, i);
     tau_i = tau(m_reg, i);
-    fprintf('%s/q%d  %12.5f  %12.5f  %14.4f  %14.4f  %8.2f\n', ...
-            axis_lbl{i}, i, ...
+    fprintf('%s  %12.5f  %12.5f  %14.4f  %14.4f  %8.2f\n', ...
+            axis_lbl{i}, ...
             max(abs(e_i)), sqrt(mean(e_i.^2)), ...
             max(abs(tau_i)), sqrt(mean(tau_i.^2)), ...
             100 * mean(abs(tau_i) >= TAU_MAX - 1e-6));
@@ -114,7 +114,8 @@ fs        = 11;
 fs_ttl    = 14;
 c_meas    = [0.0000 0.4470 0.7410];   % azul    — medicion
 c_ref     = [0.8500 0.3250 0.0980];   % naranja — referencia
-c_tau     = lines(4);
+c_q       = [0.357, 0.024, 0.58];     % azul    — posiciones articulares (fig. 4)
+c_tau     = [0.4660 0.6740 0.1880];   % verde   — torques (fig. 5)
 xlims     = [t(1), t(end)];
 jointNames = {'Articulacion 1', 'Articulacion 2', ...
               'Articulacion 3', 'Articulacion 4'};
@@ -218,7 +219,7 @@ tl4 = tiledlayout(2, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
 
 for i = 1:4
     nexttile(tl4);
-    plot(t, q(:,i), '-', 'Color', c_meas, 'LineWidth', lw);
+    plot(t, q(:,i), '-', 'Color', c_q, 'LineWidth', lw);
     xlabel('Tiempo [s]', 'FontSize', fs);
     ylabel(sprintf('$q_%d$ [rad]', i), 'Interpreter', 'latex', 'FontSize', fs);
     title(jointNames{i}, 'FontSize', fs);
@@ -237,10 +238,8 @@ tl5 = tiledlayout(2, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
 
 for i = 1:4
     nexttile(tl5);
-    plot(t, tau(:,i), '-', 'Color', c_tau(i,:), 'LineWidth', lw); hold on;
-    yline(0,     ':',  'LineWidth', 0.8);
-    yline( 1.2, '--k', 'LineWidth', 0.9, 'Label', '+1.2 N·m');
-    yline(-1.2, '--k', 'LineWidth', 0.9, 'Label', '-1.2 N·m');
+    plot(t, tau(:,i), '-', 'Color', c_tau, 'LineWidth', lw); hold on;
+    yline(0, ':', 'LineWidth', 0.8);
     xlabel('Tiempo [s]', 'FontSize', fs);
     ylabel(sprintf('$\\tau_%d\\;[\\mathrm{N{\\cdot}m}]$', i), ...
            'Interpreter', 'latex', 'FontSize', fs);
