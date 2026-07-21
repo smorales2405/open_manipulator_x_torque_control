@@ -22,7 +22,7 @@
 clear; clc; close all;
 
 %% ── Configuracion ────────────────────────────────────────────────────────────
-mode        = 'real';        % 'sim'  = simulacion Gazebo (gz_mrac_joint_12p_node)
+mode        = 'sim';        % 'sim'  = simulacion Gazebo (gz_mrac_joint_12p_node)
                             % 'real' = hardware (hw_mrac_joint_12p_node) —
                             %   OJO: en hw los fv1/fc*_hat son RESIDUALES en
                             %   torque sobre el modelo de corriente del motor
@@ -35,9 +35,9 @@ ctrl_mode   = 'adaptive';   % Caso simulado (debe coincidir con los parametros d
                             %   'adaptive_noprior' adaptive:=true  friction_prior:=false (C4)
                             %   'fixed_noprior'    adaptive:=false friction_prior:=false
 
-test_num    = 14;            % Identificador del ensayo (test_num usado al lanzar el nodo)
+test_num    = 1;            % Identificador del ensayo (test_num usado al lanzar el nodo)
 
-EXPORT_FIGS = true;        % true  = guardar PNG (300 dpi) y EPS vectorial (600 dpi)
+EXPORT_FIGS = false;        % true  = guardar PNG (300 dpi) y EPS vectorial (600 dpi)
                             % false = solo visualizar
 
 TAU_MAX     = 1.2;          % [N·m] limite de torque (debe coincidir con el nodo)
@@ -57,9 +57,11 @@ FRICTION_SCALE_TRUE = 1.0;  % friction_scale     -> Fc verdadero = escala*FC_NOM
 %    dmcx = load_mass * (0.126 + load_x_offset))
 LOAD_TRUE = [0, 0, 0, 0];
 
-% Friccion nominal identificada (URDF/Xacro escala 1.0, mismos valores del nodo)
-FV_NOM = [0.0367, 0.0000, 0.0000, 0.0050];   % [N·m·s/rad]
-FC_NOM = [0.0146, 0.0830, 0.1143, 0.0413];   % [N·m]
+% Friccion nominal identificada (URDF/Xacro escala 1.0, mismos valores del
+% nodo). Actualizados tras el ensayo bootstrap de identificacion
+% (2026-07-19, config/motorXM430W350T_params.yaml re-identificado).
+FV_NOM = [0.0201, 0.0089, 0.0000, 0.0032];   % [N·m·s/rad]
+FC_NOM = [0.0370, 0.0849, 0.1324, 0.0453];   % [N·m]
 
 % Directorio raiz del paquete ROS 2
 pkg_dir = '/home/utec/open_manx_ws/src/open_manipulator_x_torque_control';

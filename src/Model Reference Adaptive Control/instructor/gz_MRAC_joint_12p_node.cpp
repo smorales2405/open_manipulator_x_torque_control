@@ -128,14 +128,14 @@
 //                ganancias suaves (en test 2, q4 entrego 0.42 rad tarde y el
 //                transitorio termino en colision).
 //    3) RUN    : multiseno con envolvente de arranque + adaptacion activa.
-//                El CSV y t_sim cuentan desde aqui (t = 0).
+//                El CSV y t_run cuentan desde aqui (t = 0).
 //
 //  RELOJ: el nodo fuerza use_sim_time=true y su timer corre sobre /clock de
 //  Gazebo (el launch ya lo puentea con ros_gz_bridge). Asi la trayectoria se
 //  ejecuta a la velocidad disenada aunque la simulacion no corra a tiempo
 //  real. (En el test 3 el RTF era ~0.5 y el nodo, con reloj de pared,
 //  ejecutaba la trayectoria al DOBLE de velocidad: aceleraciones 4x y
-//  saturacion cronica en q2/q3.) t_sim y el CSV quedan en SEGUNDOS SIMULADOS;
+//  saturacion cronica en q2/q3.) t_run y el CSV quedan en SEGUNDOS SIMULADOS;
 //  con RTF<1 la corrida tarda proporcionalmente mas en reloj de pared.
 //
 //  a_prior (= a_hat(0) = referencia de la forma de desviacion):
@@ -192,7 +192,7 @@
 //
 //  Parametros ROS 2 (--ros-args -p nombre:=valor):
 //    test_num        [int]     1     — identificador del CSV generado
-//    t_sim           [double]  0.0   — duracion en segundos SIMULADOS (0 = ilimitado)
+//    t_run           [double]  0.0   — duracion en segundos SIMULADOS (0 = ilimitado)
 //    adaptive        [bool]    true  — true: adapta | false: a_hat fijo en a_prior
 //    friction_prior  [bool]    true  — true: prior = friccion identificada
 //                                      false: prior de friccion en cero (C4)
@@ -208,15 +208,15 @@
 //
 //    # C1/C2/C3 — adaptativo con prior identificado:
 //    ros2 run open_manipulator_x_torque_control gz_mrac_joint_12p_node
-//      --ros-args -p adaptive:=true -p test_num:=1 -p t_sim:=30.0
+//      --ros-args -p adaptive:=true -p test_num:=1 -p t_run:=30.0
 //
 //    # Baseline no adaptativo (mejor modelo fijo identificado):
 //    ros2 run open_manipulator_x_torque_control gz_mrac_joint_12p_node
-//      --ros-args -p adaptive:=false -p test_num:=2 -p t_sim:=30.0
+//      --ros-args -p adaptive:=false -p test_num:=2 -p t_run:=30.0
 //
 //    # C4 — adaptativo partiendo sin conocimiento de friccion:
 //    ros2 run open_manipulator_x_torque_control gz_mrac_joint_12p_node
-//      --ros-args -p adaptive:=true -p friction_prior:=false -p test_num:=4 -p t_sim:=30.0
+//      --ros-args -p adaptive:=true -p friction_prior:=false -p test_num:=4 -p t_run:=30.0
 //
 // ============================================================================
 
@@ -462,12 +462,12 @@ public:
 
     // ── Parametros ────────────────────────────────────────────────────────────
     this->declare_parameter<int>   ("test_num",       1);
-    this->declare_parameter<double>("t_sim",          0.0);
+    this->declare_parameter<double>("t_run",          0.0);
     this->declare_parameter<bool>  ("adaptive",       true);
     this->declare_parameter<bool>  ("friction_prior", true);
 
     const int test_num = this->get_parameter("test_num").as_int();
-    t_sim_             = this->get_parameter("t_sim").as_double();
+    t_run_             = this->get_parameter("t_run").as_double();
     adaptive_          = this->get_parameter("adaptive").as_bool();
     friction_prior_    = this->get_parameter("friction_prior").as_bool();
 
@@ -516,12 +516,12 @@ public:
       a_prior_[0], a_prior_[1], a_prior_[2],
       a_prior_[3], a_prior_[4], a_prior_[5],  a_prior_[6],  a_prior_[7],
       a_prior_[8], a_prior_[9], a_prior_[10], a_prior_[11]);
-    if (t_sim_ > 0.0) {
+    if (t_run_ > 0.0) {
       RCLCPP_INFO(this->get_logger(),
-        "t_sim = %.1f s (contados desde el inicio del multiseno, tras homing+asentamiento)",
-        t_sim_);
+        "t_run = %.1f s (contados desde el inicio del multiseno, tras homing+asentamiento)",
+        t_run_);
     } else {
-      RCLCPP_INFO(this->get_logger(), "t_sim = ilimitado");
+      RCLCPP_INFO(this->get_logger(), "t_run = ilimitado");
     }
 
     open_csv(test_num);
@@ -536,7 +536,7 @@ public:
       });
 
     RCLCPP_INFO(this->get_logger(),
-      "use_sim_time=true: timer sobre /clock (t_sim y CSV en segundos simulados)");
+      "use_sim_time=true: timer sobre /clock (t_run y CSV en segundos simulados)");
 
     timer_ = rclcpp::create_timer(
       this, this->get_clock(), rclcpp::Duration::from_seconds(DT),
@@ -658,7 +658,7 @@ private:
       }
     }
     if (phase_ == Phase::RUN) {
-      ref = desiredTrajectory(t_run_);
+      ref = desiredTrajectory(t_run_elapsed_);
     }
 
     // ── Errores, superficie y referencias auxiliares ───────────────────────
@@ -738,7 +738,7 @@ private:
     // ── Registro CSV (a_hat usado en este tick; solo en fase RUN) ──────────
     if (csv_.is_open() && phase_ == Phase::RUN) {
       csv_ << std::fixed << std::setprecision(6)
-           << t_run_
+           << t_run_elapsed_
            << ',' << q[0]        << ',' << q[1]        << ',' << q[2]        << ',' << q[3]
            << ',' << dq[0]       << ',' << dq[1]       << ',' << dq[2]       << ',' << dq[3]
            << ',' << ref.q[0]    << ',' << ref.q[1]    << ',' << ref.q[2]    << ',' << ref.q[3]
@@ -769,11 +769,11 @@ private:
 
     t_ += DT;
     if (phase_ == Phase::SETTLE) { t_settle_ += DT; }
-    if (phase_ == Phase::RUN)    { t_run_    += DT; }
+    if (phase_ == Phase::RUN)    { t_run_elapsed_    += DT; }
 
-    if (t_sim_ > 0.0 && phase_ == Phase::RUN && t_run_ >= t_sim_) {
+    if (t_run_ > 0.0 && phase_ == Phase::RUN && t_run_elapsed_ >= t_run_) {
       RCLCPP_INFO(this->get_logger(),
-        "Simulacion completada (%.1f s). Deteniendo control.", t_sim_);
+        "Simulacion completada (%.1f s). Deteniendo control.", t_run_);
       std_msgs::msg::Float64MultiArray zero;
       zero.data.assign(NARM, 0.0);
       torque_pub_->publish(zero);
@@ -793,14 +793,14 @@ private:
   std::array<Vec10, NARM> pi_nom_;
 
   double      t_;
-  double      t_sim_;
+  double      t_run_;
   bool        adaptive_;
   bool        friction_prior_;
   Phase       phase_     = Phase::HOMING;
   bool        home_init_ = false;  // postura inicial ya capturada
   Vec4        q_home0_, dq_home0_; // estado medido al primer tick
   double      t_settle_  = 0.0;    // tiempo transcurrido en SETTLE
-  double      t_run_     = 0.0;    // tiempo del experimento (fase RUN)
+  double      t_run_elapsed_     = 0.0;    // tiempo del experimento (fase RUN)
   std::string mode_str_;
   Vec12       a_prior_;   // a_hat(0) y referencia de la forma de desviacion
   Vec12       a_hat_;     // estimacion actual [alpha1..3, theta_load, Fv1, Fc1..4]

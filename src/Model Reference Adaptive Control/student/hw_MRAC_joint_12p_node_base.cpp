@@ -44,13 +44,17 @@
  *   stiction/recuperacion, no de parametros). En hw |s| es 10-50x mayor que
  *   en sim: usar Gamma MUCHO mas frias que en simulacion.
  *
- * Fases: HOMING (quintica T_HOME s) -> SETTLE -> RUN (multiseno; CSV desde t=0).
+ * Fases: HOMING (quintica T_HOME s) -> SETTLE -> RUN (multiseno; CSV desde
+ * t=0) -> RETURN (al completar t_run, transicion quintica de RETURN_TIME_S s,
+ * como hw_fl_control_node, desde la ultima referencia hasta el reposo en
+ * q_inicial + pausa HOLD_TIME_S antes de cortar corriente; NO se registra
+ * en el CSV).
  *
  * Parametros ROS 2 (--ros-args -p nombre:=valor):
  *   port_name    [string] "/dev/ttyUSB0"
  *   adaptive     [bool]   true
  *   gain_scale   [double] 1.0    (escala K_V y K_S)
- *   t_sim        [double] 30.0   (duracion de RUN [s])
+ *   t_run        [double] 30.0   (duracion de RUN [s])
  *   test_num     [int]    1
  *   phi          [double] 0.3    (capa limite sat(s/phi) [rad/s])
  *   adapt_deadzone [double] 0.3  (zona muerta de |s| para la adaptacion)
@@ -76,9 +80,9 @@
  *
  * Ejemplos de ejecucion:
  *   ros2 run open_manipulator_x_torque_control hw_mrac_joint_12p_node_base \
- *     --ros-args -p adaptive:=false -p test_num:=1 -p t_sim:=30.0 -p traj_scale:=0.7
+ *     --ros-args -p adaptive:=false -p test_num:=1 -p t_run:=30.0 -p traj_scale:=0.7
  *   ros2 run open_manipulator_x_torque_control hw_mrac_joint_12p_node_base \
- *     --ros-args -p adaptive:=true -p test_num:=2 -p t_sim:=30.0
+ *     --ros-args -p adaptive:=true -p test_num:=2 -p t_run:=30.0
  *
  * ADVERTENCIA: No ejecutar junto a hardware.launch.py ni ningun proceso que
  * acceda a /dev/ttyUSB0. Validar PRIMERO el nodo gz en simulacion.
@@ -171,6 +175,14 @@ static constexpr double T_HOME      = 5.0;
 static constexpr double T_RAMP      = 2.0;
 static constexpr double SETTLE_TOL  = 0.08;
 static constexpr double SETTLE_TMAX = 5.0;
+
+// Fase de retorno final (como hw_fl_control_node_base): al completar RUN, en
+// vez de cortar corriente de golpe en medio del multiseno, el nodo hace una
+// transicion quintica hasta el reposo en q_inicial (pose medida en el primer
+// tick, antes de HOMING) + una pausa antes de cortar. El CSV NO registra el
+// retorno (no modificar).
+static constexpr double RETURN_TIME_S = 3.0;
+static constexpr double HOLD_TIME_S   = 0.5;
 
 // ── Recortes de seguridad (no modificar) ─────────────────────────────────────
 //   E/DE_CLAMP: acotan la demanda de torque dentro del presupuesto lineal
@@ -342,6 +354,40 @@ static Reference homingTrajectory(double t, const Vec4 & q0, const Vec4 & v0)
   return ref;
 }
 
+// Polinomio quintico general: interpola (q,dq,ddq) desde el estado de borde
+// (q0,v0,a0) en t=0 hasta (qf,vf,af) en t=T (identico a hw_fl_control_node).
+// quinticReturn (retorno final) es un caso particular de este blend.
+// (No modificar.)
+static Reference quinticBlend(double t, double T,
+                              const Vec4& q0, const Vec4& v0, const Vec4& a0,
+                              const Vec4& qf, const Vec4& vf, const Vec4& af)
+{
+  if (T <= 0.0) { Reference r; r.q = qf; r.dq = vf; r.ddq = af; return r; }
+
+  const double T2=T*T, T3=T2*T, T4=T3*T, T5=T4*T;
+  const Vec4 c0 = q0;
+  const Vec4 c1 = v0;
+  const Vec4 c2 = 0.5 * a0;
+  const Vec4 c3 = (20.0*(qf-q0) - (8.0*vf+12.0*v0)*T - (3.0*a0-af)*T2) / (2.0*T3);
+  const Vec4 c4 = (30.0*(q0-qf) + (14.0*vf+16.0*v0)*T + (3.0*a0-2.0*af)*T2) / (2.0*T4);
+  const Vec4 c5 = (12.0*(qf-q0) - (6.0*vf+6.0*v0)*T - (a0-af)*T2) / (2.0*T5);
+
+  const double t2=t*t, t3=t2*t, t4=t3*t, t5=t4*t;
+  Reference r;
+  r.q   = c0 + c1*t  + c2*t2  + c3*t3  + c4*t4  + c5*t5;
+  r.dq  = c1 + 2.0*c2*t + 3.0*c3*t2 + 4.0*c4*t3 + 5.0*c5*t4;
+  r.ddq = 2.0*c2 + 6.0*c3*t + 12.0*c4*t2 + 20.0*c5*t3;
+  return r;
+}
+
+// Retorno final: parte del estado de la referencia en el instante en que
+// termina RUN y llega en reposo (vf=af=0) a qf (q_inicial) — evita el
+// frenazo/caida por corte de torque en medio del multiseno. (No modificar.)
+static Reference quinticReturn(double t, double T, const Reference& start, const Vec4& qf)
+{
+  return quinticBlend(t, T, start.q, start.dq, start.ddq, qf, Vec4::Zero(), Vec4::Zero());
+}
+
 // ── Regresor Slotine-Li via identidad de polarizacion (no modificar) ────────
 static Eigen::MatrixXd slotineLiRegressor(
     const pinocchio::Model & model, pinocchio::Data & data,
@@ -358,7 +404,7 @@ static Eigen::MatrixXd slotineLiRegressor(
 }
 
 // ── Fases de arranque ────────────────────────────────────────────────────────
-enum class Phase { HOMING, SETTLE, RUN };
+enum class Phase { HOMING, SETTLE, RUN, RETURN };
 
 // ============================================================
 // Nodo ROS 2
@@ -375,7 +421,7 @@ public:
     this->declare_parameter<std::string>("port_name",  "/dev/ttyUSB0");
     this->declare_parameter<bool>       ("adaptive",    true);
     this->declare_parameter<double>     ("gain_scale",  1.0);
-    this->declare_parameter<double>     ("t_sim",       30.0);
+    this->declare_parameter<double>     ("t_run",       30.0);
     this->declare_parameter<int>        ("test_num",    1);
     this->declare_parameter<double>     ("phi",         0.3);
     this->declare_parameter<double>     ("adapt_deadzone", 0.3);
@@ -406,7 +452,7 @@ public:
     port_name_  = this->get_parameter("port_name").as_string();
     adaptive_   = this->get_parameter("adaptive").as_bool();
     gain_scale_ = this->get_parameter("gain_scale").as_double();
-    t_sim_      = this->get_parameter("t_sim").as_double();
+    t_run_      = this->get_parameter("t_run").as_double();
     const int test_num = this->get_parameter("test_num").as_int();
     phi_        = this->get_parameter("phi").as_double();
     adapt_dz_   = this->get_parameter("adapt_deadzone").as_double();
@@ -453,8 +499,8 @@ public:
     a_hat_ = a_prior_;
 
     RCLCPP_INFO(get_logger(),
-      "MRAC 12p hw [BASE] — puerto=%s modo=%s gain=%.2f traj_scale=%.2f t_sim=%.1fs test=%d",
-      port_name_.c_str(), mode_str_.c_str(), gain_scale_, g_traj_scale, t_sim_, test_num);
+      "MRAC 12p hw [BASE] — puerto=%s modo=%s gain=%.2f traj_scale=%.2f t_run=%.1fs test=%d",
+      port_name_.c_str(), mode_str_.c_str(), gain_scale_, g_traj_scale, t_run_, test_num);
     RCLCPP_INFO(get_logger(),
       "Lambda=[%.0f %.0f %.0f %.0f]  Kv=[%.0f %.0f %.0f %.0f]  Ks=[%.0f %.0f %.0f %.0f]  phi=%.2f",
       LAMBDA_Q[0], LAMBDA_Q[1], LAMBDA_Q[2], LAMBDA_Q[3],
@@ -768,12 +814,31 @@ private:
           e_max, t - T_HOME);
       }
     }
-    double t_run = 0.0;
+    double t_run_elapsed = 0.0;
     if (phase_ == Phase::RUN) {
-      t_run = t - t_run0_;
-      ref   = desiredTrajectory(t_run);
-      if (t_sim_ > 0.0 && t_run >= t_sim_) {
-        RCLCPP_INFO(get_logger(), "Implementacion completada (RUN %.1f s).", t_sim_);
+      t_run_elapsed = t - t_run0_;
+      ref   = desiredTrajectory(t_run_elapsed);
+      if (t_run_ > 0.0 && t_run_elapsed >= t_run_) {
+        RCLCPP_INFO(get_logger(),
+          "RUN completado (%.1f s) -> retorno quintico a q_inicial (dur %.1f s).",
+          t_run_, RETURN_TIME_S);
+        return_start_ref_ = ref;
+        phase_            = Phase::RETURN;
+        t_return0_        = t;
+      }
+    }
+    // Fase de retorno final (no modificar): transicion quintica hasta el
+    // reposo en q_inicial + pausa antes de cortar corriente.
+    if (phase_ == Phase::RETURN) {
+      const double t_ret = t - t_return0_;
+      if (t_ret < RETURN_TIME_S) {
+        ref = quinticReturn(t_ret, RETURN_TIME_S, return_start_ref_, q_initial_);
+      } else if (t_ret < RETURN_TIME_S + HOLD_TIME_S) {
+        ref.q = q_initial_;
+        ref.dq.setZero();
+        ref.ddq.setZero();
+      } else {
+        RCLCPP_INFO(get_logger(), "Retorno a q_inicial completado. Deteniendo (t=%.1f s).", t);
         timer_->cancel();
         shutdown_hardware();
         if (csv_.is_open()) { csv_.flush(); csv_.close(); }
@@ -943,9 +1008,10 @@ private:
       js_pub_->publish(js);
     }
 
-    // 10. CSV — solo fase RUN (no modificar)
+    // 10. CSV — solo fase RUN (excluye el retorno final a q_inicial y la
+    //     pausa en reposo; no modificar)
     if (csv_.is_open() && phase_ == Phase::RUN) {
-      csv_ << std::fixed << std::setprecision(6) << t_run
+      csv_ << std::fixed << std::setprecision(6) << t_run_elapsed
            << ',' << q(0)       << ',' << q(1)       << ',' << q(2)       << ',' << q(3)
            << ',' << dq(0)      << ',' << dq(1)      << ',' << dq(2)      << ',' << dq(3)
            << ',' << ref.q(0)   << ',' << ref.q(1)   << ',' << ref.q(2)   << ',' << ref.q(3)
@@ -966,8 +1032,9 @@ private:
     // 11. Log periodico (~1 s; no modificar)
     if (++log_cnt_ % static_cast<int>(std::lround(loop_rate_hz_)) == 0) {
       if (csv_.is_open()) csv_.flush();
-      const char* ph = phase_ == Phase::RUN ? "RUN "
-                     : (phase_ == Phase::SETTLE ? "SETT" : "HOME");
+      const char* ph = phase_ == Phase::RUN    ? "RUN "
+                     : phase_ == Phase::RETURN ? "RET "
+                     : phase_ == Phase::SETTLE ? "SETT" : "HOME";
       RCLCPP_INFO(get_logger(),
         "[%s] t=%.1fs |s|=%.3f |e|=%.3f  alpha=[%.3f %.3f %.3f] dm=%.3f dmcx=%.4f "
         "Fv1r=%.3f Fcr=[%.3f %.3f %.3f %.3f] i=[%d %d %d %d]",
@@ -999,7 +1066,7 @@ private:
 
   std::string port_name_;
   bool        adaptive_;
-  double      gain_scale_, t_sim_, phi_, adapt_dz_;
+  double      gain_scale_, t_run_, phi_, adapt_dz_;
   std::string mode_str_;
 
   Vec12 a_prior_;
@@ -1034,6 +1101,8 @@ private:
   Vec4  q_initial_, dq_initial_;
   Phase phase_{Phase::HOMING};
   double t_run0_{0.0};
+  Reference return_start_ref_;  // referencia al terminar RUN, frontera del retorno
+  double t_return0_{0.0};
   std::chrono::high_resolution_clock::time_point start_time_;
   int log_cnt_{0};
   int overrun_cnt_{0};
