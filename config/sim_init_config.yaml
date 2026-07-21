@@ -13,13 +13,8 @@
 #   Home (todos cero)  : use_fixed_init: true    q_init: [0.0, 0.0, 0.0, 0.0]
 
 use_fixed_init: true
-#q_init: [0.0, 0.0, 0.0, 0.0]             # x0 = [0, 0, 0, 0]
-#q_init: [1.5708, 0.0, 0.5236, 1.0472]    # x0 = [pi/2, 0, pi/6, pi/3]
-q_init: [0.0, -0.55, 0.10, 0.50]          # MRAC 12p: centros del multiseno seguro (z_EE>=83mm)
-#q_init: [0.0, -0.30, 0.30, 0.80]         # Lab7 Act2 MRAC 8p: centros del multiseno original
-#q_init: [0.0, 0.91, 0.54, -1.68]         # Lab5 TV-LQR: pose inicial de la trayectoria optimizada
-#q_init: [0.0, -0.45, 0.35, 0.785]         # Lab6 Act1 SMC articular: q_d(0)
-# Lab6 Act2 SMC cartesiano: usar use_fixed_init: false (equilibrio bajo gravedad)
+q_init: [0.0, 0.91, 0.54, -1.68]           # Lab 4, 6, 7: Posicion inicial articular
+#q_init: [1.5708, 0.0, 0.5236, 1.0472]     # Lab 5 TV-LQR: Posicion inicial articular
 
 # ─── Obstáculo MDF ───────────────────────────────────────────────────────────
 #
@@ -89,7 +84,7 @@ friction_scale: 1.0
 #   dm = load_mass ;  dmcx = load_mass * (0.126 + load_x_offset)
 #   Con 0.125 kg y offset 0.0 → theta_load = [0.125, 0.0158, 0, 0]
 
-spawn_load:    true
+spawn_load:    false
 load_radius:   0.019     # [m]
 load_height:   0.013    # [m]
 load_mass:     0.125    # [kg]
