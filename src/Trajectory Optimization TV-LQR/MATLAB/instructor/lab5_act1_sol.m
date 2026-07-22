@@ -25,7 +25,7 @@ EXPORT_FIGS = false;   % true  = guardar PNG (300 dpi) y EPS vectorial (600 dpi)
 
 % ── Identificadores de sesion (editar antes de cada ejecucion) ────────────
 act_num            = 1;     % numero de actividad
-trial_num          = 4;     % numero de prueba — nombra el log y el zmin
+trial_num          = 7;     % numero de prueba — nombra el log y el zmin
 use_saved_solution = true; % true → carga N, Ts, x0, yf y zmin desde el .mat
 
 pkg_dir    = '/home/utec/open_manx_ws/src/open_manipulator_x_torque_control';
@@ -338,11 +338,28 @@ fprintf('K_TV calculado. max||K_TV(:,:,k)|| = %.4f\n', ...
 
 x0sim = x0 + 0.05*randn(nx,1);
 
-% Control en lazo cerrado con saturacion explicita (OM4dof ya no satura
-% internamente — ver nota en OM4dof).
-u_cl = @(t,x) max(min(controlTVLQR(t, x, Uref, Xref, Ts, N, K_TV), ukmax), ukmin);
+% ── Simulacion realista (patron del Prelab FL) ────────────────────────────
+% La planta simulada es OM4dofFric: OM4dof + friccion identificada en el
+% robot real (config/motorXM430W350T_params.yaml, ticks de corriente ÷
+% alpha). El control aplica el mismo feedforward de friccion que los nodos
+% gz/hw: damping con la velocidad medida y Coulomb con la velocidad de
+% REFERENCIA (sin ruido, eps = 0.05 del YAML), sumado tras la saturacion.
+% La planta usa un eps mas abrupto (0.01) para acercarse al Coulomb ideal.
+% Fv y Fc vienen de fricParams() (funcion local, fuente unica de estas
+% constantes — OM4dof llama a la misma funcion para su termino viscoso).
+[FRIC_DAMPING, FRIC_COULOMB] = fricParams();
+FRIC_EPS     = 0.05;   % [rad/s] tanh del feedforward (velocidad de referencia)
+EPS_PLANT    = 0.01;   % [rad/s] tanh de la planta simulada
 
-[T, Xsim] = ode45(@(t,x) OM4dof(t, x, u_cl(t,x)), 0:Ts:(N*Ts), x0sim);
+% Control en lazo cerrado con saturacion explicita (OM4dof ya no satura
+% internamente — ver nota en OM4dof) + feedforward de friccion.
+u_cl     = @(t,x) max(min(controlTVLQR(t, x, Uref, Xref, Ts, N, K_TV), ukmax), ukmin);
+dq_ref_k = @(t) Xref(5:8, min(max(floor(t/Ts) + 1, 1), N));
+u_ffwd   = @(t,x) FRIC_DAMPING.*x(5:8) + FRIC_COULOMB.*tanh(dq_ref_k(t)/FRIC_EPS);
+cl_dyn   = @(t,x) OM4dofFric(t, x, u_cl(t,x) + u_ffwd(t,x), ...
+                             FRIC_DAMPING, FRIC_COULOMB, EPS_PLANT);
+
+[T, Xsim] = ode45(cl_dyn, 0:Ts:(N*Ts), x0sim);
 Xsim = Xsim';
 
 %% 8. Calculo de salidas y métricas de seguimiento TV-LQR
@@ -417,7 +434,7 @@ hold on; grid on; box on;
 h_mc = gobjects(1,1);
 for rrsim = 1:20
     x0sim_mc = x0 + 0.1*randn(nx,1);
-    [~, Xsim_mc] = ode45(@(t,x) OM4dof(t, x, u_cl(t,x)), 0:Ts:(N*Ts), x0sim_mc);
+    [~, Xsim_mc] = ode45(cl_dyn, 0:Ts:(N*Ts), x0sim_mc);
     Xsim_mc = Xsim_mc';
     ysim_mc = zeros(4, size(Xsim_mc,2));
     for i = 1:size(Xsim_mc,2)
@@ -590,6 +607,16 @@ function [c_des, c_eq] = restr(z, Ts, N, nx, nu, x0)
     end
 end
 
+function [Fv, Fc] = fricParams()
+% Fuente unica de la friccion identificada en el robot real (config/
+% motorXM430W350T_params.yaml, ticks de corriente ÷ alpha). La llaman
+% OM4dof (solo Fv) y la seccion 7 (Fv y Fc) para no repetir los valores.
+%           J1        J2        J3        J4
+Falpha = [207.022; 206.571; 207.473; 207.022];               % [ticks/N·m]
+Fv     = [  4.161;   1.832;   0.000;   0.663] ./ Falpha;      % [N·m·s/rad]
+Fc     = [  7.663;  17.533;  27.462;   9.368] ./ Falpha;      % [N·m]
+end
+
 function dx = OM4dof(t, x, u) %#ok<INUSD>
 % Modelo no lineal SIN saturacion interna de u:
 %   - En la optimizacion los bounds lb/ub ya imponen |u| <= 1. Un clamp aqui
@@ -597,6 +624,15 @@ function dx = OM4dof(t, x, u) %#ok<INUSD>
 %     (columnas cero en B_k) y estanca el paso SQP con entradas saturadas.
 %   - En la simulacion en lazo cerrado la saturacion se aplica explicitamente
 %     sobre la salida de controlTVLQR (handle u_cl, seccion 7).
+% NOTA: incluye SOLO la friccion viscosa real (Fv, identificada en config/
+% motorXM430W350T_params.yaml, ticks de corriente ÷ alpha) — es lineal en dq
+% y no compromete la estabilidad del RK4 de restr. El termino de Coulomb
+% Fc*tanh(dq/eps) NO puede ir aqui: a Ts = 0.05 s el RK4 es inestable para
+% ese termino con las inercias del robot (lambda*Ts = 16-42 vs limite 2.78)
+% y fmincon no converge (exitflag -2, probado con semilla fria y con warm
+% start). La friccion completa (viscosa + Coulomb) entra solo en la
+% simulacion en lazo cerrado (OM4dofFric, seccion 7). Fv viene de
+% fricParams() (funcion local) — misma fuente que usa la seccion 7.
 
     q  = x(1:4);
     dq = x(5:8);
@@ -605,11 +641,32 @@ function dx = OM4dof(t, x, u) %#ok<INUSD>
     [M, phib] = OMDyn(q, dq);
     phib = phib(:);
 
-    Bdyn     = eye(4);
-    bf       = 0.001;
-    tau_fric = bf*dq;
+    Bdyn = eye(4);
+
+    FRIC_DAMPING = fricParams();
+
+    tau_fric = FRIC_DAMPING.*dq;
 
     ddq = M \ (Bdyn*u - phib - tau_fric);
+    dx  = [dq; ddq];
+end
+
+function dx = OM4dofFric(t, x, u, Fv, Fc, eps_pl) %#ok<INUSD>
+% Planta "realista" para la simulacion en lazo cerrado (secciones 7 y 9):
+% OM4dof + friccion viscosa y de Coulomb identificadas en el robot real
+% (config/motorXM430W350T_params.yaml, ticks de corriente ÷ alpha).
+% Solo la usa ode45 (paso adaptativo, integra el tanh sin problema); la
+% transcripcion y la linealizacion siguen usando OM4dof — ver nota alli.
+
+    q  = x(1:4);
+    dq = x(5:8);
+
+    [M, phib] = OMDyn(q, dq);
+    phib = phib(:);
+
+    tau_fric = Fv.*dq + Fc.*tanh(dq/eps_pl);
+
+    ddq = M \ (u(:) - phib - tau_fric);
     dx  = [dq; ddq];
 end
 
