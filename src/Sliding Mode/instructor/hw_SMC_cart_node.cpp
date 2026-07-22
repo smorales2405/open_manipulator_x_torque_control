@@ -36,9 +36,20 @@
  *   phi_d = 0.685 + 0.250*sin(t')
  * Transicion inicial [0, T_TRANS): quintica generalizada desde la pose
  * medida hasta Y_START = FK(q_d(0)) con empalme C2 (velocidad y aceleracion
- * de la serie en t'=0). El CSV registra TAMBIEN la transicion (en hardware
- * las fallas suelen ocurrir ahi); plots_SMC_cart.m en modo 'real' descarta
- * t < T_TRANS para que las metricas sean solo de seguimiento.
+ * de la serie en t'=0).
+ *
+ * Fases temporales completas (ver constantes T_TRANS/RETURN_TIME_S/HOLD_TIME_S):
+ *   [0, T_TRANS)                                  transicion quintica a Y_START
+ *   [T_TRANS, T_TRANS+t_run)                      seguimiento periodico
+ *   [T_TRANS+t_run, T_TRANS+t_run+RETURN_TIME_S)  retorno quintico a y_inicial
+ *   [...+RETURN_TIME_S, ...+HOLD_TIME_S)          pausa en reposo (asienta)
+ *   >= ...+RETURN_TIME_S+HOLD_TIME_S              corte de corriente y fin
+ * El retorno evita que el brazo caiga por gravedad al recibir torque cero de
+ * golpe en medio de la trayectoria (t_run<=0 desactiva el retorno: corre
+ * indefinidamente). El CSV registra la transicion inicial + el seguimiento
+ * (en hardware las fallas suelen ocurrir en la transicion); plots_SMC_cart.m
+ * en modo 'real' descarta t < T_TRANS para que las metricas sean solo de
+ * seguimiento. El retorno y la pausa final NO se guardan en el CSV.
  *
  * PROCEDIMIENTO DE ARRANQUE: posicionar el brazo a mano cerca de Y_START
  * (codo arriba, efector a ~0.20 m y ~0.13 m de altura) antes de lanzar el
@@ -61,8 +72,8 @@
  * Parametros ROS 2 (--ros-args -p nombre:=valor):
  *   port_name          [string]  "/dev/ttyUSB0"
  *   gain_scale         [double]  1.0    (escala lineal de K_V y K_S; Lambda fija)
- *   t_imp              [double]  20.0   (duracion del SEGUIMIENTO [s];
- *                                        total = T_TRANS + t_imp)
+ *   t_run              [double]  20.0   (duracion del SEGUIMIENTO [s];
+ *                                        total = T_TRANS + t_run)
  *   test_num           [int]     1      (CSV: hw_smc_cart_<rho_func>_<test_num>.csv)
  *   rho_func           [string]  "sat"  (funcion de conmutacion: "sign" | "sat")
  *   phi                [double]  0.3    (capa limite para sat(s/phi) [m/s o rad/s])
@@ -87,10 +98,10 @@
  *
  * Ejemplos de ejecucion:
  *   ros2 run open_manipulator_x_torque_control hw_smc_cart_node \
- *     --ros-args -p rho_func:=sign -p test_num:=1 -p t_imp:=30.0
+ *     --ros-args -p rho_func:=sign -p test_num:=1 -p t_run:=30.0
  *
  *   ros2 run open_manipulator_x_torque_control hw_smc_cart_node \
- *     --ros-args -p rho_func:=sat -p phi:=0.3 -p test_num:=2 -p t_imp:=30.0
+ *     --ros-args -p rho_func:=sat -p phi:=0.3 -p test_num:=2 -p t_run:=30.0
  *
  * ADVERTENCIA: No ejecutar junto a hardware.launch.py ni ningun proceso
  * que acceda a /dev/ttyUSB0 (ros2_control_node, dynamixel_hardware_interface).
@@ -188,6 +199,10 @@ static const Eigen::Vector4d Y_START {0.1988, 0.0, 0.1348, 0.6854};
 // Transicion mas larga que en sim (5 s vs 3 s): levantar el brazo real
 // contra gravedad+stiction con demandas suaves.
 static constexpr double T_TRANS = 5.0;   // [s]
+// Retorno con la misma duracion que la transicion: bajar el brazo tambien
+// enfrenta gravedad+stiction.
+static constexpr double RETURN_TIME_S = 5.0;   // [s]
+static constexpr double HOLD_TIME_S   = 0.5;   // pausa en reposo antes de cortar corriente
 
 // Umbral de parada por mal condicionamiento del Jacobiano de tarea
 static constexpr double COND_J_MAX = 150.0;
@@ -298,37 +313,47 @@ static CartRef desiredTrajectory(double t)
   return ref;
 }
 
-// Transicion quintica generalizada: y0 (reposo) → goal en [0, T].
-// Condiciones de borde: p(0)=y0, dp(0)=0, ddp(0)=0;
-//                       p(T)=goal.y, dp(T)=goal.ydot, ddp(T)=goal.yddot.
-// El empalme C2 con la trayectoria evita el escalon de ydot_d/yddot_d al
-// iniciar el seguimiento (la serie arranca con ydot_d(0) != 0).
-static CartRef transitionTrajectory(double t,
-                                    const Eigen::Vector4d & y0,
-                                    const CartRef & goal,
-                                    double T)
+// Polinomio quintico general: interpola (y,ydot,yddot) desde el estado de
+// borde (y0,v0,a0) en t=0 hasta (yf,vf,af) en t=T. transitionTrajectory
+// (transicion inicial) y returnTrajectory (retorno final) son casos
+// particulares de este blend.
+static CartRef quinticBlend(double t, double T,
+                            const Eigen::Vector4d& y0, const Eigen::Vector4d& v0, const Eigen::Vector4d& a0,
+                            const Eigen::Vector4d& yf, const Eigen::Vector4d& vf, const Eigen::Vector4d& af)
 {
   const double tc = std::min(t, T);
-  const double T2 = T * T;
+  const double T2=T*T, T3=T2*T, T4=T3*T, T5=T4*T;
+  const Eigen::Vector4d c0 = y0;
+  const Eigen::Vector4d c1 = v0;
+  const Eigen::Vector4d c2 = 0.5 * a0;
+  const Eigen::Vector4d c3 = (20.0*(yf-y0) - (8.0*vf+12.0*v0)*T - (3.0*a0-af)*T2) / (2.0*T3);
+  const Eigen::Vector4d c4 = (30.0*(y0-yf) + (14.0*vf+16.0*v0)*T + (3.0*a0-2.0*af)*T2) / (2.0*T4);
+  const Eigen::Vector4d c5 = (12.0*(yf-y0) - (6.0*vf+6.0*v0)*T - (a0-af)*T2) / (2.0*T5);
 
-  CartRef ref;
-  for (int i = 0; i < NUM_JOINTS; ++i) {
-    const double D  = goal.y[i] - y0[i];
-    const double vf = goal.ydot[i];
-    const double af = goal.yddot[i];
+  const double t2=tc*tc, t3=t2*tc, t4=t3*tc, t5=t4*tc;
+  CartRef r;
+  r.y     = c0 + c1*tc + c2*t2 + c3*t3 + c4*t4 + c5*t5;
+  r.ydot  = c1 + 2.0*c2*tc + 3.0*c3*t2 + 4.0*c4*t3 + 5.0*c5*t4;
+  r.yddot = 2.0*c2 + 6.0*c3*tc + 12.0*c4*t2 + 20.0*c5*t3;
+  return r;
+}
 
-    const double a3 = ( 20.0*D -  8.0*vf*T +       af*T2) / (2.0*T*T2);
-    const double a4 = (-30.0*D + 14.0*vf*T - 2.0*af*T2) / (2.0*T2*T2);
-    const double a5 = ( 12.0*D -  6.0*vf*T +       af*T2) / (2.0*T2*T2*T);
+// Transicion inicial: parte en reposo (v0=a0=0) en y0 y llega a la
+// trayectoria periodica (y,ydot,yddot)(0) — empalme C2 (ydot_d(0) != 0).
+static CartRef transitionTrajectory(double t, const Eigen::Vector4d& y0, const CartRef& goal, double T)
+{
+  return quinticBlend(t, T, y0, Eigen::Vector4d::Zero(), Eigen::Vector4d::Zero(),
+                      goal.y, goal.ydot, goal.yddot);
+}
 
-    const double t2 = tc * tc;
-    const double t3 = t2 * tc;
-
-    ref.y[i]     = y0[i] +      a3*t3 +      a4*t3*tc +      a5*t3*t2;
-    ref.ydot[i]  =          3.0*a3*t2 +  4.0*a4*t3    +  5.0*a5*t2*t2;
-    ref.yddot[i] =          6.0*a3*tc + 12.0*a4*t2    + 20.0*a5*t3;
-  }
-  return ref;
+// Retorno final: parte del estado de la trayectoria periodica en el
+// instante en que termina t_run (start = desiredTrajectory(t_run)) y llega
+// en reposo (vf=af=0) a yf (y_inicial) — evita el frenazo/caida por corte
+// de torque.
+static CartRef returnTrajectory(double t, double T, const CartRef& start, const Eigen::Vector4d& yf)
+{
+  return quinticBlend(t, T, start.y, start.ydot, start.yddot,
+                      yf, Eigen::Vector4d::Zero(), Eigen::Vector4d::Zero());
 }
 
 // ── Funciones de conmutacion ─────────────────────────────────────────────────
@@ -369,7 +394,7 @@ public:
     // ── Parámetros ──────────────────────────────────────────────────────────
     this->declare_parameter<std::string>("port_name",  "/dev/ttyUSB0");
     this->declare_parameter<double>     ("gain_scale",  1.0);
-    this->declare_parameter<double>     ("t_imp",       20.0);
+    this->declare_parameter<double>     ("t_run",       20.0);
     this->declare_parameter<int>        ("test_num",    1);
     this->declare_parameter<std::string>("rho_func",    "sat");
     this->declare_parameter<double>     ("phi",         0.3);
@@ -398,7 +423,7 @@ public:
 
     port_name_  = this->get_parameter("port_name").as_string();
     gain_scale_ = this->get_parameter("gain_scale").as_double();
-    t_imp_      = this->get_parameter("t_imp").as_double();
+    t_run_      = this->get_parameter("t_run").as_double();
     const int test_num = this->get_parameter("test_num").as_int();
     phi_        = this->get_parameter("phi").as_double();
     const std::string rho_str = this->get_parameter("rho_func").as_string();
@@ -447,8 +472,8 @@ public:
     current_measured_peak_ = static_cast<int16_t>(get_parameter("current_measured_peak").as_int());
     tau_max_ = get_parameter("tau_max").as_double();
 
-    RCLCPP_INFO(get_logger(), "puerto=%s  gain=%.2f  t_imp(seguimiento)=%.1fs  test=%d",
-      port_name_.c_str(), gain_scale_, t_imp_, test_num);
+    RCLCPP_INFO(get_logger(), "puerto=%s  gain=%.2f  t_run(seguimiento)=%.1fs  test=%d",
+      port_name_.c_str(), gain_scale_, t_run_, test_num);
     RCLCPP_INFO(get_logger(),
       "SMC cartesiano hw — rho=%s  phi=%.3f  tau_max=%.2f N·m  T_trans=%.1f s",
       rho_str_.c_str(), phi_, tau_max_, T_TRANS);
@@ -810,10 +835,9 @@ private:
     const auto tp  = std::chrono::high_resolution_clock::now();
     const double t = std::chrono::duration<double>(tp - start_time_).count();
 
-    if (t_imp_ > 0.0 && t >= T_TRANS + t_imp_) {
-      RCLCPP_INFO(get_logger(),
-        "Implementacion completada: T_trans=%.1f s + t_imp=%.1f s = %.1f s total.",
-        T_TRANS, t_imp_, T_TRANS + t_imp_);
+    const double t_shutdown = T_TRANS + t_run_ + RETURN_TIME_S + HOLD_TIME_S;
+    if (t_run_ > 0.0 && t >= t_shutdown) {
+      RCLCPP_INFO(get_logger(), "Retorno a y_inicial completado. Deteniendo (t=%.1f s).", t);
       timer_->cancel();
       shutdown_hardware();
       if (csv_.is_open()) { csv_.flush(); csv_.close(); }
@@ -872,18 +896,37 @@ private:
     }
 
     // 5. Referencia cartesiana: transicion quintica C2 hacia Y_START (con
-    //    velocidad/aceleracion de la serie en t'=0), luego seguimiento
+    //    velocidad/aceleracion de la serie en t'=0), seguimiento, y retorno
+    //    quintico final + pausa en reposo (ver RETURN_TIME_S/HOLD_TIME_S)
     CartRef goal0 = desiredTrajectory(0.0);
     goal0.y = Y_START;
-    const bool in_trans = (t < T_TRANS);
-    const CartRef ref   = in_trans
-      ? transitionTrajectory(t, y0_, goal0, T_TRANS)
-      : desiredTrajectory(t - T_TRANS);
+    const bool in_trans    = (t < T_TRANS);
+    const bool in_tracking = !in_trans && (t_run_ <= 0.0 || t < T_TRANS + t_run_);
+    CartRef ref;
+    if (in_trans) {
+      ref = transitionTrajectory(t, y0_, goal0, T_TRANS);
+    } else if (in_tracking) {
+      ref = desiredTrajectory(t - T_TRANS);
+    } else if (t < T_TRANS + t_run_ + RETURN_TIME_S) {
+      if (!return_logged_) {
+        RCLCPP_INFO(get_logger(), "Iniciando retorno quintico a y_inicial (t=%.1fs, dur=%.1fs)",
+          t, RETURN_TIME_S);
+        return_logged_ = true;
+      }
+      ref = returnTrajectory(t - (T_TRANS + t_run_), RETURN_TIME_S,
+                            desiredTrajectory(t_run_), y0_);
+    } else {
+      ref.y = y0_;
+      ref.ydot.setZero();
+      ref.yddot.setZero();
+    }
 
     // 5b. Guarda de altura mínima de la REFERENCIA (placa base metálica).
-    //     Durante la transición el brazo puede arrancar bajo (z0 < Z_MIN_FLOOR):
+    //     Cerca de la pose inicial (transición de entrada, retorno final o
+    //     pausa en reposo) el brazo puede estar bajo (y0_[2] < Z_MIN_FLOOR):
     //     solo se exige no descender más de 3 cm bajo la pose inicial.
-    const double z_floor = in_trans
+    const bool near_home = in_trans || (t_run_ > 0.0 && t >= T_TRANS + t_run_);
+    const double z_floor = near_home
       ? std::min(Z_MIN_FLOOR, y0_[2] - 0.03)
       : Z_MIN_FLOOR;
     if (ref.y[2] < z_floor) {
@@ -945,9 +988,12 @@ private:
       js_pub_->publish(js);
     }
 
-    // 11. CSV (incluye la transicion: en hardware las fallas suelen ocurrir
-    //     ahi; plots_SMC_cart.m modo 'real' descarta t < T_TRANS)
-    if (csv_.is_open()) {
+    // 11. CSV (incluye la transicion inicial y el seguimiento; excluye el
+    //     retorno final a y_inicial y la pausa en reposo. En hardware las
+    //     fallas suelen ocurrir en la transicion; plots_SMC_cart.m modo
+    //     'real' descarta t < T_TRANS)
+    const bool in_return_or_hold = (t_run_ > 0.0 && t >= T_TRANS + t_run_);
+    if (csv_.is_open() && !in_return_or_hold) {
       csv_ << std::fixed << std::setprecision(6)
            << t
            << ',' << q(0) << ',' << q(1) << ',' << q(2) << ',' << q(3)
@@ -975,7 +1021,9 @@ private:
     // 12. Log periódico (~1 s)
     if (++log_cnt_ % static_cast<int>(std::lround(loop_rate_hz_)) == 0) {
       if (csv_.is_open()) csv_.flush();
-      const char* phase = in_trans ? "TRANS" : "TRAY ";
+      const char* phase = in_trans    ? "TRANS" :
+                          in_tracking ? "TRAY " :
+                          (t < T_TRANS + t_run_ + RETURN_TIME_S) ? "RET  " : "HOME ";
       RCLCPP_INFO(get_logger(),
         "[%s] t=%.2fs  |s|=%.4f  |ey|=%.4f m  kJ=%.1f  i=[%d %d %d %d]",
         phase, t, ctrl.s_y.norm(), (ctrl.y_actual - ref.y).norm(), ctrl.cond_J,
@@ -1004,7 +1052,7 @@ private:
   pinocchio::FrameIndex frame_id_;
 
   std::string port_name_;
-  double gain_scale_, t_imp_;
+  double gain_scale_, t_run_;
   RhoFunc     rho_func_{RhoFunc::SAT};
   std::string rho_str_;
   double      phi_;
@@ -1035,6 +1083,7 @@ private:
   bool hw_active_;
   bool y0_initialized_;
   Eigen::Vector4d y0_;
+  bool return_logged_{false};
 
   std::chrono::high_resolution_clock::time_point start_time_;
   int log_cnt_{0};

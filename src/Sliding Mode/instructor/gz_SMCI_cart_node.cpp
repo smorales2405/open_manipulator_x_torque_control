@@ -78,10 +78,10 @@
 //  Ejemplos de uso:
 //
 //    ros2 run open_manipulator_x_torque_control gz_SMCI_cart_node
-//      --ros-args -p rho_func:=sign -p test_num:=1 -p t_sim:=30.0
+//      --ros-args -p rho_func:=sign -p test_num:=1 -p t_run:=30.0
 //
 //    ros2 run open_manipulator_x_torque_control gz_SMCI_cart_node
-//      --ros-args -p rho_func:=sat -p phi:=0.02 -p test_num:=2 -p t_sim:=30.0
+//      --ros-args -p rho_func:=sat -p phi:=0.02 -p test_num:=2 -p t_run:=30.0
 //
 // ============================================================================
 
@@ -282,12 +282,12 @@ public:
   {
     // ── Parametros ────────────────────────────────────────────────────────────
     this->declare_parameter<int>        ("test_num", 1);
-    this->declare_parameter<double>     ("t_sim",    0.0);
+    this->declare_parameter<double>     ("t_run",    0.0);
     this->declare_parameter<std::string>("rho_func", "sign");
     this->declare_parameter<double>     ("phi",      0.02);
 
     const int         test_num = this->get_parameter("test_num").as_int();
-    t_sim_                     = this->get_parameter("t_sim").as_double();
+    t_run_                     = this->get_parameter("t_run").as_double();
     phi_                       = this->get_parameter("phi").as_double();
     const std::string rho_str  = this->get_parameter("rho_func").as_string();
 
@@ -339,12 +339,12 @@ public:
       LAMBDA_DLS, T_TRANS, XI_MAX,
       fric_damping_[0], fric_damping_[1], fric_damping_[2], fric_damping_[3],
       fric_coulomb_[0], fric_coulomb_[1], fric_coulomb_[2], fric_coulomb_[3]);
-    if (t_sim_ > 0.0) {
+    if (t_run_ > 0.0) {
       RCLCPP_INFO(this->get_logger(),
-        "t_sim (seguimiento) = %.1f s  |  total = %.1f s (T_trans=%.1f + t_sim=%.1f)",
-        t_sim_, T_TRANS + t_sim_, T_TRANS, t_sim_);
+        "t_run (seguimiento) = %.1f s  |  total = %.1f s (T_trans=%.1f + t_run=%.1f)",
+        t_run_, T_TRANS + t_run_, T_TRANS, t_run_);
     } else {
-      RCLCPP_INFO(this->get_logger(), "t_sim = ilimitado  (T_trans=%.1f s)", T_TRANS);
+      RCLCPP_INFO(this->get_logger(), "t_run = ilimitado  (T_trans=%.1f s)", T_TRANS);
     }
 
     open_csv(test_num);
@@ -580,10 +580,10 @@ private:
 
     t_ += DT;
 
-    if (t_sim_ > 0.0 && t_ >= T_TRANS + t_sim_) {
+    if (t_run_ > 0.0 && t_ >= T_TRANS + t_run_) {
       RCLCPP_INFO(this->get_logger(),
-        "Simulacion completada: T_trans=%.1f s + t_sim=%.1f s = %.1f s total. Deteniendo.",
-        T_TRANS, t_sim_, T_TRANS + t_sim_);
+        "Simulacion completada: T_trans=%.1f s + t_run=%.1f s = %.1f s total. Deteniendo.",
+        T_TRANS, t_run_, T_TRANS + t_run_);
       std_msgs::msg::Float64MultiArray zero;
       zero.data.assign(NARM, 0.0);
       torque_pub_->publish(zero);
@@ -604,7 +604,7 @@ private:
   Eigen::Vector4d fric_coulomb_;   // Fc del URDF [N·m]
 
   double      t_;
-  double      t_sim_;
+  double      t_run_;
   RhoFunc     rho_func_;
   std::string rho_str_;
   double      phi_;

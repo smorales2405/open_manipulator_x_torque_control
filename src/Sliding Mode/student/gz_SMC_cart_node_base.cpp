@@ -37,7 +37,7 @@
 //
 //  Parametros ROS 2:
 //    test_num  [int]     1        — identificador del CSV
-//    t_sim     [double]  0.0      — duracion SMC en segundos (0 = ilimitado); total = T_TRANS + t_sim
+//    t_run     [double]  0.0      — duracion SMC en segundos (0 = ilimitado); total = T_TRANS + t_run
 //    rho_func  [string]  "sign"   — funcion de conmutacion: "sign" | "sat"
 //    phi       [double]  0.15     — capa limite [m/s o rad/s]
 //
@@ -53,9 +53,9 @@
 //
 //  Ejemplos de uso:
 //
-//    ros2 run open_manipulator_x_torque_control gz_smc_cart_node_base --ros-args -p rho_func:=sign -p test_num:=1 -p t_sim:=20.0
+//    ros2 run open_manipulator_x_torque_control gz_smc_cart_node_base --ros-args -p rho_func:=sign -p test_num:=1 -p t_run:=20.0
 //
-//    ros2 run open_manipulator_x_torque_control gz_smc_cart_node_base --ros-args -p rho_func:=sat -p phi:=0.15 -p test_num:=2 -p t_sim:=20.0
+//    ros2 run open_manipulator_x_torque_control gz_smc_cart_node_base --ros-args -p rho_func:=sat -p phi:=0.15 -p test_num:=2 -p t_run:=20.0
 //
 //  ──────────────────────────────────────────────────────────────────────────
 //  SECCIONES A COMPLETAR:
@@ -283,12 +283,12 @@ public:
   {
     // ── Parametros ────────────────────────────────────────────────────────────
     this->declare_parameter<int>        ("test_num", 1);
-    this->declare_parameter<double>     ("t_sim",    0.0);
+    this->declare_parameter<double>     ("t_run",    0.0);
     this->declare_parameter<std::string>("rho_func", "sign");
     this->declare_parameter<double>     ("phi",      0.15);
 
     const int         test_num = this->get_parameter("test_num").as_int();
-    t_sim_                     = this->get_parameter("t_sim").as_double();
+    t_run_                     = this->get_parameter("t_run").as_double();
     phi_                       = this->get_parameter("phi").as_double();
     const std::string rho_str  = this->get_parameter("rho_func").as_string();
 
@@ -343,12 +343,12 @@ public:
     RCLCPP_INFO(this->get_logger(),
       "Y_start=[%.3f %.3f %.3f %.3f]",
       Y_START[0], Y_START[1], Y_START[2], Y_START[3]);
-    if (t_sim_ > 0.0) {
+    if (t_run_ > 0.0) {
       RCLCPP_INFO(this->get_logger(),
-        "t_sim (SMC) = %.1f s  |  total = %.1f s (T_trans=%.1f + t_sim=%.1f)",
-        t_sim_, T_TRANS + t_sim_, T_TRANS, t_sim_);
+        "t_run (SMC) = %.1f s  |  total = %.1f s (T_trans=%.1f + t_run=%.1f)",
+        t_run_, T_TRANS + t_run_, T_TRANS, t_run_);
     } else {
-      RCLCPP_INFO(this->get_logger(), "t_sim = ilimitado");
+      RCLCPP_INFO(this->get_logger(), "t_run = ilimitado");
     }
 
     open_csv(test_num);
@@ -579,10 +579,10 @@ private:
 
     t_ += 0.005;
 
-    if (t_sim_ > 0.0 && t_ >= T_TRANS + t_sim_) {
+    if (t_run_ > 0.0 && t_ >= T_TRANS + t_run_) {
       RCLCPP_INFO(this->get_logger(),
-        "Simulacion completada: T_trans=%.1f s + t_sim=%.1f s = %.1f s total. Deteniendo control.",
-        T_TRANS, t_sim_, T_TRANS + t_sim_);
+        "Simulacion completada: T_trans=%.1f s + t_run=%.1f s = %.1f s total. Deteniendo control.",
+        T_TRANS, t_run_, T_TRANS + t_run_);
       std_msgs::msg::Float64MultiArray zero;
       zero.data.assign(NARM, 0.0);
       torque_pub_->publish(zero);
@@ -603,7 +603,7 @@ private:
   Eigen::Vector4d fric_coulomb_;   // Fc del URDF [N·m]
 
   double      t_;
-  double      t_sim_;
+  double      t_run_;
   RhoFunc     rho_func_;
   std::string rho_str_;
   double      phi_;

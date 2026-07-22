@@ -19,7 +19,7 @@
 clear; clc; close all;
 
 %% ── Configuracion ────────────────────────────────────────────────────────────
-mode        = 'real';    % 'sim'  = simulacion Gazebo (gz_smc_cart_node)
+mode        = 'sim';    % 'sim'  = simulacion Gazebo (gz_smc_cart_node)
                         % 'real' = implementacion hardware (hw_smc_cart_node)
 
 rho_func    = 'sat';   % Funcion de conmutacion: 'sign' | 'sat'
@@ -27,9 +27,9 @@ rho_func    = 'sat';   % Funcion de conmutacion: 'sign' | 'sat'
 controller  = 'smc';    % 'smc'  = gz_smc_cart_node (SMC clasico)
                         % 'smci' = gz_SMCI_cart_node (SMC integral; mismo CSV + xi1..xi4)
 
-test_num    = 2;        % Identificador del ensayo (test_num usado al lanzar el nodo)
+test_num    = 1;        % Identificador del ensayo (test_num usado al lanzar el nodo)
 
-EXPORT_FIGS = true;    % true  = guardar PNG (300 dpi) y EPS vectorial (600 dpi)
+EXPORT_FIGS = false;    % true  = guardar PNG (300 dpi) y EPS vectorial (600 dpi)
                         % false = solo visualizar
 
 TAU_MAX     = 1.2;      % [N·m] limite de torque (debe coincidir con el nodo)

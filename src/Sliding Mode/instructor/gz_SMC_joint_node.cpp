@@ -42,8 +42,8 @@
 //
 //  Parametros ROS 2 (--ros-args -p nombre:=valor):
 //    test_num  [int]     1       — identificador del CSV generado
-//    t_sim     [double]  0.0     — duracion del seguimiento en segundos
-//                                  (0 = ilimitado); total = T_TRANS + t_sim
+//    t_run     [double]  0.0     — duracion del seguimiento en segundos
+//                                  (0 = ilimitado); total = T_TRANS + t_run
 //    rho_func  [string]  "sign"  — funcion de conmutacion: "sign" | "sat"
 //    phi       [double]  0.15    — capa limite para sat(s/phi)  [rad/s]
 //
@@ -60,11 +60,11 @@
 //
 //    # Funcion signo (chattering maximo, referencia de comparacion):
 //    ros2 run open_manipulator_x_torque_control gz_smc_joint_node
-//      --ros-args -p rho_func:=sign -p test_num:=1 -p t_sim:=30.0
+//      --ros-args -p rho_func:=sign -p test_num:=1 -p t_run:=30.0
 //
 //    # Saturacion con capa limite phi = 0.15 rad/s:
 //    ros2 run open_manipulator_x_torque_control gz_smc_joint_node
-//      --ros-args -p rho_func:=sat -p phi:=0.15 -p test_num:=2 -p t_sim:=30.0
+//      --ros-args -p rho_func:=sat -p phi:=0.15 -p test_num:=2 -p t_run:=30.0
 //
 // ============================================================================
 
@@ -227,12 +227,12 @@ public:
   {
     // ── Parametros ────────────────────────────────────────────────────────────
     this->declare_parameter<int>        ("test_num", 1);
-    this->declare_parameter<double>     ("t_sim",    0.0);
+    this->declare_parameter<double>     ("t_run",    0.0);
     this->declare_parameter<std::string>("rho_func", "sign");
     this->declare_parameter<double>     ("phi",      0.15);
 
     const int         test_num = this->get_parameter("test_num").as_int();
-    t_sim_                     = this->get_parameter("t_sim").as_double();
+    t_run_                     = this->get_parameter("t_run").as_double();
     phi_                       = this->get_parameter("phi").as_double();
     const std::string rho_str  = this->get_parameter("rho_func").as_string();
 
@@ -279,12 +279,12 @@ public:
       fric_damping_[0], fric_damping_[1], fric_damping_[2], fric_damping_[3],
       fric_coulomb_[0], fric_coulomb_[1], fric_coulomb_[2], fric_coulomb_[3],
       FRIC_EPS);
-    if (t_sim_ > 0.0) {
+    if (t_run_ > 0.0) {
       RCLCPP_INFO(this->get_logger(),
-        "t_sim (seguimiento) = %.1f s  |  total = %.1f s (T_trans=%.1f + t_sim=%.1f)",
-        t_sim_, T_TRANS + t_sim_, T_TRANS, t_sim_);
+        "t_run (seguimiento) = %.1f s  |  total = %.1f s (T_trans=%.1f + t_run=%.1f)",
+        t_run_, T_TRANS + t_run_, T_TRANS, t_run_);
     } else {
-      RCLCPP_INFO(this->get_logger(), "t_sim = ilimitado  (T_trans=%.1f s)", T_TRANS);
+      RCLCPP_INFO(this->get_logger(), "t_run = ilimitado  (T_trans=%.1f s)", T_TRANS);
     }
 
     open_csv(test_num);
@@ -441,10 +441,10 @@ private:
 
     t_ += 0.005;
 
-    if (t_sim_ > 0.0 && t_ >= T_TRANS + t_sim_) {
+    if (t_run_ > 0.0 && t_ >= T_TRANS + t_run_) {
       RCLCPP_INFO(this->get_logger(),
-        "Simulacion completada: T_trans=%.1f s + t_sim=%.1f s = %.1f s total. Deteniendo control.",
-        T_TRANS, t_sim_, T_TRANS + t_sim_);
+        "Simulacion completada: T_trans=%.1f s + t_run=%.1f s = %.1f s total. Deteniendo control.",
+        T_TRANS, t_run_, T_TRANS + t_run_);
       std_msgs::msg::Float64MultiArray zero;
       zero.data.assign(NARM, 0.0);
       torque_pub_->publish(zero);
@@ -467,7 +467,7 @@ private:
   bool            q0_initialized_ = false;
 
   double      t_;
-  double      t_sim_;
+  double      t_run_;
   RhoFunc     rho_func_;
   std::string rho_str_;
   double      phi_;
